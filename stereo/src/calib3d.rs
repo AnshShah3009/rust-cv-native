@@ -22,6 +22,15 @@ pub struct CameraCalibrationResult {
     pub rms_reprojection_error: f64,
 }
 
+#[derive(Debug, Clone)]
+pub struct StereoCalibrationResult {
+    pub left: CameraCalibrationResult,
+    pub right: CameraCalibrationResult,
+    pub relative_extrinsics: CameraExtrinsics,
+    pub essential_matrix: Matrix3<f64>,
+    pub fundamental_matrix: Matrix3<f64>,
+}
+
 pub fn generate_chessboard_object_points(
     pattern_size: (usize, usize),
     square_size: f64,
@@ -88,6 +97,159 @@ pub fn calibrate_camera_planar(
         extrinsics,
         rms_reprojection_error: rms,
     })
+}
+
+pub fn calibrate_camera_from_chessboard_images(
+    images: &[GrayImage],
+    pattern_size: (usize, usize),
+    square_size: f64,
+) -> Result<CameraCalibrationResult> {
+    if images.is_empty() {
+        return Err(StereoError::InvalidParameters(
+            "calibrate_camera_from_chessboard_images: images cannot be empty".to_string(),
+        ));
+    }
+    let (w, h) = images[0].dimensions();
+    if images.iter().any(|img| img.dimensions() != (w, h)) {
+        return Err(StereoError::InvalidParameters(
+            "all calibration images must have the same dimensions".to_string(),
+        ));
+    }
+
+    let board = generate_chessboard_object_points(pattern_size, square_size);
+    let mut object_points = Vec::new();
+    let mut image_points = Vec::new();
+    for img in images {
+        if let Ok(corners) = find_chessboard_corners(img, pattern_size) {
+            object_points.push(board.clone());
+            image_points.push(corners);
+        }
+    }
+
+    if object_points.len() < 3 {
+        return Err(StereoError::InvalidParameters(format!(
+            "need at least 3 valid chessboard frames, found {}",
+            object_points.len()
+        )));
+    }
+
+    calibrate_camera_planar(&object_points, &image_points, (w, h))
+}
+
+pub fn stereo_calibrate_planar(
+    object_points: &[Vec<Point3<f64>>],
+    left_image_points: &[Vec<Point2<f64>>],
+    right_image_points: &[Vec<Point2<f64>>],
+    image_size: (u32, u32),
+) -> Result<StereoCalibrationResult> {
+    if object_points.len() != left_image_points.len()
+        || object_points.len() != right_image_points.len()
+    {
+        return Err(StereoError::InvalidParameters(
+            "stereo_calibrate_planar expects matching batch sizes".to_string(),
+        ));
+    }
+    if object_points.len() < 3 {
+        return Err(StereoError::InvalidParameters(
+            "stereo_calibrate_planar needs at least 3 views".to_string(),
+        ));
+    }
+
+    let left = calibrate_camera_planar(object_points, left_image_points, image_size)?;
+    let right = calibrate_camera_planar(object_points, right_image_points, image_size)?;
+
+    let n = left.extrinsics.len().min(right.extrinsics.len());
+    if n == 0 {
+        return Err(StereoError::InvalidParameters(
+            "stereo_calibrate_planar: no usable extrinsics".to_string(),
+        ));
+    }
+
+    let mut t_sum = Vector3::zeros();
+    let mut r_sum = Matrix3::<f64>::zeros();
+    for i in 0..n {
+        let r_l = left.extrinsics[i].rotation;
+        let t_l = left.extrinsics[i].translation;
+        let r_r = right.extrinsics[i].rotation;
+        let t_r = right.extrinsics[i].translation;
+
+        let r_rel = r_r * r_l.transpose();
+        let t_rel = t_r - r_rel * t_l;
+        r_sum += r_rel;
+        t_sum += t_rel;
+    }
+    t_sum /= n as f64;
+
+    let svd = r_sum.svd(true, true);
+    let u = svd.u.ok_or_else(|| {
+        StereoError::InvalidParameters("SVD U missing in stereo_calibrate_planar".to_string())
+    })?;
+    let vt = svd.v_t.ok_or_else(|| {
+        StereoError::InvalidParameters("SVD V^T missing in stereo_calibrate_planar".to_string())
+    })?;
+    let mut r = u * vt;
+    if r.determinant() < 0.0 {
+        r = -r;
+    }
+
+    let relative_extrinsics = CameraExtrinsics::new(r, t_sum);
+    let essential_matrix = essential_from_extrinsics(&relative_extrinsics);
+    let fundamental_matrix =
+        fundamental_from_essential(&essential_matrix, &left.intrinsics, &right.intrinsics);
+
+    Ok(StereoCalibrationResult {
+        left,
+        right,
+        relative_extrinsics,
+        essential_matrix,
+        fundamental_matrix,
+    })
+}
+
+pub fn stereo_calibrate_from_chessboard_images(
+    left_images: &[GrayImage],
+    right_images: &[GrayImage],
+    pattern_size: (usize, usize),
+    square_size: f64,
+) -> Result<StereoCalibrationResult> {
+    if left_images.len() != right_images.len() || left_images.is_empty() {
+        return Err(StereoError::InvalidParameters(
+            "left/right image lists must be non-empty and equal-sized".to_string(),
+        ));
+    }
+
+    let (w, h) = left_images[0].dimensions();
+    if left_images.iter().any(|i| i.dimensions() != (w, h))
+        || right_images.iter().any(|i| i.dimensions() != (w, h))
+    {
+        return Err(StereoError::InvalidParameters(
+            "all stereo calibration images must share the same dimensions".to_string(),
+        ));
+    }
+
+    let board = generate_chessboard_object_points(pattern_size, square_size);
+    let mut object_points = Vec::new();
+    let mut left_points = Vec::new();
+    let mut right_points = Vec::new();
+
+    for (l, r) in left_images.iter().zip(right_images.iter()) {
+        let cl = find_chessboard_corners(l, pattern_size);
+        let cr = find_chessboard_corners(r, pattern_size);
+        if let (Ok(pl), Ok(pr)) = (cl, cr) {
+            object_points.push(board.clone());
+            left_points.push(pl);
+            right_points.push(pr);
+        }
+    }
+
+    if object_points.len() < 3 {
+        return Err(StereoError::InvalidParameters(format!(
+            "need at least 3 valid stereo chessboard pairs, found {}",
+            object_points.len()
+        )));
+    }
+
+    stereo_calibrate_planar(&object_points, &left_points, &right_points, (w, h))
 }
 
 pub fn find_chessboard_corners(
@@ -1588,6 +1750,60 @@ mod tests {
         assert!((calib.intrinsics.cy - gt_k.cy).abs() < 1e-2);
         assert!(calib.rms_reprojection_error < 1e-5);
         assert_eq!(calib.extrinsics.len(), views.len());
+    }
+
+    #[test]
+    fn stereo_calibrate_planar_recovers_relative_transform() {
+        let board = generate_chessboard_object_points((7, 6), 0.04);
+        let k_l = CameraIntrinsics::new(810.0, 800.0, 320.0, 240.0, 640, 480);
+        let k_r = CameraIntrinsics::new(815.0, 805.0, 318.0, 242.0, 640, 480);
+        let r_lr = Rotation3::from_euler_angles(0.01, -0.015, 0.005)
+            .matrix()
+            .clone_owned();
+        let t_lr = Vector3::new(0.20, 0.002, -0.001);
+
+        let board_poses = [
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(0.08, -0.03, 0.02)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(0.05, -0.03, 2.6),
+            ),
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(-0.06, 0.04, -0.05)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(-0.08, 0.02, 2.9),
+            ),
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(0.03, 0.07, -0.02)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(0.02, 0.06, 2.4),
+            ),
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(-0.04, -0.05, 0.04)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(-0.03, -0.05, 3.1),
+            ),
+        ];
+
+        let mut obj_sets = Vec::new();
+        let mut left_sets = Vec::new();
+        let mut right_sets = Vec::new();
+        for ext_l in &board_poses {
+            let ext_r = CameraExtrinsics::new(r_lr * ext_l.rotation, r_lr * ext_l.translation + t_lr);
+            obj_sets.push(board.clone());
+            left_sets.push(board.iter().map(|p| project_point(&k_l, ext_l, p)).collect());
+            right_sets.push(board.iter().map(|p| project_point(&k_r, &ext_r, p)).collect());
+        }
+
+        let out = stereo_calibrate_planar(&obj_sets, &left_sets, &right_sets, (640, 480)).unwrap();
+        let t_err = (out.relative_extrinsics.translation - t_lr).norm();
+        let r_err = (out.relative_extrinsics.rotation - r_lr).norm();
+        assert!(t_err < 1e-2);
+        assert!(r_err < 1e-2);
     }
 
     #[test]
