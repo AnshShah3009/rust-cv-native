@@ -9,6 +9,7 @@ pub mod block_matching;
 pub mod sgm;
 pub mod depth;
 pub mod rectification;
+mod parallel;
 
 #[cfg(feature = "gpu")]
 pub mod gpu;
