@@ -48,10 +48,10 @@
 - [x] Camera models
 - [x] Distortion models
 - [x] Basic stereo rectification
-- [ ] Camera calibration from checkerboard pattern
+- [x] Camera calibration from checkerboard pattern
 - [ ] Hand-eye calibration
 - [ ] Bundle adjustment
-- [ ] PnP (Perspective-n-Point) solver
+- [x] PnP (Perspective-n-Point) solver
 
 #### GPU Acceleration
 - [x] wgpu backend setup
