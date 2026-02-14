@@ -274,6 +274,7 @@ cargo bench
 - Added first-pass native marker support in `cv-features`:
   - ArUco-style marker draw + detect APIs
   - AprilTag-style marker draw + detect APIs
+  - ChArUco-style board generation + corner interpolation APIs
 - Current implementation is optimized for square binary markers with clear borders and low perspective distortion.
 - This establishes the API and decoding path; next steps are robustness improvements (perspective, blur/noise, multi-scale).
 

@@ -48,6 +48,7 @@
 - [x] Camera models
 - [x] Distortion models
 - [x] Basic stereo rectification
+- [x] ChArUco-style board generation and corner interpolation (initial native implementation)
 - [x] Camera calibration from checkerboard pattern
 - [ ] Hand-eye calibration
 - [ ] Bundle adjustment
