@@ -1115,6 +1115,120 @@ fn compute_rms_reprojection(
     Ok((sq_sum / count as f64).sqrt())
 }
 
+pub fn refine_camera_calibration_iterative(
+    initial: &CameraCalibrationResult,
+    object_points: &[Vec<Point3<f64>>],
+    image_points: &[Vec<Point2<f64>>],
+    max_iters: usize,
+) -> Result<CameraCalibrationResult> {
+    if object_points.len() != image_points.len() || object_points.len() != initial.extrinsics.len() {
+        return Err(StereoError::InvalidParameters(
+            "refine_camera_calibration_iterative: inconsistent input sizes".to_string(),
+        ));
+    }
+
+    let mut intr = initial.intrinsics;
+    let mut extr = initial.extrinsics.clone();
+    let mut prev = compute_rms_reprojection(&intr, &extr, object_points, image_points)?;
+
+    for _ in 0..max_iters {
+        intr = estimate_intrinsics_from_extrinsics(&extr, object_points, image_points, intr)?;
+
+        for i in 0..extr.len() {
+            extr[i] = solve_pnp_dlt(&object_points[i], &image_points[i], &intr)?;
+        }
+
+        let cur = compute_rms_reprojection(&intr, &extr, object_points, image_points)?;
+        if (prev - cur).abs() < 1e-10 {
+            prev = cur;
+            break;
+        }
+        prev = cur;
+    }
+
+    Ok(CameraCalibrationResult {
+        intrinsics: intr,
+        extrinsics: extr,
+        rms_reprojection_error: prev,
+    })
+}
+
+fn estimate_intrinsics_from_extrinsics(
+    extrinsics: &[CameraExtrinsics],
+    object_points: &[Vec<Point3<f64>>],
+    image_points: &[Vec<Point2<f64>>],
+    fallback: CameraIntrinsics,
+) -> Result<CameraIntrinsics> {
+    let mut sx2 = 0.0f64;
+    let mut sxu = 0.0f64;
+    let mut sx = 0.0f64;
+    let mut su = 0.0f64;
+    let mut n_x = 0usize;
+
+    let mut sy2 = 0.0f64;
+    let mut syv = 0.0f64;
+    let mut sy = 0.0f64;
+    let mut sv = 0.0f64;
+    let mut n_y = 0usize;
+
+    for ((ext, obj), img) in extrinsics
+        .iter()
+        .zip(object_points.iter())
+        .zip(image_points.iter())
+    {
+        for (p3, p2) in obj.iter().zip(img.iter()) {
+            let pc = ext.rotation * p3.coords + ext.translation;
+            if pc[2].abs() <= 1e-12 {
+                continue;
+            }
+            let xn = pc[0] / pc[2];
+            let yn = pc[1] / pc[2];
+
+            sx2 += xn * xn;
+            sxu += xn * p2.x;
+            sx += xn;
+            su += p2.x;
+            n_x += 1;
+
+            sy2 += yn * yn;
+            syv += yn * p2.y;
+            sy += yn;
+            sv += p2.y;
+            n_y += 1;
+        }
+    }
+
+    if n_x < 2 || n_y < 2 {
+        return Err(StereoError::InvalidParameters(
+            "estimate_intrinsics_from_extrinsics: insufficient valid points".to_string(),
+        ));
+    }
+
+    let det_x = sx2 * n_x as f64 - sx * sx;
+    let det_y = sy2 * n_y as f64 - sy * sy;
+    if det_x.abs() < 1e-18 || det_y.abs() < 1e-18 {
+        return Ok(fallback);
+    }
+
+    let fx = (sxu * n_x as f64 - sx * su) / det_x;
+    let cx = (sx2 * su - sx * sxu) / det_x;
+    let fy = (syv * n_y as f64 - sy * sv) / det_y;
+    let cy = (sy2 * sv - sy * syv) / det_y;
+
+    if !fx.is_finite() || !fy.is_finite() || fx.abs() < 1e-12 || fy.abs() < 1e-12 {
+        return Ok(fallback);
+    }
+
+    Ok(CameraIntrinsics::new(
+        fx,
+        fy,
+        cx,
+        cy,
+        fallback.width,
+        fallback.height,
+    ))
+}
+
 fn v_ij(h: &Matrix3<f64>, i: usize, j: usize) -> [f64; 6] {
     [
         h[(0, i)] * h[(0, j)],
