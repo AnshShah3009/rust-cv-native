@@ -27,20 +27,17 @@ impl GpuStereoMatcher {
     pub async fn new(algorithm: GpuStereoAlgorithm) -> Result<Self> {
         // Initialize wgpu
         let instance = wgpu::Instance::default();
-        let adapter = if let Some(adapter) = select_integrated_adapter(&instance) {
-            adapter
-        } else {
-            instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    compatible_surface: None,
-                    force_fallback_adapter: false,
-                })
-                .await
-                .ok_or_else(|| {
-                    StereoError::InvalidParameters("No suitable GPU adapter found".to_string())
-                })?
-        };
+        let policy = read_gpu_adapter_policy_from_env()?;
+        let adapter = select_adapter_by_policy(&instance, policy);
+        let adapter = adapter.ok_or_else(|| {
+            let detail = match policy {
+                GpuAdapterPolicy::NvidiaOnly => " (policy: nvidia_only)",
+                GpuAdapterPolicy::DiscreteOnly => " (policy: discrete_only)",
+                GpuAdapterPolicy::PreferDiscrete => " (policy: prefer_discrete)",
+                GpuAdapterPolicy::Auto => " (policy: auto)",
+            };
+            StereoError::InvalidParameters(format!("No suitable GPU adapter found{detail}"))
+        })?;
 
         let (device, queue) = adapter
             .request_device(
@@ -425,11 +422,92 @@ impl GpuStereoMatcher {
     }
 }
 
-fn select_integrated_adapter(instance: &wgpu::Instance) -> Option<wgpu::Adapter> {
-    instance
-        .enumerate_adapters(wgpu::Backends::all())
-        .into_iter()
-        .find(|adapter| adapter.get_info().device_type == wgpu::DeviceType::IntegratedGpu)
+#[derive(Clone, Copy)]
+enum GpuAdapterPolicy {
+    Auto,
+    PreferDiscrete,
+    DiscreteOnly,
+    NvidiaOnly,
+}
+
+fn select_adapter_by_policy(
+    instance: &wgpu::Instance,
+    policy: GpuAdapterPolicy,
+) -> Option<wgpu::Adapter> {
+    const NVIDIA_VENDOR_ID: u32 = 0x10DE;
+    let mut best: Option<(i32, wgpu::Adapter)> = None;
+    for adapter in instance.enumerate_adapters(wgpu::Backends::all()) {
+        let info = adapter.get_info();
+        let is_nvidia_discrete =
+            info.vendor == NVIDIA_VENDOR_ID && info.device_type == wgpu::DeviceType::DiscreteGpu;
+        let score = match policy {
+            GpuAdapterPolicy::NvidiaOnly => {
+                if is_nvidia_discrete {
+                    100
+                } else {
+                    continue;
+                }
+            }
+            GpuAdapterPolicy::DiscreteOnly => {
+                if is_nvidia_discrete {
+                    100
+                } else if info.device_type == wgpu::DeviceType::DiscreteGpu {
+                    90
+                } else {
+                    continue;
+                }
+            }
+            GpuAdapterPolicy::PreferDiscrete => {
+                if is_nvidia_discrete {
+                    100
+                } else if info.device_type == wgpu::DeviceType::DiscreteGpu {
+                    90
+                } else if info.device_type == wgpu::DeviceType::IntegratedGpu {
+                    10
+                } else {
+                    1
+                }
+            }
+            GpuAdapterPolicy::Auto => {
+                if is_nvidia_discrete {
+                    100
+                } else if info.device_type == wgpu::DeviceType::DiscreteGpu {
+                    80
+                } else if info.device_type == wgpu::DeviceType::IntegratedGpu {
+                    20
+                } else {
+                    1
+                }
+            }
+        };
+
+        if best.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
+            best = Some((score, adapter));
+        }
+    }
+    best.map(|(_, adapter)| adapter)
+}
+
+fn read_gpu_adapter_policy_from_env() -> Result<GpuAdapterPolicy> {
+    let raw = match env::var("RUSTCV_GPU_ADAPTER") {
+        Ok(v) => v,
+        Err(env::VarError::NotPresent) => return Ok(GpuAdapterPolicy::PreferDiscrete),
+        Err(e) => {
+            return Err(StereoError::InvalidParameters(format!(
+                "Failed to read RUSTCV_GPU_ADAPTER: {e}"
+            )))
+        }
+    };
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "auto" => Ok(GpuAdapterPolicy::Auto),
+        "prefer_discrete" | "discrete_preferred" => Ok(GpuAdapterPolicy::PreferDiscrete),
+        "discrete_only" => Ok(GpuAdapterPolicy::DiscreteOnly),
+        "nvidia_only" => Ok(GpuAdapterPolicy::NvidiaOnly),
+        _ => Err(StereoError::InvalidParameters(format!(
+            "RUSTCV_GPU_ADAPTER must be one of: auto, prefer_discrete, discrete_only, nvidia_only; got '{raw}'"
+        ))),
+    }
 }
 
 fn estimate_gpu_bytes(width: u32, height: u32) -> usize {
@@ -523,10 +601,8 @@ struct StereoParamsGPU {
 /// Check if GPU acceleration is available
 pub async fn is_gpu_available() -> bool {
     let instance = wgpu::Instance::default();
-    instance
-        .request_adapter(&wgpu::RequestAdapterOptions::default())
-        .await
-        .is_some()
+    let policy = read_gpu_adapter_policy_from_env().unwrap_or(GpuAdapterPolicy::PreferDiscrete);
+    select_adapter_by_policy(&instance, policy).is_some()
 }
 
 /// Enumerate adapters visible to wgpu on this machine.
