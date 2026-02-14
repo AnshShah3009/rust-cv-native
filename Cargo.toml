@@ -10,6 +10,8 @@ cv-core = { path = "./core" }
 cv-hal = { path = "./hal" }
 cv-imgproc = { path = "./imgproc" }
 cv-features = { path = "./features" }
+cv-stereo = { path = "./stereo" }
+cv-video = { path = "./video" }
 
 [workspace]
 resolver = "2"
@@ -18,6 +20,8 @@ members = [
     "core",
     "imgproc",
     "features",
+    "stereo",
+    "video",
 ]
 
 [workspace.dependencies]
