@@ -5,6 +5,12 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Native Rust computer vision library with multi-backend acceleration"
 
+[dependencies]
+cv-core = { path = "./core" }
+cv-hal = { path = "./hal" }
+cv-imgproc = { path = "./imgproc" }
+cv-features = { path = "./features" }
+
 [workspace]
 resolver = "2"
 members = [
@@ -12,9 +18,6 @@ members = [
     "core",
     "imgproc",
     "features",
-    "geometry",
-    "ml",
-    "examples",
 ]
 
 [workspace.dependencies]
@@ -22,9 +25,10 @@ rayon = "1.10"
 nalgebra = "0.33"
 image = "0.25"
 wgpu = "0.28"
-ort = "2.0"
+ort = "2.0.0-rc.11"
 wide = "0.7"
 pulp = "0.5"
+thiserror = "2.0"
 
 [profile.release]
 opt-level = 3

@@ -1,5 +1,5 @@
-use cv_core::GrayImage;
-use nalgebra::{Matrix3, Point2, Vector2};
+use image::GrayImage;
+use nalgebra::{Matrix3, Point2};
 
 pub fn get_pixel_bilinear(img: &GrayImage, x: f32, y: f32) -> f32 {
     let width = img.width() as f32;
@@ -55,22 +55,22 @@ pub fn warp_perspective(
     dst
 }
 
-pub fn warp_affine(src: &GrayImage, matrix: &Matrix3<f32>, width: u32, height: u32) -> GrayImage {
-    warp_perspective(src, matrix, width, height)
-}
-
 fn transform_point(matrix: &Matrix3<f32>, pt: &Point2<f32>) -> Point2<f32> {
-    let v = Vector2::new(pt.x, pt.y);
-    let translation = matrix.fixed_view::<2, 1>(0, 2).into_owned();
-    let linear = matrix.fixed_view::<2, 2>(0, 0).into_owned();
+    let x = pt.x;
+    let y = pt.y;
 
-    let transformed = linear * v + translation;
-    let w = matrix[(2, 0)] * pt.x + matrix[(2, 1)] * pt.y + matrix[(2, 2)];
+    let w = matrix[(2, 0)] * x + matrix[(2, 1)] * y + matrix[(2, 2)];
 
     if w.abs() > 1e-10 {
-        Point2::new(transformed.x / w, transformed.y / w)
+        Point2::new(
+            (matrix[(0, 0)] * x + matrix[(0, 1)] * y + matrix[(0, 2)]) / w,
+            (matrix[(1, 0)] * x + matrix[(1, 1)] * y + matrix[(1, 2)]) / w,
+        )
     } else {
-        Point2::new(transformed.x, transformed.y)
+        Point2::new(
+            matrix[(0, 0)] * x + matrix[(0, 1)] * y + matrix[(0, 2)],
+            matrix[(1, 0)] * x + matrix[(1, 1)] * y + matrix[(1, 2)],
+        )
     }
 }
 
@@ -100,20 +100,4 @@ pub fn get_translation_matrix(dx: f32, dy: f32) -> Matrix3<f32> {
 
 pub fn get_scaling_matrix(sx: f32, sy: f32) -> Matrix3<f32> {
     Matrix3::new(sx, 0.0, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 1.0)
-}
-
-pub fn get_scaling_centered(sx: f32, sy: f32, center: Point2<f32>) -> Matrix3<f32> {
-    let t1 = get_translation_matrix(-center.x, -center.y);
-    let s = get_scaling_matrix(sx, sy);
-    let t2 = get_translation_matrix(center.x, center.y);
-
-    t2 * s * t1
-}
-
-pub fn get_rotation_centered(angle: f32, scale: f32, center: Point2<f32>) -> Matrix3<f32> {
-    let t1 = get_translation_matrix(-center.x, -center.y);
-    let r = get_rotation_matrix(Point2::origin(), angle, scale);
-    let t2 = get_translation_matrix(center.x, center.y);
-
-    t2 * r * t1
 }

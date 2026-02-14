@@ -1,5 +1,6 @@
-use nalgebra::{Matrix3, Matrix4, Point2, Point3, UnitQuaternion, Vector3, Vector4};
-use std::ops::Mul;
+use nalgebra::{Matrix3, Matrix4, Point2, Point3, Rotation3, UnitQuaternion, Vector3};
+
+pub type Vector6<T> = nalgebra::Vector6<T>;
 
 #[derive(Debug, Clone, Copy)]
 pub struct CameraIntrinsics {
@@ -47,8 +48,12 @@ impl CameraIntrinsics {
     }
 
     pub fn project(&self, point: &Point3<f64>) -> Point2<f64> {
-        let x = point.x / point.z;
-        let y = point.y / self.z;
+        let z = point.z;
+        if z == 0.0 {
+            return Point2::new(self.cx, self.cy);
+        }
+        let x = point.x / z;
+        let y = point.y / z;
         Point2::new(x * self.fx + self.cx, y * self.fy + self.cy)
     }
 
@@ -96,7 +101,8 @@ impl CameraExtrinsics {
     }
 
     pub fn transform_point(&self, point: &Point3<f64>) -> Point3<f64> {
-        self.rotation * point.coords + self.translation
+        let transformed = self.rotation * point.coords + self.translation;
+        Point3::from(transformed)
     }
 
     pub fn inverse(&self) -> Self {
@@ -118,8 +124,6 @@ impl Default for CameraExtrinsics {
     }
 }
 
-pub type Vector6<T> = nalgebra::Vector6<T>;
-
 #[derive(Debug, Clone, Copy)]
 pub struct Pose {
     pub rotation: UnitQuaternion<f64>,
@@ -137,7 +141,7 @@ impl Pose {
     pub fn from_matrix(transform: &Matrix4<f64>) -> Self {
         let r = Matrix3::from(transform.fixed_view::<3, 3>(0, 0));
         let t = Vector3::from(transform.fixed_view::<3, 1>(0, 3));
-        let rotation = UnitQuaternion::from_rotation_matrix(&r);
+        let rotation = UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(r));
         Self {
             rotation,
             translation: t,
@@ -146,8 +150,8 @@ impl Pose {
 
     pub fn matrix(&self) -> Matrix4<f64> {
         let mut m = Matrix4::identity();
-        m.fixed_view_mut::<3, 3>(0, 0)
-            .copy_from(self.rotation.matrix());
+        let rot_matrix: Matrix3<f64> = self.rotation.to_rotation_matrix().into();
+        m.fixed_view_mut::<3, 3>(0, 0).copy_from(&rot_matrix);
         m.fixed_view_mut::<3, 1>(0, 3).copy_from(&self.translation);
         m
     }

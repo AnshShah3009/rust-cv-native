@@ -1,4 +1,4 @@
-use nalgebra::{Point2, Point3};
+use nalgebra::Point2;
 
 #[derive(Debug, Clone, Copy)]
 pub struct KeyPoint {
@@ -74,7 +74,7 @@ impl From<KeyPoint> for KeyPointF32 {
     fn from(kp: KeyPoint) -> Self {
         Self {
             x: kp.x as f32,
-            y: kp as f32,
+            y: kp.y as f32,
             size: kp.size as f32,
             angle: kp.angle as f32,
             response: kp.response as f32,

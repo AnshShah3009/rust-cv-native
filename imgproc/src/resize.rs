@@ -1,4 +1,4 @@
-use cv_core::{GrayImage, RgbImage};
+use image::{GrayImage, RgbImage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interpolation {
@@ -8,42 +8,16 @@ pub enum Interpolation {
     Lanczos,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResizeAlgorithm {
-    Auto,
-    Naive,
-    IntegralTable,
-}
-
-pub fn resize(src: &GrayImage, width: u32, height: u32, interpolation: Interpolation) -> GrayImage {
+pub fn resize(
+    src: &GrayImage,
+    width: u32,
+    height: u32,
+    _interpolation: Interpolation,
+) -> GrayImage {
     if width == 0 || height == 0 {
         return GrayImage::new(0, 0);
     }
-
-    match interpolation {
-        Interpolation::Nearest => resize_nearest(src, width, height),
-        Interpolation::Linear => resize_linear(src, width, height),
-        Interpolation::Cubic => resize_cubic(src, width, height),
-        Interpolation::Lanczos => resize_lanczos(src, width, height),
-    }
-}
-
-pub fn resize_rgb(
-    src: &RgbImage,
-    width: u32,
-    height: u32,
-    interpolation: Interpolation,
-) -> RgbImage {
-    if width == 0 || height == 0 {
-        return RgbImage::new(0, 0);
-    }
-
-    match interpolation {
-        Interpolation::Nearest => resize_rgb_nearest(src, width, height),
-        Interpolation::Linear => resize_rgb_linear(src, width, height),
-        Interpolation::Cubic => resize_rgb_cubic(src, width, height),
-        Interpolation::Lanczos => resize_rgb_lanczos(src, width, height),
-    }
+    resize_linear(src, width, height)
 }
 
 fn resize_nearest(src: &GrayImage, width: u32, height: u32) -> GrayImage {
@@ -55,17 +29,12 @@ fn resize_nearest(src: &GrayImage, width: u32, height: u32) -> GrayImage {
 
     for y in 0..height {
         for x in 0..width {
-            let sx = (x as f32 * src_width / dst_width).floor() as u32;
-            let sy = (y as f32 * src_height / dst_height).floor() as u32;
-
-            let sx = sx.min(src.width() - 1);
-            let sy = sy.min(src.height() - 1);
-
+            let sx = ((x as f32 * src_width / dst_width).floor() as u32).min(src.width() - 1);
+            let sy = ((y as f32 * src_height / dst_height).floor() as u32).min(src.height() - 1);
             let val = src.get_pixel(sx, sy)[0];
             dst.put_pixel(x, y, image::Luma([val]));
         }
     }
-
     dst
 }
 
@@ -76,7 +45,7 @@ fn resize_linear(src: &GrayImage, width: u32, height: u32) -> GrayImage {
     let dst_width = (width - 1) as f32;
     let dst_height = (height - 1) as f32;
 
-    if src_width == 0.0 || src_height == 0.0 {
+    if src_width <= 0.0 || src_height <= 0.0 {
         return dst;
     }
 
@@ -109,43 +78,25 @@ fn resize_linear(src: &GrayImage, width: u32, height: u32) -> GrayImage {
     dst
 }
 
-fn resize_cubic(src: &GrayImage, width: u32, height: u32) -> GrayImage {
-    resize_linear(src, width, height)
-}
-
-fn resize_lanczos(src: &GrayImage, width: u32, height: u32) -> GrayImage {
-    resize_linear(src, width, height)
-}
-
-fn resize_rgb_nearest(src: &RgbImage, width: u32, height: u32) -> RgbImage {
-    let mut dst = RgbImage::new(width, height);
-    let src_width = src.width() as f32;
-    let src_height = src.height() as f32;
-    let dst_width = width as f32;
-    let dst_height = height as f32;
-
-    for y in 0..height {
-        for x in 0..width {
-            let sx = (x as f32 * src_width / dst_width).floor() as u32;
-            let sy = (y as f32 * src_height / dst_height).floor() as u32;
-
-            let sx = sx.min(src.width() - 1);
-            let sy = sy.min(src.height() - 1);
-
-            let p = *src.get_pixel(sx, sy);
-            dst.put_pixel(x, y, p);
-        }
+pub fn resize_rgb(
+    src: &RgbImage,
+    width: u32,
+    height: u32,
+    interpolation: Interpolation,
+) -> RgbImage {
+    if width == 0 || height == 0 {
+        return RgbImage::new(0, 0);
     }
 
-    dst
-}
-
-fn resize_rgb_linear(src: &RgbImage, width: u32, height: u32) -> RgbImage {
     let mut dst = RgbImage::new(width, height);
     let src_width = src.width() as f32 - 1.0;
     let src_height = src.height() as f32 - 1.0;
     let dst_width = (width - 1) as f32;
     let dst_height = (height - 1) as f32;
+
+    if src_width <= 0.0 || src_height <= 0.0 {
+        return dst;
+    }
 
     for y in 0..height {
         for x in 0..width {
@@ -182,17 +133,12 @@ fn resize_rgb_linear(src: &RgbImage, width: u32, height: u32) -> RgbImage {
     dst
 }
 
-fn resize_rgb_cubic(src: &RgbImage, width: u32, height: u32) -> RgbImage {
-    resize_rgb_linear(src, width, height)
-}
-
-fn resize_rgb_lanczos(src: &RgbImage, width: u32, height: u32) -> RgbImage {
-    resize_rgb_linear(src, width, height)
-}
-
 pub fn pyr_down(src: &GrayImage) -> GrayImage {
     let new_width = src.width() / 2;
     let new_height = src.height() / 2;
+    if new_width == 0 || new_height == 0 {
+        return GrayImage::new(1, 1);
+    }
     resize(src, new_width, new_height, Interpolation::Linear)
 }
 

@@ -1,14 +1,10 @@
 pub mod backend;
 pub mod cpu;
 pub mod device;
-pub mod memory;
-pub mod queue;
 
-pub use backend::*;
+pub use backend::{BackendType, Capability, ComputeBackend, DeviceId, QueueId, QueueType};
 pub use cpu::*;
 pub use device::*;
-pub use memory::*;
-pub use queue::*;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -16,22 +12,22 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error("Backend not available: {0}")]
     BackendNotAvailable(String),
-    
+
     #[error("Device error: {0}")]
     DeviceError(String),
-    
+
     #[error("Memory error: {0}")]
     MemoryError(String),
-    
+
     #[error("Queue error: {0}")]
     QueueError(String),
-    
+
     #[error("Kernel error: {0}")]
     KernelError(String),
-    
+
     #[error("Not supported: {0}")]
     NotSupported(String),
-    
+
     #[error("Initialization error: {0}")]
     InitError(String),
 }
@@ -40,7 +36,7 @@ impl Error {
     pub fn backend_not_available(backend: impl Into<String>) -> Self {
         Self::BackendNotAvailable(backend.into())
     }
-    
+
     pub fn not_supported(feature: impl Into<String>) -> Self {
         Self::NotSupported(feature.into())
     }

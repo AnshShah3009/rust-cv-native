@@ -1,5 +1,4 @@
-use image::{GrayImage, ImageBuffer, Luma, Rgb, RgbImage, Rgba, RgbaImage};
-use std::ops::{Add, Div, Mul, Sub};
+use image::{GrayImage, ImageBuffer, Luma, Rgb, RgbImage, RgbaImage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelType {
@@ -73,7 +72,7 @@ impl CvImage for GrayImage {
         self.as_raw()
     }
     fn as_mut_slice(&mut self) -> &mut [u8] {
-        self.as_raw_mut()
+        self.as_mut()
     }
 }
 
@@ -88,7 +87,7 @@ impl CvImage for RgbImage {
         self.as_raw()
     }
     fn as_mut_slice(&mut self) -> &mut [u8] {
-        self.as_raw_mut()
+        self.as_mut()
     }
 }
 
@@ -103,7 +102,7 @@ impl CvImage for RgbaImage {
         self.as_raw()
     }
     fn as_mut_slice(&mut self) -> &mut [u8] {
-        self.as_raw_mut()
+        self.as_mut()
     }
 }
 
@@ -139,9 +138,26 @@ pub fn set_pixel_rgb(img: &mut RgbImage, x: u32, y: u32, rgb: [u8; 3]) {
 }
 
 pub fn convert_gray_to_rgb(gray: &GrayImage) -> RgbImage {
-    image::imageops::colorops::grayscale(gray)
+    let (w, h) = gray.dimensions();
+    let mut rgb = RgbImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let val = gray.get_pixel(x, y)[0];
+            rgb.put_pixel(x, y, Rgb([val, val, val]));
+        }
+    }
+    rgb
 }
 
 pub fn convert_rgb_to_gray(rgb: &RgbImage) -> GrayImage {
-    image::imageops::colorops::grayscale(rgb)
+    let (w, h) = rgb.dimensions();
+    let mut gray = GrayImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let p = rgb.get_pixel(x, y);
+            let gray_val = (0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32) as u8;
+            gray.put_pixel(x, y, Luma([gray_val]));
+        }
+    }
+    gray
 }

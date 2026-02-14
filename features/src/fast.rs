@@ -1,11 +1,42 @@
-use cv_core::{GrayImage, KeyPoint, KeyPoints};
+use cv_core::KeyPoint;
+use image::GrayImage;
+
+pub struct KeyPoints {
+    pub keypoints: Vec<KeyPoint>,
+}
+
+impl KeyPoints {
+    pub fn new() -> Self {
+        Self {
+            keypoints: Vec::new(),
+        }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            keypoints: Vec::with_capacity(capacity),
+        }
+    }
+
+    pub fn push(&mut self, kp: KeyPoint) {
+        self.keypoints.push(kp);
+    }
+
+    pub fn len(&self) -> usize {
+        self.keypoints.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keypoints.is_empty()
+    }
+}
 
 pub fn fast_detect(image: &GrayImage, threshold: u8, max_keypoints: usize) -> KeyPoints {
     let width = image.width() as i32;
     let height = image.height() as i32;
     let mut keypoints = Vec::new();
 
-    let circle_offsets = [
+    let circle_offsets: [(i32, i32); 12] = [
         (-3, 0),
         (-2, 1),
         (-1, 2),
@@ -24,18 +55,21 @@ pub fn fast_detect(image: &GrayImage, threshold: u8, max_keypoints: usize) -> Ke
         for x in 3..width - 3 {
             let p = image.get_pixel(x as u32, y as u32)[0];
 
-            let mut brighter = 0;
-            let mut darker = 0;
+            let mut brighter = 0u32;
+            let mut darker = 0u32;
 
             for &(dx, dy) in &circle_offsets {
                 let px = x + dx;
                 let py = y + dy;
-                let val = image.get_pixel(px as u32, py as u32)[0];
 
-                if val > p.saturating_add(threshold) {
-                    brighter += 1;
-                } else if val < p.saturating_sub(threshold) {
-                    darker += 1;
+                if px >= 0 && px < width && py >= 0 && py < height {
+                    let val = image.get_pixel(px as u32, py as u32)[0];
+
+                    if val > p.saturating_add(threshold) {
+                        brighter += 1;
+                    } else if val < p.saturating_sub(threshold) {
+                        darker += 1;
+                    }
                 }
             }
 
@@ -51,65 +85,4 @@ pub fn fast_detect(image: &GrayImage, threshold: u8, max_keypoints: usize) -> Ke
     }
 
     KeyPoints { keypoints }
-}
-
-pub fn fast_score(image: &GrayImage, x: i32, y: i32, threshold: u8) -> u32 {
-    let p = image.get_pixel(x as u32, y as u32)[0];
-
-    let circle_offsets = [
-        (-3, 0),
-        (-2, 1),
-        (-1, 2),
-        (0, 3),
-        (1, 2),
-        (2, 1),
-        (3, 0),
-        (2, -1),
-        (1, -2),
-        (0, -3),
-        (-1, -2),
-        (-2, -1),
-    ];
-
-    let mut brighter = 0u32;
-    let mut darker = 0u32;
-
-    for &(dx, dy) in &circle_offsets {
-        let px = x + dx;
-        let py = y + dy;
-
-        if px >= 0 && px < image.width() as i32 && py >= 0 && py < image.height() as i32 {
-            let val = image.get_pixel(px as u32, py as u32)[0];
-
-            if val > p.saturating_add(threshold) {
-                brighter += 1;
-            } else if val < p.saturating_sub(threshold) {
-                darker += 1;
-            }
-        }
-    }
-
-    brighter.max(darker)
-}
-
-pub fn non_maximum_suppression(
-    keypoints: &mut [KeyPoint],
-    distances: &[f32],
-    max_keypoints: usize,
-) {
-    let mut pairs: Vec<_> = keypoints
-        .iter()
-        .zip(distances.iter())
-        .map(|(kp, &d)| (*kp, d))
-        .collect();
-
-    pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    pairs.truncate(max_keypoints);
-
-    for (i, (kp, _)) in pairs.iter().enumerate() {
-        keypoints[i] = *kp;
-    }
-
-    keypoints.truncate(pairs.len());
 }

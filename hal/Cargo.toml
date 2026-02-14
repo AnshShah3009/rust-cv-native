@@ -10,13 +10,13 @@ cv-core = { path = "../core" }
 rayon = { workspace = true }
 nalgebra = { workspace = true }
 
-[target.'cfg(not(target_arch = "spirv"))'.dependencies]
-wide = { workspace = true }
-pulp = { workspace = true }
+thiserror = "2.0"
 
 [features]
-default = ["cpu", "simd"]
-cuda = ["ort/cuda"]
-tensorrt = ["ort/tensorrt"]
-directml = ["ort/directml"]
+default = []
+cpu = []
+simd = []
+cuda = []
+tensorrt = []
+directml = []
 webgpu = []

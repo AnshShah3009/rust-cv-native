@@ -1,4 +1,4 @@
-use nalgebra::{ArrayStorage, Matrix, Matrix3, Matrix4, Vector, Vector3, Vector4};
+use std::default::Default;
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +81,7 @@ pub struct Tensor<T: Clone + Copy> {
     pub device: DeviceType,
 }
 
-impl<T: Clone + Copy> Tensor<T> {
+impl<T: Clone + Copy + Default> Tensor<T> {
     pub fn new(shape: TensorShape) -> Self {
         let dtype = match std::any::type_name::<T>() {
             "u8" => DataType::U8,
@@ -201,11 +201,11 @@ impl<T: Clone + Copy> fmt::Display for Tensor<T> {
 pub type Tensor3f = Tensor<f32>;
 pub type Tensor4f = Tensor<f64>;
 
-pub fn create_tensor_2d<T: Clone + Copy>(height: usize, width: usize) -> Tensor<T> {
+pub fn create_tensor_2d<T: Clone + Copy + Default>(height: usize, width: usize) -> Tensor<T> {
     Tensor::new(TensorShape::new(1, height, width))
 }
 
-pub fn create_tensor_3d<T: Clone + Copy>(
+pub fn create_tensor_3d<T: Clone + Copy + Default>(
     channels: usize,
     height: usize,
     width: usize,
