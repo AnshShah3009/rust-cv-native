@@ -13,6 +13,81 @@ pub struct StereoRectifyMatrices {
     pub q: Matrix4<f64>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CameraCalibrationResult {
+    pub intrinsics: CameraIntrinsics,
+    pub extrinsics: Vec<CameraExtrinsics>,
+    pub rms_reprojection_error: f64,
+}
+
+pub fn generate_chessboard_object_points(
+    pattern_size: (usize, usize),
+    square_size: f64,
+) -> Vec<Point3<f64>> {
+    let (cols, rows) = pattern_size;
+    let mut points = Vec::with_capacity(cols * rows);
+    for y in 0..rows {
+        for x in 0..cols {
+            points.push(Point3::new(
+                x as f64 * square_size,
+                y as f64 * square_size,
+                0.0,
+            ));
+        }
+    }
+    points
+}
+
+pub fn calibrate_camera_planar(
+    object_points: &[Vec<Point3<f64>>],
+    image_points: &[Vec<Point2<f64>>],
+    image_size: (u32, u32),
+) -> Result<CameraCalibrationResult> {
+    if object_points.len() != image_points.len() || object_points.len() < 3 {
+        return Err(StereoError::InvalidParameters(
+            "calibrate_camera_planar needs >=3 views with matching point sets".to_string(),
+        ));
+    }
+
+    let mut homographies = Vec::with_capacity(object_points.len());
+    for (obj, img) in object_points.iter().zip(image_points.iter()) {
+        if obj.len() != img.len() || obj.len() < 4 {
+            return Err(StereoError::InvalidParameters(
+                "each calibration view needs >=4 correspondences".to_string(),
+            ));
+        }
+        if obj.iter().any(|p| p.z.abs() > 1e-9) {
+            return Err(StereoError::InvalidParameters(
+                "calibrate_camera_planar expects planar object points (z=0)".to_string(),
+            ));
+        }
+        let obj2d: Vec<Point2<f64>> = obj.iter().map(|p| Point2::new(p.x, p.y)).collect();
+        homographies.push(estimate_homography_dlt(&obj2d, img)?);
+    }
+
+    let k = intrinsics_from_planar_homographies(&homographies)?;
+    let intrinsics = CameraIntrinsics::new(
+        k[(0, 0)],
+        k[(1, 1)],
+        k[(0, 2)],
+        k[(1, 2)],
+        image_size.0,
+        image_size.1,
+    );
+    let k_inv = intrinsics.inverse_matrix();
+    let mut extrinsics = Vec::with_capacity(homographies.len());
+    for h in &homographies {
+        extrinsics.push(extrinsics_from_homography(&k_inv, h)?);
+    }
+
+    let rms = compute_rms_reprojection(&intrinsics, &extrinsics, object_points, image_points)?;
+    Ok(CameraCalibrationResult {
+        intrinsics,
+        extrinsics,
+        rms_reprojection_error: rms,
+    })
+}
+
 pub fn solve_pnp_dlt(
     object_points: &[Point3<f64>],
     image_points: &[Point2<f64>],
@@ -570,6 +645,216 @@ fn sample_unique_indices(n: usize, k: usize, seed: u64) -> Vec<usize> {
     out
 }
 
+fn estimate_homography_dlt(src: &[Point2<f64>], dst: &[Point2<f64>]) -> Result<Matrix3<f64>> {
+    if src.len() != dst.len() || src.len() < 4 {
+        return Err(StereoError::InvalidParameters(
+            "estimate_homography_dlt needs >=4 paired points".to_string(),
+        ));
+    }
+
+    let (src_n, ts) = normalize_points_hartley(src)?;
+    let (dst_n, td) = normalize_points_hartley(dst)?;
+    let n = src.len();
+    let mut a = DMatrix::<f64>::zeros(2 * n, 9);
+    for i in 0..n {
+        let x = src_n[i].x;
+        let y = src_n[i].y;
+        let u = dst_n[i].x;
+        let v = dst_n[i].y;
+        let r0 = 2 * i;
+        let r1 = r0 + 1;
+        a[(r0, 0)] = -x;
+        a[(r0, 1)] = -y;
+        a[(r0, 2)] = -1.0;
+        a[(r0, 6)] = u * x;
+        a[(r0, 7)] = u * y;
+        a[(r0, 8)] = u;
+
+        a[(r1, 3)] = -x;
+        a[(r1, 4)] = -y;
+        a[(r1, 5)] = -1.0;
+        a[(r1, 6)] = v * x;
+        a[(r1, 7)] = v * y;
+        a[(r1, 8)] = v;
+    }
+
+    let svd = a.svd(true, true);
+    let vt = svd.v_t.ok_or_else(|| {
+        StereoError::InvalidParameters("SVD failed in estimate_homography_dlt".to_string())
+    })?;
+    let h = vt.row(vt.nrows() - 1);
+    let hn = Matrix3::new(
+        h[(0, 0)],
+        h[(0, 1)],
+        h[(0, 2)],
+        h[(0, 3)],
+        h[(0, 4)],
+        h[(0, 5)],
+        h[(0, 6)],
+        h[(0, 7)],
+        h[(0, 8)],
+    );
+    let mut hdenorm = td.try_inverse().unwrap_or(Matrix3::identity()) * hn * ts;
+    if hdenorm[(2, 2)].abs() > 1e-12 {
+        hdenorm /= hdenorm[(2, 2)];
+    }
+    Ok(hdenorm)
+}
+
+fn intrinsics_from_planar_homographies(homographies: &[Matrix3<f64>]) -> Result<Matrix3<f64>> {
+    if homographies.len() < 3 {
+        return Err(StereoError::InvalidParameters(
+            "need at least 3 homographies for planar calibration".to_string(),
+        ));
+    }
+
+    let mut v = DMatrix::<f64>::zeros(2 * homographies.len(), 6);
+    for (i, h) in homographies.iter().enumerate() {
+        let v12 = v_ij(h, 0, 1);
+        let v11 = v_ij(h, 0, 0);
+        let v22 = v_ij(h, 1, 1);
+        for j in 0..6 {
+            v[(2 * i, j)] = v12[j];
+            v[(2 * i + 1, j)] = v11[j] - v22[j];
+        }
+    }
+
+    let svd = v.svd(true, true);
+    let vt = svd.v_t.ok_or_else(|| {
+        StereoError::InvalidParameters(
+            "SVD failed in intrinsics_from_planar_homographies".to_string(),
+        )
+    })?;
+    let b = vt.row(vt.nrows() - 1);
+    let mut b11 = b[(0, 0)];
+    let mut b12 = b[(0, 1)];
+    let mut b22 = b[(0, 2)];
+    let mut b13 = b[(0, 3)];
+    let mut b23 = b[(0, 4)];
+    let mut b33 = b[(0, 5)];
+
+    let mut denom = b11 * b22 - b12 * b12;
+    if denom.abs() < 1e-18 || b11.abs() < 1e-18 {
+        return Err(StereoError::InvalidParameters(
+            "degenerate calibration system".to_string(),
+        ));
+    }
+
+    let mut v0 = (b12 * b13 - b11 * b23) / denom;
+    let mut lambda = b33 - (b13 * b13 + v0 * (b12 * b13 - b11 * b23)) / b11;
+
+    // Nullspace sign is arbitrary; flip once if needed.
+    if lambda <= 0.0 {
+        b11 = -b11;
+        b12 = -b12;
+        b22 = -b22;
+        b13 = -b13;
+        b23 = -b23;
+        b33 = -b33;
+        denom = b11 * b22 - b12 * b12;
+        if denom.abs() < 1e-18 || b11.abs() < 1e-18 {
+            return Err(StereoError::InvalidParameters(
+                "degenerate calibration system after sign flip".to_string(),
+            ));
+        }
+        v0 = (b12 * b13 - b11 * b23) / denom;
+        lambda = b33 - (b13 * b13 + v0 * (b12 * b13 - b11 * b23)) / b11;
+    }
+    if lambda <= 0.0 {
+        return Err(StereoError::InvalidParameters(
+            "invalid lambda in planar calibration".to_string(),
+        ));
+    }
+    let alpha = (lambda / b11).sqrt();
+    let beta = (lambda * b11 / denom).sqrt();
+    let gamma = -b12 * alpha * alpha * beta / lambda;
+    let u0 = gamma * v0 / beta - b13 * alpha * alpha / lambda;
+
+    Ok(Matrix3::new(alpha, gamma, u0, 0.0, beta, v0, 0.0, 0.0, 1.0))
+}
+
+fn extrinsics_from_homography(k_inv: &Matrix3<f64>, h: &Matrix3<f64>) -> Result<CameraExtrinsics> {
+    let h1 = h.column(0).into_owned();
+    let h2 = h.column(1).into_owned();
+    let h3 = h.column(2).into_owned();
+
+    let r1_raw = k_inv * h1;
+    let r2_raw = k_inv * h2;
+    let t_raw = k_inv * h3;
+    let scale = 1.0 / r1_raw.norm().max(1e-18);
+
+    let r1 = r1_raw * scale;
+    let r2 = r2_raw * scale;
+    let r3 = r1.cross(&r2);
+    let mut r = Matrix3::from_columns(&[r1, r2, r3]);
+
+    let svd = r.svd(true, true);
+    let u = svd.u.ok_or_else(|| {
+        StereoError::InvalidParameters("SVD U missing in extrinsics_from_homography".to_string())
+    })?;
+    let vt = svd.v_t.ok_or_else(|| {
+        StereoError::InvalidParameters("SVD V^T missing in extrinsics_from_homography".to_string())
+    })?;
+    r = u * vt;
+    if r.determinant() < 0.0 {
+        r = -r;
+    }
+
+    let t = t_raw * scale;
+    Ok(CameraExtrinsics::new(r, t))
+}
+
+fn compute_rms_reprojection(
+    intrinsics: &CameraIntrinsics,
+    extrinsics: &[CameraExtrinsics],
+    object_points: &[Vec<Point3<f64>>],
+    image_points: &[Vec<Point2<f64>>],
+) -> Result<f64> {
+    if extrinsics.len() != object_points.len() || object_points.len() != image_points.len() {
+        return Err(StereoError::InvalidParameters(
+            "compute_rms_reprojection: mismatched batch sizes".to_string(),
+        ));
+    }
+
+    let mut sq_sum = 0.0f64;
+    let mut count = 0usize;
+    for ((ext, obj), img) in extrinsics
+        .iter()
+        .zip(object_points.iter())
+        .zip(image_points.iter())
+    {
+        for (p3, p2) in obj.iter().zip(img.iter()) {
+            let pc = ext.rotation * p3.coords + ext.translation;
+            if pc[2].abs() <= 1e-18 {
+                continue;
+            }
+            let u = intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx;
+            let v = intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy;
+            let du = u - p2.x;
+            let dv = v - p2.y;
+            sq_sum += du * du + dv * dv;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return Err(StereoError::InvalidParameters(
+            "compute_rms_reprojection: no valid points".to_string(),
+        ));
+    }
+    Ok((sq_sum / count as f64).sqrt())
+}
+
+fn v_ij(h: &Matrix3<f64>, i: usize, j: usize) -> [f64; 6] {
+    [
+        h[(0, i)] * h[(0, j)],
+        h[(0, i)] * h[(1, j)] + h[(1, i)] * h[(0, j)],
+        h[(1, i)] * h[(1, j)],
+        h[(2, i)] * h[(0, j)] + h[(0, i)] * h[(2, j)],
+        h[(2, i)] * h[(1, j)] + h[(1, i)] * h[(2, j)],
+        h[(2, i)] * h[(2, j)],
+    ]
+}
+
 pub fn triangulate_points(
     p1: &Matrix3x4<f64>,
     p2: &Matrix3x4<f64>,
@@ -912,5 +1197,61 @@ mod tests {
         assert!(rect.p2[(0, 3)] < 0.0);
         assert!(rect.q[(3, 2)].is_finite());
         assert!(rect.q[(3, 2)].abs() > 0.0);
+    }
+
+    #[test]
+    fn generate_chessboard_object_points_layout() {
+        let pts = generate_chessboard_object_points((4, 3), 0.05);
+        assert_eq!(pts.len(), 12);
+        assert!((pts[0].coords - Point3::new(0.0, 0.0, 0.0).coords).norm() < 1e-12);
+        assert!((pts[3].coords - Point3::new(0.15, 0.0, 0.0).coords).norm() < 1e-12);
+        assert!((pts[11].coords - Point3::new(0.15, 0.10, 0.0).coords).norm() < 1e-12);
+    }
+
+    #[test]
+    fn calibrate_camera_planar_recovers_intrinsics() {
+        let board = generate_chessboard_object_points((7, 6), 0.04);
+        let gt_k = CameraIntrinsics::new(820.0, 790.0, 320.0, 240.0, 640, 480);
+        let views = [
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(0.08, -0.03, 0.02)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(0.05, -0.03, 2.6),
+            ),
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(-0.06, 0.04, -0.05)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(-0.08, 0.02, 2.9),
+            ),
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(0.03, 0.07, -0.02)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(0.02, 0.06, 2.4),
+            ),
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(-0.04, -0.05, 0.04)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(-0.03, -0.05, 3.1),
+            ),
+        ];
+
+        let mut obj_sets = Vec::new();
+        let mut img_sets = Vec::new();
+        for ext in &views {
+            obj_sets.push(board.clone());
+            img_sets.push(board.iter().map(|p| project_point(&gt_k, ext, p)).collect());
+        }
+
+        let calib = calibrate_camera_planar(&obj_sets, &img_sets, (640, 480)).unwrap();
+        assert!((calib.intrinsics.fx - gt_k.fx).abs() < 1e-2);
+        assert!((calib.intrinsics.fy - gt_k.fy).abs() < 1e-2);
+        assert!((calib.intrinsics.cx - gt_k.cx).abs() < 1e-2);
+        assert!((calib.intrinsics.cy - gt_k.cy).abs() < 1e-2);
+        assert!(calib.rms_reprojection_error < 1e-5);
+        assert_eq!(calib.extrinsics.len(), views.len());
     }
 }
