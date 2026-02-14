@@ -1,31 +1,139 @@
+use crate::{BorderMode, Interpolation};
 use image::GrayImage;
 use nalgebra::{Matrix3, Point2};
 
 pub fn get_pixel_bilinear(img: &GrayImage, x: f32, y: f32) -> f32 {
-    let width = img.width() as f32;
-    let height = img.height() as f32;
+    get_pixel_bilinear_with_border(img, x, y, BorderMode::Constant(0))
+}
 
-    if x < 0.0 || x >= width - 1.0 || y < 0.0 || y >= height - 1.0 {
-        return 0.0;
-    }
-
-    let x0 = x.floor() as u32;
-    let y0 = y.floor() as u32;
+fn get_pixel_bilinear_with_border(img: &GrayImage, x: f32, y: f32, border: BorderMode) -> f32 {
+    let x0 = x.floor() as isize;
+    let y0 = y.floor() as isize;
     let x1 = x0 + 1;
     let y1 = y0 + 1;
 
     let fx = x - x0 as f32;
     let fy = y - y0 as f32;
 
-    let v00 = img.get_pixel(x0, y0)[0] as f32;
-    let v10 = img.get_pixel(x1, y0)[0] as f32;
-    let v01 = img.get_pixel(x0, y1)[0] as f32;
-    let v11 = img.get_pixel(x1, y1)[0] as f32;
+    let v00 = sample_pixel(img, x0, y0, border);
+    let v10 = sample_pixel(img, x1, y0, border);
+    let v01 = sample_pixel(img, x0, y1, border);
+    let v11 = sample_pixel(img, x1, y1, border);
 
     let v0 = v00 * (1.0 - fx) + v10 * fx;
     let v1 = v01 * (1.0 - fx) + v11 * fx;
 
     v0 * (1.0 - fy) + v1 * fy
+}
+
+fn get_pixel_nearest_with_border(img: &GrayImage, x: f32, y: f32, border: BorderMode) -> f32 {
+    let xi = x.round() as isize;
+    let yi = y.round() as isize;
+    sample_pixel(img, xi, yi, border)
+}
+
+fn sample_pixel(img: &GrayImage, x: isize, y: isize, border: BorderMode) -> f32 {
+    let width = img.width() as usize;
+    let height = img.height() as usize;
+    let raw = img.as_raw();
+
+    match (map_coord(x, width, border), map_coord(y, height, border)) {
+        (Some(ix), Some(iy)) => raw[iy * width + ix] as f32,
+        _ => match border {
+            BorderMode::Constant(v) => v as f32,
+            _ => 0.0,
+        },
+    }
+}
+
+fn map_coord(coord: isize, len: usize, mode: BorderMode) -> Option<usize> {
+    let n = len as isize;
+    if n <= 0 {
+        return None;
+    }
+
+    match mode {
+        BorderMode::Constant(_) => {
+            if coord < 0 || coord >= n {
+                None
+            } else {
+                Some(coord as usize)
+            }
+        }
+        BorderMode::Replicate => Some(coord.clamp(0, n - 1) as usize),
+        BorderMode::Wrap => {
+            let mut c = coord % n;
+            if c < 0 {
+                c += n;
+            }
+            Some(c as usize)
+        }
+        BorderMode::Reflect => {
+            if n == 1 {
+                return Some(0);
+            }
+            let period = 2 * n;
+            let mut c = coord % period;
+            if c < 0 {
+                c += period;
+            }
+            if c >= n {
+                c = period - c - 1;
+            }
+            Some(c as usize)
+        }
+        BorderMode::Reflect101 => {
+            if n == 1 {
+                return Some(0);
+            }
+            let period = 2 * n - 2;
+            let mut c = coord % period;
+            if c < 0 {
+                c += period;
+            }
+            if c >= n {
+                c = period - c;
+            }
+            Some(c as usize)
+        }
+    }
+}
+
+fn interpolate_sample(
+    src: &GrayImage,
+    x: f32,
+    y: f32,
+    interpolation: Interpolation,
+    border: BorderMode,
+) -> f32 {
+    match interpolation {
+        Interpolation::Nearest => get_pixel_nearest_with_border(src, x, y, border),
+        Interpolation::Linear | Interpolation::Cubic | Interpolation::Lanczos => {
+            get_pixel_bilinear_with_border(src, x, y, border)
+        }
+    }
+}
+
+pub fn warp_perspective_ex(
+    src: &GrayImage,
+    matrix: &Matrix3<f32>,
+    width: u32,
+    height: u32,
+    interpolation: Interpolation,
+    border: BorderMode,
+) -> GrayImage {
+    let mut dst = GrayImage::new(width, height);
+
+    for y in 0..height {
+        for x in 0..width {
+            let pt = Point2::new(x as f32, y as f32);
+            let src_pt = transform_point(matrix, &pt);
+            let val = interpolate_sample(src, src_pt.x, src_pt.y, interpolation, border);
+            dst.put_pixel(x, y, image::Luma([val.clamp(0.0, 255.0) as u8]));
+        }
+    }
+
+    dst
 }
 
 pub fn warp_perspective(
@@ -34,25 +142,117 @@ pub fn warp_perspective(
     width: u32,
     height: u32,
 ) -> GrayImage {
+    warp_perspective_ex(
+        src,
+        matrix,
+        width,
+        height,
+        Interpolation::Linear,
+        BorderMode::Constant(0),
+    )
+}
+
+pub fn warp_affine(
+    src: &GrayImage,
+    matrix_2x3: [[f32; 3]; 2],
+    width: u32,
+    height: u32,
+) -> GrayImage {
+    warp_affine_ex(
+        src,
+        matrix_2x3,
+        width,
+        height,
+        Interpolation::Linear,
+        BorderMode::Constant(0),
+    )
+}
+
+pub fn warp_affine_ex(
+    src: &GrayImage,
+    matrix_2x3: [[f32; 3]; 2],
+    width: u32,
+    height: u32,
+    interpolation: Interpolation,
+    border: BorderMode,
+) -> GrayImage {
+    let matrix = Matrix3::new(
+        matrix_2x3[0][0],
+        matrix_2x3[0][1],
+        matrix_2x3[0][2],
+        matrix_2x3[1][0],
+        matrix_2x3[1][1],
+        matrix_2x3[1][2],
+        0.0,
+        0.0,
+        1.0,
+    );
+
+    // Warp uses inverse mapping from destination -> source coordinates.
+    let inv = matrix.try_inverse().unwrap_or(matrix);
+    warp_perspective_ex(src, &inv, width, height, interpolation, border)
+}
+
+pub fn remap(
+    src: &GrayImage,
+    map_x: &[f32],
+    map_y: &[f32],
+    width: u32,
+    height: u32,
+    interpolation: Interpolation,
+    border: BorderMode,
+) -> GrayImage {
+    assert_eq!(
+        map_x.len(),
+        (width * height) as usize,
+        "map_x size must equal width*height"
+    );
+    assert_eq!(
+        map_y.len(),
+        (width * height) as usize,
+        "map_y size must equal width*height"
+    );
+
     let mut dst = GrayImage::new(width, height);
 
     for y in 0..height {
         for x in 0..width {
-            let pt = Point2::new(x as f32, y as f32);
-            let src_pt = transform_point(matrix, &pt);
-
-            if src_pt.x >= 0.0
-                && src_pt.x < src.width() as f32
-                && src_pt.y >= 0.0
-                && src_pt.y < src.height() as f32
-            {
-                let val = get_pixel_bilinear(src, src_pt.x, src_pt.y);
-                dst.put_pixel(x, y, image::Luma([val as u8]));
-            }
+            let idx = (y * width + x) as usize;
+            let sx = map_x[idx];
+            let sy = map_y[idx];
+            let val = interpolate_sample(src, sx, sy, interpolation, border);
+            dst.put_pixel(x, y, image::Luma([val.clamp(0.0, 255.0) as u8]));
         }
     }
 
     dst
+}
+
+pub fn remap_identity(
+    src: &GrayImage,
+    interpolation: Interpolation,
+    border: BorderMode,
+) -> GrayImage {
+    let mut map_x = vec![0.0f32; (src.width() * src.height()) as usize];
+    let mut map_y = vec![0.0f32; (src.width() * src.height()) as usize];
+
+    for y in 0..src.height() {
+        for x in 0..src.width() {
+            let idx = (y * src.width() + x) as usize;
+            map_x[idx] = x as f32;
+            map_y[idx] = y as f32;
+        }
+    }
+
+    remap(
+        src,
+        &map_x,
+        &map_y,
+        src.width(),
+        src.height(),
+        interpolation,
+        border,
+    )
 }
 
 fn transform_point(matrix: &Matrix3<f32>, pt: &Point2<f32>) -> Point2<f32> {
@@ -100,4 +300,48 @@ pub fn get_translation_matrix(dx: f32, dy: f32) -> Matrix3<f32> {
 
 pub fn get_scaling_matrix(sx: f32, sy: f32) -> Matrix3<f32> {
     Matrix3::new(sx, 0.0, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::Luma;
+
+    #[test]
+    fn remap_identity_keeps_pixels() {
+        let mut img = GrayImage::new(6, 4);
+        img.put_pixel(2, 1, Luma([200]));
+        img.put_pixel(4, 3, Luma([123]));
+
+        let out = remap_identity(&img, Interpolation::Nearest, BorderMode::Replicate);
+        assert_eq!(out.get_pixel(2, 1)[0], 200);
+        assert_eq!(out.get_pixel(4, 3)[0], 123);
+    }
+
+    #[test]
+    fn warp_affine_translation_moves_point() {
+        let mut img = GrayImage::new(8, 8);
+        img.put_pixel(2, 2, Luma([255]));
+
+        // dst(x,y) = src(x-2, y-1)
+        let m = [[1.0, 0.0, 2.0], [0.0, 1.0, 1.0]];
+        let out = warp_affine_ex(
+            &img,
+            m,
+            8,
+            8,
+            Interpolation::Nearest,
+            BorderMode::Constant(0),
+        );
+        assert_eq!(out.get_pixel(4, 3)[0], 255);
+    }
+
+    #[test]
+    fn warp_perspective_identity_preserves_point() {
+        let mut img = GrayImage::new(7, 7);
+        img.put_pixel(5, 4, Luma([180]));
+        let i = Matrix3::identity();
+        let out = warp_perspective(&img, &i, 7, 7);
+        assert_eq!(out.get_pixel(5, 4)[0], 180);
+    }
 }
