@@ -15,3 +15,12 @@ image = { workspace = true }
 
 thiserror = "2.0"
 rand = "0.8"
+bytemuck = { version = "1.14", features = ["derive"] }
+
+# Optional GPU support
+wgpu = { workspace = true, optional = true }
+pollster = { version = "0.3", optional = true }
+
+[features]
+default = []
+gpu = ["dep:wgpu", "dep:pollster"]
