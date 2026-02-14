@@ -1,6 +1,6 @@
 use crate::{FeatureError, Result};
 use image::{GrayImage, Luma};
-use nalgebra::Point2;
+use nalgebra::{DMatrix, Matrix3, Point2, Vector3};
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Copy)]
@@ -31,6 +31,161 @@ pub struct AprilTagDetection {
     pub center: Point2<f32>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CharucoBoard {
+    pub squares_x: u32,
+    pub squares_y: u32,
+    pub square_length: f32,
+    pub marker_length: f32,
+    pub dictionary: ArucoDictionary,
+    pub marker_ids: Vec<u16>,
+    marker_cells: Vec<(u32, u32)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CharucoCorner {
+    pub id: u16,
+    pub point: Point2<f32>,
+}
+
+pub fn create_charuco_board(
+    squares_x: u32,
+    squares_y: u32,
+    square_length: f32,
+    marker_length: f32,
+    dictionary: ArucoDictionary,
+) -> Result<CharucoBoard> {
+    if squares_x < 2 || squares_y < 2 {
+        return Err(FeatureError::DetectionError(
+            "charuco board must be at least 2x2 squares".to_string(),
+        ));
+    }
+    if !square_length.is_finite()
+        || !marker_length.is_finite()
+        || square_length <= 0.0
+        || marker_length <= 0.0
+        || marker_length >= square_length
+    {
+        return Err(FeatureError::DetectionError(
+            "invalid square/marker length for charuco board".to_string(),
+        ));
+    }
+
+    let mut marker_cells = Vec::new();
+    for y in 0..squares_y {
+        for x in 0..squares_x {
+            // Place markers on white squares so black marker borders remain detectable.
+            if (x + y) % 2 == 1 {
+                marker_cells.push((x, y));
+            }
+        }
+    }
+    let dict_size = aruco_dictionary_codes(dictionary).len();
+    if marker_cells.len() > dict_size {
+        return Err(FeatureError::DetectionError(format!(
+            "dictionary too small for board markers: need {}, have {}",
+            marker_cells.len(),
+            dict_size
+        )));
+    }
+    let marker_ids = (0..marker_cells.len() as u16).collect();
+
+    Ok(CharucoBoard {
+        squares_x,
+        squares_y,
+        square_length,
+        marker_length,
+        dictionary,
+        marker_ids,
+        marker_cells,
+    })
+}
+
+pub fn draw_charuco_board(board: &CharucoBoard, pixel_per_square: u32) -> Result<GrayImage> {
+    if pixel_per_square == 0 {
+        return Err(FeatureError::DetectionError(
+            "pixel_per_square must be >= 1".to_string(),
+        ));
+    }
+    let width = board.squares_x * pixel_per_square;
+    let height = board.squares_y * pixel_per_square;
+    let mut img = GrayImage::from_pixel(width, height, Luma([255]));
+
+    for y in 0..board.squares_y {
+        for x in 0..board.squares_x {
+            let black = (x + y) % 2 == 0;
+            let v = if black { 0u8 } else { 255u8 };
+            let x0 = x * pixel_per_square;
+            let y0 = y * pixel_per_square;
+            for yy in y0..(y0 + pixel_per_square) {
+                for xx in x0..(x0 + pixel_per_square) {
+                    img.put_pixel(xx, yy, Luma([v]));
+                }
+            }
+        }
+    }
+
+    let marker_ratio = board.marker_length / board.square_length;
+    let marker_px = ((pixel_per_square as f32) * marker_ratio).round().max(2.0) as u32;
+    let margin = ((pixel_per_square - marker_px) / 2).max(1);
+
+    for (i, &(cx, cy)) in board.marker_cells.iter().enumerate() {
+        let marker = draw_aruco_marker(board.dictionary, board.marker_ids[i], (marker_px / 6).max(1))?;
+        let marker_scaled = resize_nearest_gray(&marker, marker_px, marker_px);
+        let x0 = cx * pixel_per_square + margin;
+        let y0 = cy * pixel_per_square + margin;
+        blit_gray(&mut img, &marker_scaled, x0, y0);
+    }
+
+    Ok(img)
+}
+
+pub fn detect_charuco_corners(image: &GrayImage, board: &CharucoBoard) -> Result<Vec<CharucoCorner>> {
+    let detections = detect_aruco_markers(image, board.dictionary)?;
+    if detections.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut src = Vec::<Point2<f64>>::new();
+    let mut dst = Vec::<Point2<f64>>::new();
+    for det in &detections {
+        if let Some((cell_x, cell_y)) = marker_cell_for_id(board, det.id) {
+            let obj = marker_object_corners(board, cell_x, cell_y);
+            for k in 0..4 {
+                src.push(Point2::new(obj[k].x as f64, obj[k].y as f64));
+                dst.push(Point2::new(det.corners[k].x as f64, det.corners[k].y as f64));
+            }
+        }
+    }
+    if src.len() < 4 {
+        return Ok(Vec::new());
+    }
+    let h = estimate_homography(&src, &dst)?;
+
+    let mut out = Vec::new();
+    for y in 0..(board.squares_y - 1) {
+        for x in 0..(board.squares_x - 1) {
+            let id = (y * (board.squares_x - 1) + x) as u16;
+            let obj = Point2::new(
+                (x + 1) as f32 * board.square_length,
+                (y + 1) as f32 * board.square_length,
+            );
+            let p = project_homography(&h, &Point2::new(obj.x as f64, obj.y as f64));
+            if p.x >= 0.0
+                && p.y >= 0.0
+                && p.x < image.width() as f64
+                && p.y < image.height() as f64
+            {
+                out.push(CharucoCorner {
+                    id,
+                    point: Point2::new(p.x as f32, p.y as f32),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub fn draw_aruco_marker(
     dictionary: ArucoDictionary,
     id: u16,
@@ -58,7 +213,7 @@ pub fn detect_aruco_markers(image: &GrayImage, dictionary: ArucoDictionary) -> R
             continue;
         }
         let payload = extract_payload(&bits, payload_bits, border_bits);
-        let (id, rot, dist) = decode_code_with_rotations(&payload, &codes);
+        let (id, rot, dist) = decode_code_with_rotations(&payload, &codes, payload_bits);
         if dist == 0 {
             detections.push(ArucoDetection {
                 id: id as u16,
@@ -101,7 +256,7 @@ pub fn detect_apriltags(image: &GrayImage, family: AprilTagFamily) -> Result<Vec
             continue;
         }
         let payload = extract_payload(&bits, payload_bits, border_bits);
-        let (id, rot, dist) = decode_code_with_rotations(&payload, &codes);
+        let (id, rot, dist) = decode_code_with_rotations(&payload, &codes, payload_bits);
         // Simple robust decode: allow up to one bit error for tag families.
         if dist <= 1 {
             detections.push(AprilTagDetection {
@@ -300,13 +455,11 @@ fn extract_payload(bits: &[u8], payload_bits: usize, border_bits: usize) -> u64 
     code
 }
 
-fn decode_code_with_rotations(code: &u64, dict: &[u64]) -> (usize, usize, u32) {
+fn decode_code_with_rotations(code: &u64, dict: &[u64], payload_side: usize) -> (usize, usize, u32) {
     let mut best_id = 0usize;
     let mut best_rot = 0usize;
     let mut best_dist = u32::MAX;
-    let n = ((dict[0].leading_zeros() ^ 63) as usize + 1).max(16);
-    let side = (n as f32).sqrt().round() as usize;
-    let rots = rotate_code_variants(*code, side);
+    let rots = rotate_code_variants(*code, payload_side);
     for (id, dcode) in dict.iter().enumerate() {
         for (rot, rc) in rots.iter().enumerate() {
             let dist = (rc ^ dcode).count_ones();
@@ -402,6 +555,113 @@ fn candidate_center(c: &Candidate) -> Point2<f32> {
     )
 }
 
+fn marker_cell_for_id(board: &CharucoBoard, id: u16) -> Option<(u32, u32)> {
+    board
+        .marker_ids
+        .iter()
+        .position(|&v| v == id)
+        .map(|i| board.marker_cells[i])
+}
+
+fn marker_object_corners(board: &CharucoBoard, cell_x: u32, cell_y: u32) -> [Point2<f32>; 4] {
+    let margin = 0.5 * (board.square_length - board.marker_length);
+    let x0 = cell_x as f32 * board.square_length + margin;
+    let y0 = cell_y as f32 * board.square_length + margin;
+    let x1 = x0 + board.marker_length;
+    let y1 = y0 + board.marker_length;
+    [
+        Point2::new(x0, y0),
+        Point2::new(x1, y0),
+        Point2::new(x1, y1),
+        Point2::new(x0, y1),
+    ]
+}
+
+fn estimate_homography(src: &[Point2<f64>], dst: &[Point2<f64>]) -> Result<Matrix3<f64>> {
+    if src.len() != dst.len() || src.len() < 4 {
+        return Err(FeatureError::DetectionError(
+            "estimate_homography needs >=4 correspondences".to_string(),
+        ));
+    }
+    let n = src.len();
+    let mut a = DMatrix::<f64>::zeros(2 * n, 9);
+    for i in 0..n {
+        let x = src[i].x;
+        let y = src[i].y;
+        let u = dst[i].x;
+        let v = dst[i].y;
+        let r0 = 2 * i;
+        let r1 = r0 + 1;
+        a[(r0, 0)] = -x;
+        a[(r0, 1)] = -y;
+        a[(r0, 2)] = -1.0;
+        a[(r0, 6)] = u * x;
+        a[(r0, 7)] = u * y;
+        a[(r0, 8)] = u;
+        a[(r1, 3)] = -x;
+        a[(r1, 4)] = -y;
+        a[(r1, 5)] = -1.0;
+        a[(r1, 6)] = v * x;
+        a[(r1, 7)] = v * y;
+        a[(r1, 8)] = v;
+    }
+    let svd = a.svd(true, true);
+    let vt = svd
+        .v_t
+        .ok_or_else(|| FeatureError::DetectionError("homography SVD failed".to_string()))?;
+    let h = vt.row(vt.nrows() - 1);
+    let mut m = Matrix3::<f64>::zeros();
+    for r in 0..3 {
+        for c in 0..3 {
+            m[(r, c)] = h[(0, r * 3 + c)];
+        }
+    }
+    let s = m[(2, 2)];
+    if s.abs() > 1e-12 {
+        m /= s;
+    }
+    Ok(m)
+}
+
+fn project_homography(h: &Matrix3<f64>, p: &Point2<f64>) -> Point2<f64> {
+    let v = h * Vector3::new(p.x, p.y, 1.0);
+    if v[2].abs() <= 1e-12 {
+        Point2::new(v[0], v[1])
+    } else {
+        Point2::new(v[0] / v[2], v[1] / v[2])
+    }
+}
+
+fn resize_nearest_gray(src: &GrayImage, width: u32, height: u32) -> GrayImage {
+    let mut out = GrayImage::new(width, height);
+    if width == 0 || height == 0 {
+        return out;
+    }
+    let sx = src.width() as f32 / width as f32;
+    let sy = src.height() as f32 / height as f32;
+    for y in 0..height {
+        for x in 0..width {
+            let px = ((x as f32 + 0.5) * sx).floor().clamp(0.0, (src.width() - 1) as f32) as u32;
+            let py =
+                ((y as f32 + 0.5) * sy).floor().clamp(0.0, (src.height() - 1) as f32) as u32;
+            out.put_pixel(x, y, *src.get_pixel(px, py));
+        }
+    }
+    out
+}
+
+fn blit_gray(dst: &mut GrayImage, src: &GrayImage, x0: u32, y0: u32) {
+    for y in 0..src.height() {
+        for x in 0..src.width() {
+            let dx = x0 + x;
+            let dy = y0 + y;
+            if dx < dst.width() && dy < dst.height() {
+                dst.put_pixel(dx, dy, *src.get_pixel(x, y));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,5 +687,13 @@ mod tests {
         let det = detect_apriltags(&canvas, AprilTagFamily::Tag16h5).unwrap();
         assert!(!det.is_empty());
         assert!(det.iter().any(|d| d.id == 3));
+    }
+
+    #[test]
+    fn charuco_board_draw_and_detect_corners() {
+        let board = create_charuco_board(6, 5, 1.0, 0.75, ArucoDictionary::Dict4x4_50).unwrap();
+        let img = draw_charuco_board(&board, 30).unwrap();
+        let corners = detect_charuco_corners(&img, &board).unwrap();
+        assert!(corners.len() >= ((board.squares_x - 1) * (board.squares_y - 1) / 2) as usize);
     }
 }
