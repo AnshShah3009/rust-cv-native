@@ -1,0 +1,23 @@
+[package]
+name = "cv-stereo"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Stereo vision and depth estimation algorithms"
+
+[dependencies]
+cv-core = { path = "../core" }
+cv-imgproc = { path = "../imgproc" }
+cv-hal = { path = "../hal" }
+nalgebra = { workspace = true }
+rayon = { workspace = true }
+image = { workspace = true }
+
+thiserror = "2.0"
+wgpu = { version = "0.20", optional = true }
+bytemuck = { version = "1.16", features = ["derive"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+
+[features]
+default = []
+gpu = ["wgpu", "bytemuck", "tokio"]
