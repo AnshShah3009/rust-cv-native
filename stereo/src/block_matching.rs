@@ -5,6 +5,7 @@
 
 use crate::{DisparityMap, Result, StereoError};
 use image::GrayImage;
+use rayon::prelude::*;
 
 /// Block matching stereo matcher
 pub struct BlockMatcher {
@@ -64,7 +65,10 @@ impl BlockMatcher {
 
         let width = left.width() as i32;
         let height = left.height() as i32;
+        let width_usize = left.width() as usize;
         let half_block = (self.block_size / 2) as i32;
+        let left_data = left.as_raw();
+        let right_data = right.as_raw();
 
         let mut disparity = DisparityMap::new(
             left.width(),
@@ -73,32 +77,48 @@ impl BlockMatcher {
             self.max_disparity,
         );
 
-        // Compute disparity for each pixel
-        for y in half_block..height - half_block {
-            for x in half_block..width - half_block {
-                let best_disparity = self.find_best_disparity(left, right, x, y, half_block);
-
-                disparity.set(x as u32, y as u32, best_disparity as f32);
-            }
-        }
+        // Compute disparity map row-wise in parallel.
+        disparity
+            .data
+            .par_chunks_mut(width_usize)
+            .enumerate()
+            .for_each(|(y_usize, row)| {
+                let y = y_usize as i32;
+                if y < half_block || y >= height - half_block {
+                    return;
+                }
+                for x in half_block..width - half_block {
+                    let best_disparity =
+                        self.find_best_disparity(left_data, right_data, width_usize, x, y, half_block);
+                    row[x as usize] = best_disparity as f32;
+                }
+            });
 
         Ok(disparity)
     }
 
     fn find_best_disparity(
         &self,
-        left: &GrayImage,
-        right: &GrayImage,
+        left_data: &[u8],
+        right_data: &[u8],
+        width: usize,
         x: i32,
         y: i32,
         half_block: i32,
     ) -> i32 {
+        // Clamp disparity search so all right-image accesses stay in-bounds.
+        let min_valid = (x + half_block - (width as i32 - 1)).max(self.min_disparity);
+        let max_valid = (x - half_block).min(self.max_disparity);
+        if min_valid > max_valid {
+            return -1;
+        }
+
         let mut best_disparity = self.min_disparity;
         let mut best_cost = f32::INFINITY;
         let mut second_best_cost = f32::INFINITY;
 
-        for d in self.min_disparity..=self.max_disparity {
-            let cost = self.compute_matching_cost(left, right, x, y, d, half_block);
+        for d in min_valid..=max_valid {
+            let cost = self.compute_matching_cost(left_data, right_data, width, x, y, d, half_block);
 
             if cost < best_cost {
                 second_best_cost = best_cost;
@@ -120,30 +140,24 @@ impl BlockMatcher {
 
     fn compute_matching_cost(
         &self,
-        left: &GrayImage,
-        right: &GrayImage,
+        left_data: &[u8],
+        right_data: &[u8],
+        width: usize,
         x: i32,
         y: i32,
         disparity: i32,
         half_block: i32,
     ) -> f32 {
         let mut cost = 0.0f32;
-        let mut count = 0;
+        let mut count = 0usize;
 
         for dy in -half_block..=half_block {
+            let ly = (y + dy) as usize;
             for dx in -half_block..=half_block {
-                let lx = (x + dx) as u32;
-                let ly = (y + dy) as u32;
-                let rx = (x + dx - disparity) as u32;
-                let ry = (y + dy) as u32;
-
-                // Check bounds
-                if rx >= right.width() || ry >= right.height() {
-                    continue;
-                }
-
-                let left_val = left.get_pixel(lx, ly)[0] as f32;
-                let right_val = right.get_pixel(rx, ry)[0] as f32;
+                let lx = (x + dx) as usize;
+                let rx = (x + dx - disparity) as usize;
+                let left_val = left_data[ly * width + lx] as f32;
+                let right_val = right_data[ly * width + rx] as f32;
 
                 match self.metric {
                     MatchingMetric::SAD => {
@@ -162,11 +176,7 @@ impl BlockMatcher {
             }
         }
 
-        if count > 0 {
-            cost / count as f32
-        } else {
-            f32::INFINITY
-        }
+        cost / count as f32
     }
 }
 

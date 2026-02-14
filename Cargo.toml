@@ -12,9 +12,16 @@ cv-imgproc = { path = "./imgproc" }
 cv-features = { path = "./features" }
 cv-stereo = { path = "./stereo" }
 cv-video = { path = "./video" }
+rayon = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+image = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[features]
+default = []
+gpu = ["cv-stereo/gpu"]
 
 [[bench]]
 name = "cv_benchmarks"
