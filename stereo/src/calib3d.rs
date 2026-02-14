@@ -4,6 +4,15 @@ use nalgebra::{
     DMatrix, Matrix3, Matrix3x4, Matrix4, Point2, Point3, Vector3,
 };
 
+#[derive(Debug, Clone)]
+pub struct StereoRectifyMatrices {
+    pub r1: Matrix3<f64>,
+    pub r2: Matrix3<f64>,
+    pub p1: Matrix3x4<f64>,
+    pub p2: Matrix3x4<f64>,
+    pub q: Matrix4<f64>,
+}
+
 pub fn solve_pnp_dlt(
     object_points: &[Point3<f64>],
     image_points: &[Point2<f64>],
@@ -108,6 +117,16 @@ pub fn solve_pnp_dlt(
 
 pub fn essential_from_extrinsics(extrinsics: &CameraExtrinsics) -> Matrix3<f64> {
     skew_symmetric(&extrinsics.translation) * extrinsics.rotation
+}
+
+pub fn fundamental_from_essential(
+    essential: &Matrix3<f64>,
+    intrinsics1: &CameraIntrinsics,
+    intrinsics2: &CameraIntrinsics,
+) -> Matrix3<f64> {
+    let k1_inv = intrinsics1.inverse_matrix();
+    let k2_inv_t = intrinsics2.inverse_matrix().transpose();
+    k2_inv_t * essential * k1_inv
 }
 
 pub fn find_essential_mat(
@@ -227,6 +246,148 @@ fn normalize_with_intrinsics(
     (n1, n2)
 }
 
+pub fn find_fundamental_mat(pts1: &[Point2<f64>], pts2: &[Point2<f64>]) -> Result<Matrix3<f64>> {
+    if pts1.len() != pts2.len() || pts1.len() < 8 {
+        return Err(StereoError::InvalidParameters(
+            "find_fundamental_mat needs >=8 paired points".to_string(),
+        ));
+    }
+    estimate_fundamental_8_point(pts1, pts2)
+}
+
+pub fn find_fundamental_mat_ransac(
+    pts1: &[Point2<f64>],
+    pts2: &[Point2<f64>],
+    threshold_px: f64,
+    max_iters: usize,
+) -> Result<(Matrix3<f64>, Vec<bool>)> {
+    if pts1.len() != pts2.len() || pts1.len() < 8 {
+        return Err(StereoError::InvalidParameters(
+            "find_fundamental_mat_ransac needs >=8 paired points".to_string(),
+        ));
+    }
+    if threshold_px <= 0.0 {
+        return Err(StereoError::InvalidParameters(
+            "threshold_px must be > 0".to_string(),
+        ));
+    }
+
+    let n = pts1.len();
+    let thresh2 = threshold_px * threshold_px;
+    let mut best_inliers = vec![false; n];
+    let mut best_count = 0usize;
+    let mut best_f = None;
+    let iters = max_iters.max(32);
+
+    for i in 0..iters {
+        let idx = sample_unique_indices(n, 8, i as u64 + 7);
+        let s1: Vec<Point2<f64>> = idx.iter().map(|&j| pts1[j]).collect();
+        let s2: Vec<Point2<f64>> = idx.iter().map(|&j| pts2[j]).collect();
+        let f = match estimate_fundamental_8_point(&s1, &s2) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let mut mask = vec![false; n];
+        let mut count = 0usize;
+        for j in 0..n {
+            let err = sampson_error(&f, &pts1[j], &pts2[j]);
+            if err <= thresh2 {
+                mask[j] = true;
+                count += 1;
+            }
+        }
+
+        if count > best_count {
+            best_count = count;
+            best_inliers = mask;
+            best_f = Some(f);
+        }
+    }
+
+    let best_f = best_f.ok_or_else(|| {
+        StereoError::InvalidParameters("RANSAC failed to estimate fundamental matrix".to_string())
+    })?;
+
+    let in1: Vec<Point2<f64>> = pts1
+        .iter()
+        .zip(best_inliers.iter())
+        .filter_map(|(p, &m)| if m { Some(*p) } else { None })
+        .collect();
+    let in2: Vec<Point2<f64>> = pts2
+        .iter()
+        .zip(best_inliers.iter())
+        .filter_map(|(p, &m)| if m { Some(*p) } else { None })
+        .collect();
+
+    let refined = if in1.len() >= 8 {
+        estimate_fundamental_8_point(&in1, &in2).unwrap_or(best_f)
+    } else {
+        best_f
+    };
+    Ok((refined, best_inliers))
+}
+
+pub fn stereo_rectify_matrices(
+    left_intrinsics: &CameraIntrinsics,
+    right_intrinsics: &CameraIntrinsics,
+    left_extrinsics: &CameraExtrinsics,
+    right_extrinsics: &CameraExtrinsics,
+) -> Result<StereoRectifyMatrices> {
+    let rel_r = left_extrinsics.rotation.transpose() * right_extrinsics.rotation;
+    let rel_t = left_extrinsics.rotation.transpose()
+        * (right_extrinsics.translation - left_extrinsics.translation);
+    let baseline = rel_t.norm();
+    if baseline <= 1e-12 {
+        return Err(StereoError::InvalidParameters(
+            "stereo_rectify_matrices requires non-zero baseline".to_string(),
+        ));
+    }
+
+    let ex = rel_t / baseline;
+    let helper = if ex[2].abs() < 0.9 {
+        Vector3::new(0.0, 0.0, 1.0)
+    } else {
+        Vector3::new(0.0, 1.0, 0.0)
+    };
+    let ey = helper.cross(&ex).normalize();
+    let ez = ex.cross(&ey).normalize();
+    let basis = Matrix3::from_columns(&[ex, ey, ez]);
+    let r_rect = basis.transpose();
+
+    let r1 = r_rect;
+    let r2 = r_rect * rel_r;
+
+    let fx = 0.5 * (left_intrinsics.fx + right_intrinsics.fx);
+    let fy = 0.5 * (left_intrinsics.fy + right_intrinsics.fy);
+    let cx1 = 0.5 * (left_intrinsics.cx + right_intrinsics.cx);
+    let cx2 = cx1;
+    let cy = 0.5 * (left_intrinsics.cy + right_intrinsics.cy);
+    let tx = -fx * baseline;
+
+    let p1 = Matrix3x4::new(
+        fx, 0.0, cx1, 0.0, //
+        0.0, fy, cy, 0.0, //
+        0.0, 0.0, 1.0, 0.0,
+    );
+    let p2 = Matrix3x4::new(
+        fx, 0.0, cx2, tx, //
+        0.0, fy, cy, 0.0, //
+        0.0, 0.0, 1.0, 0.0,
+    );
+
+    let mut q = Matrix4::<f64>::zeros();
+    q[(0, 0)] = 1.0;
+    q[(0, 3)] = -cx1;
+    q[(1, 1)] = 1.0;
+    q[(1, 3)] = -cy;
+    q[(2, 3)] = fx;
+    q[(3, 2)] = -1.0 / tx;
+    q[(3, 3)] = (cx1 - cx2) / tx;
+
+    Ok(StereoRectifyMatrices { r1, r2, p1, p2, q })
+}
+
 fn estimate_essential_8_point(pts1: &[Point2<f64>], pts2: &[Point2<f64>]) -> Result<Matrix3<f64>> {
     if pts1.len() != pts2.len() || pts1.len() < 8 {
         return Err(StereoError::InvalidParameters(
@@ -281,6 +442,102 @@ fn enforce_essential_constraints(e: &Matrix3<f64>) -> Result<Matrix3<f64>> {
     })?;
     let s = 0.5 * (svd.singular_values[0] + svd.singular_values[1]);
     let sigma = Matrix3::new(s, 0.0, 0.0, 0.0, s, 0.0, 0.0, 0.0, 0.0);
+    Ok(u * sigma * vt)
+}
+
+fn estimate_fundamental_8_point(pts1: &[Point2<f64>], pts2: &[Point2<f64>]) -> Result<Matrix3<f64>> {
+    let (n1, t1) = normalize_points_hartley(pts1)?;
+    let (n2, t2) = normalize_points_hartley(pts2)?;
+    let n = n1.len();
+    let mut a = DMatrix::<f64>::zeros(n, 9);
+    for i in 0..n {
+        let x1 = n1[i].x;
+        let y1 = n1[i].y;
+        let x2 = n2[i].x;
+        let y2 = n2[i].y;
+        a[(i, 0)] = x2 * x1;
+        a[(i, 1)] = x2 * y1;
+        a[(i, 2)] = x2;
+        a[(i, 3)] = y2 * x1;
+        a[(i, 4)] = y2 * y1;
+        a[(i, 5)] = y2;
+        a[(i, 6)] = x1;
+        a[(i, 7)] = y1;
+        a[(i, 8)] = 1.0;
+    }
+
+    let svd = a.svd(true, true);
+    let vt = svd.v_t.ok_or_else(|| {
+        StereoError::InvalidParameters("SVD failed in estimate_fundamental_8_point".to_string())
+    })?;
+    let fvec = vt.row(vt.nrows() - 1);
+    let f0 = Matrix3::new(
+        fvec[(0, 0)],
+        fvec[(0, 1)],
+        fvec[(0, 2)],
+        fvec[(0, 3)],
+        fvec[(0, 4)],
+        fvec[(0, 5)],
+        fvec[(0, 6)],
+        fvec[(0, 7)],
+        fvec[(0, 8)],
+    );
+    let f_rank2 = enforce_rank2(&f0)?;
+    let f = t2.transpose() * f_rank2 * t1;
+    Ok(f)
+}
+
+fn normalize_points_hartley(pts: &[Point2<f64>]) -> Result<(Vec<Point2<f64>>, Matrix3<f64>)> {
+    if pts.len() < 2 {
+        return Err(StereoError::InvalidParameters(
+            "normalize_points_hartley requires at least 2 points".to_string(),
+        ));
+    }
+
+    let mx = pts.iter().map(|p| p.x).sum::<f64>() / pts.len() as f64;
+    let my = pts.iter().map(|p| p.y).sum::<f64>() / pts.len() as f64;
+    let mean_dist = pts
+        .iter()
+        .map(|p| ((p.x - mx) * (p.x - mx) + (p.y - my) * (p.y - my)).sqrt())
+        .sum::<f64>()
+        / pts.len() as f64;
+    if mean_dist <= 1e-12 {
+        return Err(StereoError::InvalidParameters(
+            "degenerate points in normalize_points_hartley".to_string(),
+        ));
+    }
+
+    let s = (2.0f64).sqrt() / mean_dist;
+    let t = Matrix3::new(s, 0.0, -s * mx, 0.0, s, -s * my, 0.0, 0.0, 1.0);
+    let out = pts
+        .iter()
+        .map(|p| {
+            let v = t * Vector3::new(p.x, p.y, 1.0);
+            Point2::new(v[0], v[1])
+        })
+        .collect();
+    Ok((out, t))
+}
+
+fn enforce_rank2(m: &Matrix3<f64>) -> Result<Matrix3<f64>> {
+    let svd = m.svd(true, true);
+    let u = svd.u.ok_or_else(|| {
+        StereoError::InvalidParameters("SVD U missing in enforce_rank2".to_string())
+    })?;
+    let vt = svd.v_t.ok_or_else(|| {
+        StereoError::InvalidParameters("SVD V^T missing in enforce_rank2".to_string())
+    })?;
+    let sigma = Matrix3::new(
+        svd.singular_values[0],
+        0.0,
+        0.0,
+        0.0,
+        svd.singular_values[1],
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    );
     Ok(u * sigma * vt)
 }
 
@@ -595,5 +852,65 @@ mod tests {
         let recovered = recover_pose_from_essential(&e, &in1, &in2, &k).unwrap();
         assert!(recovered.rotation.determinant() > 0.0);
         assert!(recovered.translation.norm() > 1e-6);
+    }
+
+    #[test]
+    fn find_fundamental_mat_ransac_handles_outliers() {
+        let k = CameraIntrinsics::new(720.0, 710.0, 320.0, 240.0, 640, 480);
+        let rot = Rotation3::from_euler_angles(0.02, -0.01, 0.015)
+            .matrix()
+            .clone_owned();
+        let t = Vector3::new(0.15, 0.01, 0.0);
+        let gt = CameraExtrinsics::new(rot, t);
+        let i_ext = CameraExtrinsics::default();
+
+        let mut world = vec![];
+        for i in 0..24 {
+            let x = -0.4 + 0.04 * i as f64;
+            let y = -0.2 + 0.03 * (i % 6) as f64;
+            let z = 2.8 + 0.2 * (i % 5) as f64;
+            world.push(Point3::new(x, y, z));
+        }
+        let pts1: Vec<Point2<f64>> = world.iter().map(|p| project_point(&k, &i_ext, p)).collect();
+        let mut pts2: Vec<Point2<f64>> = world.iter().map(|p| project_point(&k, &gt, p)).collect();
+        for i in 0..6 {
+            pts2[i] = Point2::new(600.0 - i as f64 * 17.0, 30.0 + i as f64 * 11.0);
+        }
+
+        let (f, inliers) = find_fundamental_mat_ransac(&pts1, &pts2, 2.5, 600).unwrap();
+        let inlier_count = inliers.iter().filter(|&&m| m).count();
+        assert!(inlier_count >= 12);
+
+        let mean_epi = pts1
+            .iter()
+            .zip(pts2.iter())
+            .zip(inliers.iter())
+            .filter_map(|((p1, p2), &m)| {
+                if m {
+                    let x1 = Vector3::new(p1.x, p1.y, 1.0);
+                    let x2 = Vector3::new(p2.x, p2.y, 1.0);
+                    Some((x2.dot(&(f * x1))).abs())
+                } else {
+                    None
+                }
+            })
+            .sum::<f64>()
+            / inlier_count as f64;
+        assert!(mean_epi < 0.5);
+    }
+
+    #[test]
+    fn stereo_rectify_matrices_has_expected_projection_shape() {
+        let k1 = CameraIntrinsics::new(700.0, 700.0, 320.0, 240.0, 640, 480);
+        let k2 = CameraIntrinsics::new(710.0, 705.0, 322.0, 241.0, 640, 480);
+        let left = CameraExtrinsics::default();
+        let right = CameraExtrinsics::new(Matrix3::identity(), Vector3::new(0.2, 0.0, 0.0));
+
+        let rect = stereo_rectify_matrices(&k1, &k2, &left, &right).unwrap();
+        assert!(rect.r1.determinant() > 0.0);
+        assert!(rect.r2.determinant() > 0.0);
+        assert!(rect.p2[(0, 3)] < 0.0);
+        assert!(rect.q[(3, 2)].is_finite());
+        assert!(rect.q[(3, 2)].abs() > 0.0);
     }
 }
