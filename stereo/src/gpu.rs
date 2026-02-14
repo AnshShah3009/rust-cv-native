@@ -450,11 +450,7 @@ fn read_gpu_max_bytes_from_env() -> Result<Option<usize>> {
         }
     };
 
-    let parsed: usize = raw.parse().map_err(|_| {
-        StereoError::InvalidParameters(format!(
-            "RUSTCV_GPU_MAX_BYTES must be a positive integer, got '{raw}'"
-        ))
-    })?;
+    let parsed = parse_bytes_with_suffix(&raw)?;
     if parsed == 0 {
         return Err(StereoError::InvalidParameters(
             "RUSTCV_GPU_MAX_BYTES must be >= 1".to_string(),
@@ -462,6 +458,39 @@ fn read_gpu_max_bytes_from_env() -> Result<Option<usize>> {
     }
 
     Ok(Some(parsed))
+}
+
+fn parse_bytes_with_suffix(raw: &str) -> Result<usize> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err(StereoError::InvalidParameters(
+            "RUSTCV_GPU_MAX_BYTES cannot be empty".to_string(),
+        ));
+    }
+
+    let upper = s.to_ascii_uppercase().replace('_', "");
+    let (number_part, multiplier): (&str, usize) = if let Some(v) = upper.strip_suffix("KB") {
+        (v, 1024)
+    } else if let Some(v) = upper.strip_suffix("MB") {
+        (v, 1024 * 1024)
+    } else if let Some(v) = upper.strip_suffix("GB") {
+        (v, 1024 * 1024 * 1024)
+    } else if let Some(v) = upper.strip_suffix('B') {
+        (v, 1)
+    } else {
+        (upper.as_str(), 1)
+    };
+
+    let base: usize = number_part.parse().map_err(|_| {
+        StereoError::InvalidParameters(format!(
+            "RUSTCV_GPU_MAX_BYTES must be like '134217728', '512MB', or '2GB'; got '{raw}'"
+        ))
+    })?;
+    base.checked_mul(multiplier).ok_or_else(|| {
+        StereoError::InvalidParameters(format!(
+            "RUSTCV_GPU_MAX_BYTES value '{raw}' is too large"
+        ))
+    })
 }
 
 fn extract_rows(image: &GrayImage, start_row: u32, end_row: u32) -> Result<GrayImage> {
@@ -553,5 +582,14 @@ mod tests {
             .iter()
             .any(|a| a.device_type == wgpu::DeviceType::IntegratedGpu);
         println!("Integrated GPU visible: {}", integrated);
+    }
+
+    #[test]
+    fn parse_bytes_with_suffix_variants() {
+        assert_eq!(parse_bytes_with_suffix("1024").unwrap(), 1024);
+        assert_eq!(parse_bytes_with_suffix("1KB").unwrap(), 1024);
+        assert_eq!(parse_bytes_with_suffix("64mb").unwrap(), 64 * 1024 * 1024);
+        assert_eq!(parse_bytes_with_suffix("2_GB").unwrap(), 2 * 1024 * 1024 * 1024);
+        assert!(parse_bytes_with_suffix("abc").is_err());
     }
 }
