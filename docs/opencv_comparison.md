@@ -82,7 +82,8 @@
 - Haar cascades
 - HOG + SVM detector
 - QR code detection
-- ArUco markers
+- [x] ArUco-style square binary marker generation/detection (initial native implementation)
+- [x] AprilTag-style square binary marker generation/detection (initial native implementation)
 - Deep learning detectors (YOLO, SSD via ort)
 
 **4. Computational Photography (missing cv-photo)**
