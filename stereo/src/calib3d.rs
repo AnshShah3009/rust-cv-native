@@ -24,6 +24,23 @@ pub struct CameraCalibrationResult {
     pub rms_reprojection_error: f64,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct CameraCalibrationOptions {
+    /// Enforce fx/fy to match this ratio (fx = ratio * fy).
+    pub fix_aspect_ratio: Option<f64>,
+    /// Enforce principal point to these pixel coordinates.
+    pub fix_principal_point: Option<(f64, f64)>,
+}
+
+impl Default for CameraCalibrationOptions {
+    fn default() -> Self {
+        Self {
+            fix_aspect_ratio: None,
+            fix_principal_point: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StereoCalibrationResult {
     pub left: CameraCalibrationResult,
@@ -70,6 +87,20 @@ pub fn calibrate_camera_planar(
     image_points: &[Vec<Point2<f64>>],
     image_size: (u32, u32),
 ) -> Result<CameraCalibrationResult> {
+    calibrate_camera_planar_with_options(
+        object_points,
+        image_points,
+        image_size,
+        CameraCalibrationOptions::default(),
+    )
+}
+
+pub fn calibrate_camera_planar_with_options(
+    object_points: &[Vec<Point3<f64>>],
+    image_points: &[Vec<Point2<f64>>],
+    image_size: (u32, u32),
+    options: CameraCalibrationOptions,
+) -> Result<CameraCalibrationResult> {
     if object_points.len() != image_points.len() || object_points.len() < 3 {
         return Err(StereoError::InvalidParameters(
             "calibrate_camera_planar needs >=3 views with matching point sets".to_string(),
@@ -93,14 +124,30 @@ pub fn calibrate_camera_planar(
     }
 
     let k = intrinsics_from_planar_homographies(&homographies)?;
-    let intrinsics = CameraIntrinsics::new(
-        k[(0, 0)],
-        k[(1, 1)],
-        k[(0, 2)],
-        k[(1, 2)],
-        image_size.0,
-        image_size.1,
-    );
+    let mut fx = k[(0, 0)];
+    let mut fy = k[(1, 1)];
+    let mut cx = k[(0, 2)];
+    let mut cy = k[(1, 2)];
+    if let Some(ratio) = options.fix_aspect_ratio {
+        if !ratio.is_finite() || ratio <= 0.0 {
+            return Err(StereoError::InvalidParameters(
+                "fix_aspect_ratio must be finite and > 0".to_string(),
+            ));
+        }
+        // Closest constrained fit to unconstrained (fx, fy) under fx = ratio * fy.
+        fy = (ratio * fx + fy) / (ratio * ratio + 1.0);
+        fx = ratio * fy;
+    }
+    if let Some((fixed_cx, fixed_cy)) = options.fix_principal_point {
+        if !fixed_cx.is_finite() || !fixed_cy.is_finite() {
+            return Err(StereoError::InvalidParameters(
+                "fix_principal_point must be finite".to_string(),
+            ));
+        }
+        cx = fixed_cx;
+        cy = fixed_cy;
+    }
+    let intrinsics = CameraIntrinsics::new(fx, fy, cx, cy, image_size.0, image_size.1);
     let k_inv = intrinsics.inverse_matrix();
     let mut extrinsics = Vec::with_capacity(homographies.len());
     for h in &homographies {
@@ -125,6 +172,20 @@ pub fn calibrate_camera_from_chessboard_images(
     images: &[GrayImage],
     pattern_size: (usize, usize),
     square_size: f64,
+) -> Result<CameraCalibrationResult> {
+    calibrate_camera_from_chessboard_images_with_options(
+        images,
+        pattern_size,
+        square_size,
+        CameraCalibrationOptions::default(),
+    )
+}
+
+pub fn calibrate_camera_from_chessboard_images_with_options(
+    images: &[GrayImage],
+    pattern_size: (usize, usize),
+    square_size: f64,
+    options: CameraCalibrationOptions,
 ) -> Result<CameraCalibrationResult> {
     if images.is_empty() {
         return Err(StereoError::InvalidParameters(
@@ -155,13 +216,27 @@ pub fn calibrate_camera_from_chessboard_images(
         )));
     }
 
-    calibrate_camera_planar(&object_points, &image_points, (w, h))
+    calibrate_camera_planar_with_options(&object_points, &image_points, (w, h), options)
 }
 
 pub fn calibrate_camera_from_chessboard_files<P: AsRef<Path>>(
     image_paths: &[P],
     pattern_size: (usize, usize),
     square_size: f64,
+) -> Result<(CameraCalibrationResult, CalibrationFileReport)> {
+    calibrate_camera_from_chessboard_files_with_options(
+        image_paths,
+        pattern_size,
+        square_size,
+        CameraCalibrationOptions::default(),
+    )
+}
+
+pub fn calibrate_camera_from_chessboard_files_with_options<P: AsRef<Path>>(
+    image_paths: &[P],
+    pattern_size: (usize, usize),
+    square_size: f64,
+    options: CameraCalibrationOptions,
 ) -> Result<(CameraCalibrationResult, CalibrationFileReport)> {
     if image_paths.is_empty() {
         return Err(StereoError::InvalidParameters(
@@ -212,7 +287,9 @@ pub fn calibrate_camera_from_chessboard_files<P: AsRef<Path>>(
         StereoError::InvalidParameters("no readable images in provided file list".to_string())
     })?;
 
-    let calib = calibrate_camera_planar(&object_points, &image_points, dims).map_err(|e| {
+    let calib =
+        calibrate_camera_planar_with_options(&object_points, &image_points, dims, options).map_err(
+            |e| {
         StereoError::InvalidParameters(format!(
             "camera calibration failed for file subset (used {} / {} images): {}",
             object_points.len(),
@@ -234,6 +311,22 @@ pub fn stereo_calibrate_planar(
     right_image_points: &[Vec<Point2<f64>>],
     image_size: (u32, u32),
 ) -> Result<StereoCalibrationResult> {
+    stereo_calibrate_planar_with_options(
+        object_points,
+        left_image_points,
+        right_image_points,
+        image_size,
+        CameraCalibrationOptions::default(),
+    )
+}
+
+pub fn stereo_calibrate_planar_with_options(
+    object_points: &[Vec<Point3<f64>>],
+    left_image_points: &[Vec<Point2<f64>>],
+    right_image_points: &[Vec<Point2<f64>>],
+    image_size: (u32, u32),
+    options: CameraCalibrationOptions,
+) -> Result<StereoCalibrationResult> {
     if object_points.len() != left_image_points.len()
         || object_points.len() != right_image_points.len()
     {
@@ -247,8 +340,14 @@ pub fn stereo_calibrate_planar(
         ));
     }
 
-    let left = calibrate_camera_planar(object_points, left_image_points, image_size)?;
-    let right = calibrate_camera_planar(object_points, right_image_points, image_size)?;
+    let left =
+        calibrate_camera_planar_with_options(object_points, left_image_points, image_size, options)?;
+    let right = calibrate_camera_planar_with_options(
+        object_points,
+        right_image_points,
+        image_size,
+        options,
+    )?;
 
     let n = left.extrinsics.len().min(right.extrinsics.len());
     if n == 0 {
@@ -304,6 +403,22 @@ pub fn stereo_calibrate_from_chessboard_images(
     pattern_size: (usize, usize),
     square_size: f64,
 ) -> Result<StereoCalibrationResult> {
+    stereo_calibrate_from_chessboard_images_with_options(
+        left_images,
+        right_images,
+        pattern_size,
+        square_size,
+        CameraCalibrationOptions::default(),
+    )
+}
+
+pub fn stereo_calibrate_from_chessboard_images_with_options(
+    left_images: &[GrayImage],
+    right_images: &[GrayImage],
+    pattern_size: (usize, usize),
+    square_size: f64,
+    options: CameraCalibrationOptions,
+) -> Result<StereoCalibrationResult> {
     if left_images.len() != right_images.len() || left_images.is_empty() {
         return Err(StereoError::InvalidParameters(
             "left/right image lists must be non-empty and equal-sized".to_string(),
@@ -341,7 +456,7 @@ pub fn stereo_calibrate_from_chessboard_images(
         )));
     }
 
-    stereo_calibrate_planar(&object_points, &left_points, &right_points, (w, h))
+    stereo_calibrate_planar_with_options(&object_points, &left_points, &right_points, (w, h), options)
 }
 
 pub fn stereo_calibrate_from_chessboard_files<P: AsRef<Path>>(
@@ -349,6 +464,22 @@ pub fn stereo_calibrate_from_chessboard_files<P: AsRef<Path>>(
     right_paths: &[P],
     pattern_size: (usize, usize),
     square_size: f64,
+) -> Result<(StereoCalibrationResult, StereoCalibrationFileReport)> {
+    stereo_calibrate_from_chessboard_files_with_options(
+        left_paths,
+        right_paths,
+        pattern_size,
+        square_size,
+        CameraCalibrationOptions::default(),
+    )
+}
+
+pub fn stereo_calibrate_from_chessboard_files_with_options<P: AsRef<Path>>(
+    left_paths: &[P],
+    right_paths: &[P],
+    pattern_size: (usize, usize),
+    square_size: f64,
+    options: CameraCalibrationOptions,
 ) -> Result<(StereoCalibrationResult, StereoCalibrationFileReport)> {
     if left_paths.len() != right_paths.len() || left_paths.is_empty() {
         return Err(StereoError::InvalidParameters(
@@ -405,7 +536,7 @@ pub fn stereo_calibrate_from_chessboard_files<P: AsRef<Path>>(
     })?;
 
     let calib =
-        stereo_calibrate_planar(&object_points, &left_points, &right_points, dims).map_err(
+        stereo_calibrate_planar_with_options(&object_points, &left_points, &right_points, dims, options).map_err(
             |e| {
                 StereoError::InvalidParameters(format!(
                     "stereo calibration failed for file subset (used {} / {} pairs): {}",
@@ -2617,6 +2748,100 @@ mod tests {
         assert!((calib.intrinsics.cy - gt_k.cy).abs() < 1e-2);
         assert!(calib.rms_reprojection_error < 1e-5);
         assert_eq!(calib.extrinsics.len(), views.len());
+    }
+
+    #[test]
+    fn calibrate_camera_planar_with_options_enforces_aspect_ratio() {
+        let board = generate_chessboard_object_points((7, 6), 0.04);
+        let gt_k = CameraIntrinsics::new(820.0, 790.0, 320.0, 240.0, 640, 480);
+        let views = [
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(0.08, -0.03, 0.02)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(0.05, -0.03, 2.6),
+            ),
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(-0.06, 0.04, -0.05)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(-0.08, 0.02, 2.9),
+            ),
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(0.03, 0.07, -0.02)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(0.02, 0.06, 2.4),
+            ),
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(-0.04, -0.05, 0.04)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(-0.03, -0.05, 3.1),
+            ),
+        ];
+
+        let mut obj_sets = Vec::new();
+        let mut img_sets = Vec::new();
+        for ext in &views {
+            obj_sets.push(board.clone());
+            img_sets.push(board.iter().map(|p| project_point(&gt_k, ext, p)).collect());
+        }
+
+        let target_ratio = 1.0;
+        let options = CameraCalibrationOptions {
+            fix_aspect_ratio: Some(target_ratio),
+            fix_principal_point: None,
+        };
+        let calib = calibrate_camera_planar_with_options(&obj_sets, &img_sets, (640, 480), options).unwrap();
+        assert!((calib.intrinsics.fx / calib.intrinsics.fy - target_ratio).abs() < 1e-9);
+    }
+
+    #[test]
+    fn calibrate_camera_planar_with_options_enforces_principal_point() {
+        let board = generate_chessboard_object_points((7, 6), 0.04);
+        let gt_k = CameraIntrinsics::new(820.0, 790.0, 320.0, 240.0, 640, 480);
+        let views = [
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(0.08, -0.03, 0.02)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(0.05, -0.03, 2.6),
+            ),
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(-0.06, 0.04, -0.05)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(-0.08, 0.02, 2.9),
+            ),
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(0.03, 0.07, -0.02)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(0.02, 0.06, 2.4),
+            ),
+            CameraExtrinsics::new(
+                Rotation3::from_euler_angles(-0.04, -0.05, 0.04)
+                    .matrix()
+                    .clone_owned(),
+                Vector3::new(-0.03, -0.05, 3.1),
+            ),
+        ];
+
+        let mut obj_sets = Vec::new();
+        let mut img_sets = Vec::new();
+        for ext in &views {
+            obj_sets.push(board.clone());
+            img_sets.push(board.iter().map(|p| project_point(&gt_k, ext, p)).collect());
+        }
+
+        let options = CameraCalibrationOptions {
+            fix_aspect_ratio: None,
+            fix_principal_point: Some((300.0, 250.0)),
+        };
+        let calib = calibrate_camera_planar_with_options(&obj_sets, &img_sets, (640, 480), options).unwrap();
+        assert!((calib.intrinsics.cx - 300.0).abs() < 1e-12);
+        assert!((calib.intrinsics.cy - 250.0).abs() < 1e-12);
     }
 
     #[test]

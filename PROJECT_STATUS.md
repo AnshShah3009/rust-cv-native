@@ -270,6 +270,13 @@ cargo bench
 - Default behavior now prefers discrete GPU.
 - `nvidia_only` fails gracefully if no NVIDIA discrete adapter is available.
 
+### Marker Detection (Initial Native Support)
+- Added first-pass native marker support in `cv-features`:
+  - ArUco-style marker draw + detect APIs
+  - AprilTag-style marker draw + detect APIs
+- Current implementation is optimized for square binary markers with clear borders and low perspective distortion.
+- This establishes the API and decoding path; next steps are robustness improvements (perspective, blur/noise, multi-scale).
+
 ### calib3d Parity Expansion
 - Merged `e848667` (`feature/calib3d-file-wrappers-stability`)
   - Hardened calibration wrapper validation and reporting.
