@@ -1,0 +1,4 @@
+[[bench]]
+name = "cv_benchmarks"
+harness = false
+path = "benches/cv_benchmarks.rs"

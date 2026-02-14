@@ -13,6 +13,14 @@ cv-features = { path = "./features" }
 cv-stereo = { path = "./stereo" }
 cv-video = { path = "./video" }
 
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "cv_benchmarks"
+harness = false
+path = "benches/cv_benchmarks.rs"
+
 [workspace]
 resolver = "2"
 members = [
@@ -33,6 +41,7 @@ ort = "2.0.0-rc.11"
 wide = "0.7"
 pulp = "0.5"
 thiserror = "2.0"
+criterion = "0.5"
 
 [profile.release]
 opt-level = 3
