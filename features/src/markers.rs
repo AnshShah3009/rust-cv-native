@@ -3,6 +3,12 @@ use image::{GrayImage, Luma};
 use nalgebra::{DMatrix, Matrix3, Point2, Vector3};
 use std::collections::VecDeque;
 
+#[cfg(feature = "gpu")]
+pub mod gpu;
+
+#[cfg(feature = "gpu")]
+pub use gpu::*;
+
 #[derive(Debug, Clone, Copy)]
 pub enum ArucoDictionary {
     Dict4x4_50,
@@ -205,24 +211,132 @@ pub fn detect_aruco_markers(image: &GrayImage, dictionary: ArucoDictionary) -> R
     let border_bits = 1usize;
     let codes = aruco_dictionary_codes(dictionary);
     let candidates = find_marker_candidates(image, payload_bits + 2 * border_bits)?;
-    let mut detections = Vec::new();
 
-    for c in candidates {
-        let bits = sample_grid_bits(image, c.min_x, c.min_y, c.max_x, c.max_y, payload_bits + 2 * border_bits);
-        if !border_is_black(&bits, payload_bits + 2 * border_bits) {
-            continue;
+    // Try GPU path if available
+    #[cfg(feature = "gpu")]
+    if gpu::gpu_available() && gpu::is_gpu_enabled() {
+        if let Ok(gpu_detections) = detect_aruco_markers_gpu(image, &candidates, &codes, payload_bits, border_bits) {
+            return Ok(gpu_detections);
         }
-        let payload = extract_payload(&bits, payload_bits, border_bits);
-        let (id, rot, dist) = decode_code_with_rotations(&payload, &codes, payload_bits);
-        if dist == 0 {
-            detections.push(ArucoDetection {
-                id: id as u16,
-                rotation_cw: rot as u8,
-                corners: candidate_corners(&c),
-                center: candidate_center(&c),
-            });
-        }
+        // Fall through to CPU if GPU fails
     }
+
+    // CPU path: parallel detection
+    detect_aruco_markers_cpu(image, &candidates, &codes, payload_bits, border_bits)
+}
+
+fn detect_aruco_markers_cpu(
+    image: &GrayImage,
+    candidates: &[Candidate],
+    codes: &[u64],
+    payload_bits: usize,
+    border_bits: usize,
+) -> Result<Vec<ArucoDetection>> {
+    use rayon::prelude::*;
+
+    // Process all candidates in parallel
+    let detections = candidates
+        .par_iter()
+        .filter_map(|c| {
+            let bits = sample_grid_bits(image, c.min_x, c.min_y, c.max_x, c.max_y, payload_bits + 2 * border_bits);
+            if !border_is_black(&bits, payload_bits + 2 * border_bits) {
+                return None;
+            }
+            let payload = extract_payload(&bits, payload_bits, border_bits);
+            let (id, rot, dist) = decode_code_with_rotations(&payload, codes, payload_bits);
+            if dist == 0 {
+                Some(ArucoDetection {
+                    id: id as u16,
+                    rotation_cw: rot as u8,
+                    corners: candidate_corners(c),
+                    center: candidate_center(c),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    Ok(detections)
+}
+
+#[cfg(feature = "gpu")]
+fn run_marker_detection_gpu(
+    image: &GrayImage,
+    candidates: &[Candidate],
+    codes: &[u64],
+    payload_bits: usize,
+    border_bits: usize,
+    max_hamming: u32,
+) -> Result<Vec<(usize, gpu::GpuMarkerResult)>> {
+    use gpu::{GpuCandidate, MarkerGpuContext};
+
+    // Early return if no candidates
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Create GPU context
+    let gpu_context = MarkerGpuContext::new()
+        .ok_or_else(|| FeatureError::DetectionError("GPU context initialization failed".to_string()))?;
+
+    // Convert CPU candidates to GPU candidates for batch processing
+    let grid_size = (payload_bits + 2 * border_bits) as u32;
+    let gpu_candidates: Vec<GpuCandidate> = candidates
+        .iter()
+        .map(|c| GpuCandidate {
+            min_x: c.min_x,
+            min_y: c.min_y,
+            max_x: c.max_x,
+            max_y: c.max_y,
+            grid_size,
+            payload_bits: payload_bits as u32,
+        })
+        .collect();
+
+    // Run GPU marker detection on all candidates in parallel
+    let gpu_results = gpu_context.run_candidate_scan(
+        image,
+        &gpu_candidates,
+        codes,
+        border_bits as u32,
+        max_hamming,
+    )?;
+
+    // Return results paired with candidate indices
+    Ok(gpu_results
+        .into_iter()
+        .enumerate()
+        .collect())
+}
+
+#[cfg(feature = "gpu")]
+fn detect_aruco_markers_gpu(
+    image: &GrayImage,
+    candidates: &[Candidate],
+    codes: &[u64],
+    payload_bits: usize,
+    border_bits: usize,
+) -> Result<Vec<ArucoDetection>> {
+    let gpu_results = run_marker_detection_gpu(image, candidates, codes, payload_bits, border_bits, 0)?;
+
+    // Convert GPU results to ArucoDetection
+    let detections: Vec<ArucoDetection> = gpu_results
+        .into_iter()
+        .filter_map(|(idx, gpu_result)| {
+            if gpu_result.is_valid() && idx < candidates.len() {
+                let candidate = &candidates[idx];
+                Some(ArucoDetection {
+                    id: gpu_result.best_id as u16,
+                    rotation_cw: gpu_result.rotation as u8,
+                    corners: candidate_corners(candidate),
+                    center: candidate_center(candidate),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
 
     Ok(detections)
 }
@@ -241,33 +355,93 @@ pub fn detect_apriltags(image: &GrayImage, family: AprilTagFamily) -> Result<Vec
     let (payload_bits, codes) = apriltag_family_codes(family);
     let border_bits = 1usize;
     let candidates = find_marker_candidates(image, payload_bits + 2 * border_bits)?;
-    let mut detections = Vec::new();
 
-    for c in candidates {
-        let bits = sample_grid_bits(
-            image,
-            c.min_x,
-            c.min_y,
-            c.max_x,
-            c.max_y,
-            payload_bits + 2 * border_bits,
-        );
-        if !border_is_black(&bits, payload_bits + 2 * border_bits) {
-            continue;
+    // Try GPU path if available
+    #[cfg(feature = "gpu")]
+    if gpu::gpu_available() && gpu::is_gpu_enabled() {
+        if let Ok(gpu_detections) = detect_apriltags_gpu(image, &candidates, &codes, payload_bits, border_bits) {
+            return Ok(gpu_detections);
         }
-        let payload = extract_payload(&bits, payload_bits, border_bits);
-        let (id, rot, dist) = decode_code_with_rotations(&payload, &codes, payload_bits);
-        // Simple robust decode: allow up to one bit error for tag families.
-        if dist <= 1 {
-            detections.push(AprilTagDetection {
-                id: id as u16,
-                rotation_cw: rot as u8,
-                hamming: dist as u8,
-                corners: candidate_corners(&c),
-                center: candidate_center(&c),
-            });
-        }
+        // Fall through to CPU if GPU fails
     }
+
+    // CPU path: parallel detection
+    detect_apriltags_cpu(image, &candidates, &codes, payload_bits, border_bits)
+}
+
+fn detect_apriltags_cpu(
+    image: &GrayImage,
+    candidates: &[Candidate],
+    codes: &[u64],
+    payload_bits: usize,
+    border_bits: usize,
+) -> Result<Vec<AprilTagDetection>> {
+    use rayon::prelude::*;
+
+    // Process all candidates in parallel
+    let detections = candidates
+        .par_iter()
+        .filter_map(|c| {
+            let bits = sample_grid_bits(
+                image,
+                c.min_x,
+                c.min_y,
+                c.max_x,
+                c.max_y,
+                payload_bits + 2 * border_bits,
+            );
+            if !border_is_black(&bits, payload_bits + 2 * border_bits) {
+                return None;
+            }
+            let payload = extract_payload(&bits, payload_bits, border_bits);
+            let (id, rot, dist) = decode_code_with_rotations(&payload, codes, payload_bits);
+            // Simple robust decode: allow up to one bit error for tag families.
+            if dist <= 1 {
+                Some(AprilTagDetection {
+                    id: id as u16,
+                    rotation_cw: rot as u8,
+                    hamming: dist as u8,
+                    corners: candidate_corners(c),
+                    center: candidate_center(c),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    Ok(detections)
+}
+
+#[cfg(feature = "gpu")]
+fn detect_apriltags_gpu(
+    image: &GrayImage,
+    candidates: &[Candidate],
+    codes: &[u64],
+    payload_bits: usize,
+    border_bits: usize,
+) -> Result<Vec<AprilTagDetection>> {
+    // AprilTag allows up to 1-bit error (Hamming distance <= 1)
+    let gpu_results = run_marker_detection_gpu(image, candidates, codes, payload_bits, border_bits, 1)?;
+
+    // Convert GPU results to AprilTagDetection
+    let detections: Vec<AprilTagDetection> = gpu_results
+        .into_iter()
+        .filter_map(|(idx, gpu_result)| {
+            if gpu_result.is_valid() && idx < candidates.len() {
+                let candidate = &candidates[idx];
+                Some(AprilTagDetection {
+                    id: gpu_result.best_id as u16,
+                    rotation_cw: gpu_result.rotation as u8,
+                    hamming: 0, // GPU shader handles hamming distance internally
+                    corners: candidate_corners(candidate),
+                    center: candidate_center(candidate),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
 
     Ok(detections)
 }
@@ -695,5 +869,182 @@ mod tests {
         let img = draw_charuco_board(&board, 30).unwrap();
         let corners = detect_charuco_corners(&img, &board).unwrap();
         assert!(corners.len() >= ((board.squares_x - 1) * (board.squares_y - 1) / 2) as usize);
+    }
+
+    #[test]
+    fn aruco_multiple_markers_parallel_detection() {
+        // Test parallel detection with multiple tags
+        let mut canvas = GrayImage::from_pixel(400, 300, Luma([255]));
+        let ids = vec![0, 5, 10, 15, 20];
+
+        // Draw 5 markers at different positions
+        for (i, &id) in ids.iter().enumerate() {
+            let marker = draw_aruco_marker(ArucoDictionary::Dict4x4_50, id, 10).unwrap();
+            let x = ((i % 3) as i64) * 120 + 20;
+            let y = ((i / 3) as i64) * 120 + 20;
+            replace(&mut canvas, &marker, x, y);
+        }
+
+        // Detect all markers (uses parallel CPU path)
+        let detections = detect_aruco_markers(&canvas, ArucoDictionary::Dict4x4_50).unwrap();
+
+        // Should detect all 5 markers
+        assert_eq!(detections.len(), 5);
+        let detected_ids: Vec<u16> = detections.iter().map(|d| d.id).collect();
+        for id in &ids {
+            assert!(detected_ids.contains(&(*id as u16)));
+        }
+    }
+
+    #[test]
+    fn apriltag_multiple_markers_parallel_detection() {
+        // Test parallel detection with multiple AprilTags
+        let mut canvas = GrayImage::from_pixel(400, 300, Luma([255]));
+        let ids = vec![0, 5, 10];
+
+        // Draw 3 markers at different positions
+        for (i, &id) in ids.iter().enumerate() {
+            let marker = draw_apriltag(AprilTagFamily::Tag16h5, id, 8).unwrap();
+            let x = ((i as i64) * 130 + 20);
+            let y = 50i64;
+            replace(&mut canvas, &marker, x, y);
+        }
+
+        // Detect all markers (uses parallel CPU path)
+        let detections = detect_apriltags(&canvas, AprilTagFamily::Tag16h5).unwrap();
+
+        // Should detect all 3 markers
+        assert_eq!(detections.len(), 3);
+        let detected_ids: Vec<u16> = detections.iter().map(|d| d.id).collect();
+        for id in &ids {
+            assert!(detected_ids.contains(&(*id as u16)));
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn gpu_vs_cpu_aruco_detection_parity() {
+        use crate::gpu;
+
+        // Create test image with 3 markers
+        let mut canvas = GrayImage::from_pixel(400, 300, Luma([255]));
+        let ids = vec![2, 7, 12];
+
+        for (i, &id) in ids.iter().enumerate() {
+            let marker = draw_aruco_marker(ArucoDictionary::Dict4x4_50, id, 10).unwrap();
+            let x = ((i as i64) * 130 + 20);
+            let y = 50i64;
+            replace(&mut canvas, &marker, x, y);
+        }
+
+        // Detect with CPU (disable GPU)
+        gpu::use_gpu(false);
+        let cpu_detections = detect_aruco_markers(&canvas, ArucoDictionary::Dict4x4_50).unwrap();
+        let cpu_ids: Vec<u16> = cpu_detections.iter().map(|d| d.id).collect();
+
+        // Detect with GPU (enable GPU)
+        gpu::use_gpu(true);
+        let gpu_detections = detect_aruco_markers(&canvas, ArucoDictionary::Dict4x4_50).unwrap();
+        let gpu_ids: Vec<u16> = gpu_detections.iter().map(|d| d.id).collect();
+
+        // Results should match (same tags detected)
+        assert_eq!(cpu_ids.len(), gpu_ids.len());
+        for id in &cpu_ids {
+            assert!(gpu_ids.contains(id));
+        }
+
+        // Reset GPU state
+        gpu::use_gpu(true);
+    }
+
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn gpu_vs_cpu_apriltag_detection_parity() {
+        use crate::gpu;
+
+        // Create test image with 2 AprilTags
+        let mut canvas = GrayImage::from_pixel(300, 250, Luma([255]));
+        let ids = vec![1, 6];
+
+        for (i, &id) in ids.iter().enumerate() {
+            let marker = draw_apriltag(AprilTagFamily::Tag16h5, id, 8).unwrap();
+            let x = ((i as i64) * 150 + 20);
+            let y = 50i64;
+            replace(&mut canvas, &marker, x, y);
+        }
+
+        // Detect with CPU
+        gpu::use_gpu(false);
+        let cpu_detections = detect_apriltags(&canvas, AprilTagFamily::Tag16h5).unwrap();
+        let cpu_ids: Vec<u16> = cpu_detections.iter().map(|d| d.id).collect();
+
+        // Detect with GPU
+        gpu::use_gpu(true);
+        let gpu_detections = detect_apriltags(&canvas, AprilTagFamily::Tag16h5).unwrap();
+        let gpu_ids: Vec<u16> = gpu_detections.iter().map(|d| d.id).collect();
+
+        // Results should match
+        assert_eq!(cpu_ids.len(), gpu_ids.len());
+        for id in &cpu_ids {
+            assert!(gpu_ids.contains(id));
+        }
+
+        // Reset GPU state
+        gpu::use_gpu(true);
+    }
+
+    #[test]
+    fn charuco_parallel_marker_detection() {
+        // ChArUco detection should benefit from parallel marker detection
+        let board = create_charuco_board(8, 6, 1.0, 0.75, ArucoDictionary::Dict4x4_50).unwrap();
+        let img = draw_charuco_board(&board, 30).unwrap();
+
+        let corners = detect_charuco_corners(&img, &board).unwrap();
+
+        // Should detect majority of corners
+        let expected_corners = ((board.squares_x - 1) * (board.squares_y - 1)) as usize;
+        assert!(corners.len() >= expected_corners / 2);
+    }
+
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn gpu_initialization_and_fallback() {
+        use crate::gpu;
+
+        // Create simple test image
+        let marker = draw_aruco_marker(ArucoDictionary::Dict4x4_50, 5, 10).unwrap();
+        let mut canvas = GrayImage::from_pixel(180, 140, Luma([255]));
+        replace(&mut canvas, &marker, 30i64, 20i64);
+
+        // Test with GPU enabled
+        gpu::use_gpu(true);
+        let gpu_result = detect_aruco_markers(&canvas, ArucoDictionary::Dict4x4_50);
+
+        // Should succeed or gracefully fall back to CPU
+        assert!(gpu_result.is_ok());
+        let detections = gpu_result.unwrap();
+        assert!(!detections.is_empty());
+        assert!(detections.iter().any(|d| d.id == 5));
+
+        // Test with GPU disabled
+        gpu::use_gpu(false);
+        let cpu_result = detect_aruco_markers(&canvas, ArucoDictionary::Dict4x4_50);
+        assert!(cpu_result.is_ok());
+        let cpu_detections = cpu_result.unwrap();
+        assert_eq!(cpu_detections.len(), detections.len());
+    }
+
+    #[test]
+    fn marker_detection_empty_candidates() {
+        // Test with image that has no markers
+        let canvas = GrayImage::from_pixel(200, 200, Luma([255]));
+
+        let aruco_result = detect_aruco_markers(&canvas, ArucoDictionary::Dict4x4_50);
+        assert!(aruco_result.is_ok());
+        assert!(aruco_result.unwrap().is_empty());
+
+        let apriltag_result = detect_apriltags(&canvas, AprilTagFamily::Tag16h5);
+        assert!(apriltag_result.is_ok());
+        assert!(apriltag_result.unwrap().is_empty());
     }
 }
