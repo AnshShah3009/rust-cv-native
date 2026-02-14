@@ -58,6 +58,8 @@ impl SgmMatcher {
     }
 
     pub fn compute(&self, left: &GrayImage, right: &GrayImage) -> Result<DisparityMap> {
+        crate::parallel::init_global_thread_pool()?;
+
         if left.width() != right.width() || left.height() != right.height() {
             return Err(StereoError::SizeMismatch(
                 "Left and right images must have the same dimensions".to_string(),
