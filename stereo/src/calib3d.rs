@@ -1,5 +1,6 @@
 use crate::{Result, StereoError};
 use cv_core::{skew_symmetric, CameraExtrinsics, CameraIntrinsics, Distortion};
+use cv_imgproc::{remap, BorderMode, Interpolation};
 use image::GrayImage;
 use nalgebra::{
     DMatrix, Matrix2, Matrix3, Matrix3x4, Matrix4, Point2, Point3, SymmetricEigen, Vector2,
@@ -652,6 +653,32 @@ pub fn project_points(
     Ok(out)
 }
 
+pub fn project_points_with_distortion(
+    object_points: &[Point3<f64>],
+    intrinsics: &CameraIntrinsics,
+    extrinsics: &CameraExtrinsics,
+    distortion: &Distortion,
+) -> Result<Vec<Point2<f64>>> {
+    let mut out = Vec::with_capacity(object_points.len());
+    for p in object_points {
+        let pc = extrinsics.rotation * p.coords + extrinsics.translation;
+        if !pc.iter().all(|v| v.is_finite()) || pc[2].abs() <= 1e-12 {
+            return Err(StereoError::InvalidParameters(
+                "project_points_with_distortion encountered non-finite or near-zero depth point"
+                    .to_string(),
+            ));
+        }
+        let x = pc[0] / pc[2];
+        let y = pc[1] / pc[2];
+        let (xd, yd) = distortion.apply(x, y);
+        out.push(Point2::new(
+            intrinsics.fx * xd + intrinsics.cx,
+            intrinsics.fy * yd + intrinsics.cy,
+        ));
+    }
+    Ok(out)
+}
+
 pub fn solve_pnp_ransac(
     object_points: &[Point3<f64>],
     image_points: &[Point2<f64>],
@@ -812,6 +839,31 @@ pub fn init_undistort_rectify_map(
     }
 
     Ok((map_x, map_y))
+}
+
+pub fn undistort_image(
+    src: &GrayImage,
+    intrinsics: &CameraIntrinsics,
+    distortion: &Distortion,
+    new_intrinsics: Option<&CameraIntrinsics>,
+) -> Result<GrayImage> {
+    let k_new = new_intrinsics.unwrap_or(intrinsics);
+    let (map_x, map_y) = init_undistort_rectify_map(
+        (src.width(), src.height()),
+        intrinsics,
+        distortion,
+        &Matrix3::identity(),
+        k_new,
+    )?;
+    Ok(remap(
+        src,
+        &map_x,
+        &map_y,
+        src.width(),
+        src.height(),
+        Interpolation::Linear,
+        BorderMode::Constant(0),
+    ))
 }
 
 pub fn essential_from_extrinsics(extrinsics: &CameraExtrinsics) -> Matrix3<f64> {
@@ -2118,6 +2170,32 @@ mod tests {
     }
 
     #[test]
+    fn project_points_with_distortion_matches_manual_model() {
+        let k = CameraIntrinsics::new(520.0, 515.0, 320.0, 240.0, 640, 480);
+        let d = Distortion::new(0.1, -0.04, 0.001, -0.0008, 0.01);
+        let ext = CameraExtrinsics::new(
+            Rotation3::from_euler_angles(0.05, -0.08, 0.03).into_inner(),
+            Vector3::new(0.1, -0.03, 0.2),
+        );
+        let world = vec![
+            Point3::new(-0.2, -0.1, 2.0),
+            Point3::new(0.3, 0.2, 3.5),
+            Point3::new(0.1, -0.25, 4.0),
+        ];
+
+        let proj = project_points_with_distortion(&world, &k, &ext, &d).unwrap();
+        assert_eq!(proj.len(), world.len());
+        for (p3, pix) in world.iter().zip(proj.iter()) {
+            let pc = ext.rotation * p3.coords + ext.translation;
+            let x = pc[0] / pc[2];
+            let y = pc[1] / pc[2];
+            let (xd, yd) = d.apply(x, y);
+            let expected = Point2::new(k.fx * xd + k.cx, k.fy * yd + k.cy);
+            assert!((expected - pix).norm() < 1e-10);
+        }
+    }
+
+    #[test]
     fn solve_pnp_ransac_handles_outliers() {
         let k = CameraIntrinsics::new(700.0, 705.0, 320.0, 240.0, 640, 480);
         let gt = CameraExtrinsics::new(
@@ -2202,6 +2280,23 @@ mod tests {
                 assert!((map_y[idx] - y as f32).abs() < 1e-4);
             }
         }
+    }
+
+    #[test]
+    fn undistort_image_identity_for_zero_distortion() {
+        let width = 48u32;
+        let height = 32u32;
+        let mut img = GrayImage::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                img.put_pixel(x, y, Luma([((x * 7 + y * 5) % 256) as u8]));
+            }
+        }
+
+        let k = CameraIntrinsics::new(80.0, 80.0, 24.0, 16.0, width, height);
+        let out = undistort_image(&img, &k, &Distortion::none(), None).unwrap();
+        assert_eq!(out.dimensions(), img.dimensions());
+        assert_eq!(out.as_raw(), img.as_raw());
     }
 
     #[test]
