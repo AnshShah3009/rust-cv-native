@@ -1,8 +1,20 @@
+pub mod brief;
+pub mod descriptor;
 pub mod fast;
+pub mod flann;
 pub mod harris;
+pub mod matcher;
+pub mod orb;
+pub mod ransac;
 
+pub use brief::*;
+pub use descriptor::*;
 pub use fast::*;
+pub use flann::*;
 pub use harris::*;
+pub use matcher::*;
+pub use orb::*;
+pub use ransac::*;
 
 use cv_core::{KeyPoint, KeyPoints};
 use image::GrayImage;
