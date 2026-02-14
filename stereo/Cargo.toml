@@ -14,7 +14,7 @@ rayon = { workspace = true }
 image = { workspace = true }
 
 thiserror = "2.0"
-wgpu = { version = "0.20", optional = true }
+wgpu = { workspace = true, optional = true }
 bytemuck = { version = "1.16", features = ["derive"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
 

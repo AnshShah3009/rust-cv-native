@@ -21,7 +21,7 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [features]
 default = []
-gpu = ["cv-stereo/gpu"]
+gpu = ["cv-stereo/gpu", "cv-features/gpu"]
 
 [[bench]]
 name = "cv_benchmarks"
@@ -43,7 +43,7 @@ members = [
 rayon = "1.10"
 nalgebra = "0.33"
 image = "0.25"
-wgpu = "0.28"
+wgpu = "0.20"
 ort = "2.0.0-rc.11"
 wide = "0.7"
 pulp = "0.5"
