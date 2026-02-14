@@ -5,6 +5,8 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use image::{GrayImage, Luma};
 use std::time::Duration;
+#[cfg(feature = "gpu")]
+use tokio::runtime::Runtime;
 
 /// Create synthetic stereo pair with known disparity
 fn create_stereo_pair(width: u32, height: u32, disparity: i32) -> (GrayImage, GrayImage) {
@@ -49,7 +51,7 @@ fn benchmark_stereo_block_matching(c: &mut Criterion) {
                     let matcher = BlockMatcher::new()
                         .with_block_size(11)
                         .with_disparity_range(0, 32);
-                    matcher.compute(black_box(l), black_box(r))
+                    let _ = matcher.compute(black_box(l), black_box(r));
                 });
             },
         );
@@ -74,13 +76,66 @@ fn benchmark_stereo_sgm(c: &mut Criterion) {
                 b.iter(|| {
                     use cv_stereo::SgmMatcher;
                     let matcher = SgmMatcher::new().with_disparity_range(0, 16);
-                    matcher.compute(black_box(l), black_box(r))
+                    let _ = matcher.compute(black_box(l), black_box(r));
                 });
             },
         );
     }
 
     group.finish();
+}
+
+fn benchmark_stereo_gpu_block_matching(c: &mut Criterion) {
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = c;
+        return;
+    }
+
+    #[cfg(feature = "gpu")]
+    {
+        let rt = Runtime::new().expect("tokio runtime for GPU benchmark");
+        let gpu_matcher = rt
+            .block_on(cv_stereo::GpuStereoMatcher::new(
+                cv_stereo::GpuStereoAlgorithm::BlockMatching { block_size: 11 },
+            ))
+            .ok();
+
+        let mut group = c.benchmark_group("stereo_gpu_block_matching");
+        group.measurement_time(Duration::from_secs(6));
+        group.sample_size(10);
+
+        for size in [128u32, 256] {
+            let (left, right) = create_stereo_pair(size, size, 10);
+
+            group.bench_with_input(
+                BenchmarkId::new("cpu", format!("{}x{}", size, size)),
+                &(left.clone(), right.clone()),
+                |b, (l, r)| {
+                    b.iter(|| {
+                        let matcher = cv_stereo::BlockMatcher::new()
+                            .with_block_size(11)
+                            .with_disparity_range(0, 32);
+                        let _ = matcher.compute(black_box(l), black_box(r));
+                    });
+                },
+            );
+
+            if let Some(matcher) = &gpu_matcher {
+                group.bench_with_input(
+                    BenchmarkId::new("gpu", format!("{}x{}", size, size)),
+                    &(left.clone(), right.clone()),
+                    |b, (l, r)| {
+                        b.iter(|| {
+                            let _ = matcher.compute_disparity(black_box(l), black_box(r), 0, 32);
+                        });
+                    },
+                );
+            }
+        }
+
+        group.finish();
+    }
 }
 
 fn benchmark_image_processing(c: &mut Criterion) {
@@ -95,7 +150,7 @@ fn benchmark_image_processing(c: &mut Criterion) {
             BenchmarkId::new("gaussian_blur", format!("{}x{}", size, size)),
             &img,
             |b, i| {
-                b.iter(|| cv_imgproc::gaussian_blur(black_box(i), black_box(5), black_box(1.0)));
+                b.iter(|| cv_imgproc::gaussian_blur(black_box(i), black_box(1.0)));
             },
         );
 
@@ -104,7 +159,9 @@ fn benchmark_image_processing(c: &mut Criterion) {
             BenchmarkId::new("sobel_edges", format!("{}x{}", size, size)),
             &img,
             |b, i| {
-                b.iter(|| cv_imgproc::sobel(black_box(i), black_box(1), black_box(0)));
+                b.iter(|| {
+                    let _ = cv_imgproc::sobel(black_box(i));
+                });
             },
         );
 
@@ -113,7 +170,7 @@ fn benchmark_image_processing(c: &mut Criterion) {
             BenchmarkId::new("canny_edges", format!("{}x{}", size, size)),
             &img,
             |b, i| {
-                b.iter(|| cv_imgproc::canny(black_box(i), black_box(50.0), black_box(150.0)));
+                b.iter(|| cv_imgproc::canny(black_box(i), black_box(50u8), black_box(150u8)));
             },
         );
     }
@@ -141,7 +198,7 @@ fn benchmark_feature_detection(c: &mut Criterion) {
             &img,
             |b, i| {
                 b.iter(|| {
-                    cv_features::fast::fast_detect(black_box(i), black_box(20), black_box(500))
+                    let _ = cv_features::fast::fast_detect(black_box(i), black_box(20), black_box(500));
                 });
             },
         );
@@ -151,7 +208,15 @@ fn benchmark_feature_detection(c: &mut Criterion) {
             BenchmarkId::new("harris_detector", format!("{}x{}", size, size)),
             &img,
             |b, i| {
-                b.iter(|| cv_features::harris::harris_corners(black_box(i), black_box(0.04)));
+                b.iter(|| {
+                    let _ = cv_features::harris::harris_detect(
+                        black_box(i),
+                        black_box(3),
+                        black_box(3),
+                        black_box(0.04),
+                        black_box(10000.0),
+                    );
+                });
             },
         );
     }
@@ -176,7 +241,7 @@ fn benchmark_optical_flow(c: &mut Criterion) {
             &(prev.clone(), next.clone(), points.clone()),
             |b, (p, n, pts)| {
                 b.iter(|| {
-                    cv_video::calc_optical_flow_lk(black_box(p), black_box(n), black_box(pts))
+                    let _ = cv_video::calc_optical_flow_lk(black_box(p), black_box(n), black_box(pts));
                 });
             },
         );
@@ -186,7 +251,9 @@ fn benchmark_optical_flow(c: &mut Criterion) {
             BenchmarkId::new("farneback", format!("{}x{}", size, size)),
             &(prev.clone(), next.clone()),
             |b, (p, n)| {
-                b.iter(|| cv_video::calc_optical_flow_farneback(black_box(p), black_box(n)));
+                b.iter(|| {
+                    let _ = cv_video::calc_optical_flow_farneback(black_box(p), black_box(n));
+                });
             },
         );
     }
@@ -198,6 +265,7 @@ criterion_group!(
     benches,
     benchmark_stereo_block_matching,
     benchmark_stereo_sgm,
+    benchmark_stereo_gpu_block_matching,
     benchmark_image_processing,
     benchmark_feature_detection,
     benchmark_optical_flow

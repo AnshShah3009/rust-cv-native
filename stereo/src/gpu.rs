@@ -2,8 +2,10 @@
 //!
 //! Provides GPU implementations of stereo matching algorithms using wgpu.
 
-use crate::{DisparityMap, StereoError, Result, StereoParams};
+use crate::{DisparityMap, StereoError, Result};
 use image::GrayImage;
+use std::env;
+use wgpu::util::DeviceExt;
 
 /// GPU-accelerated stereo matcher
 pub struct GpuStereoMatcher {
@@ -11,6 +13,7 @@ pub struct GpuStereoMatcher {
     queue: wgpu::Queue,
     stereo_pipeline: wgpu::ComputePipeline,
     params_bind_group_layout: wgpu::BindGroupLayout,
+    algorithm: GpuStereoAlgorithm,
 }
 
 /// Stereo matching algorithm type
@@ -24,17 +27,20 @@ impl GpuStereoMatcher {
     pub async fn new(algorithm: GpuStereoAlgorithm) -> Result<Self> {
         // Initialize wgpu
         let instance = wgpu::Instance::default();
-        
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await
-            .ok_or_else(|| StereoError::InvalidParameters(
-                "No suitable GPU adapter found".to_string()
-            ))?;
+        let adapter = if let Some(adapter) = select_integrated_adapter(&instance) {
+            adapter
+        } else {
+            instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: None,
+                    force_fallback_adapter: false,
+                })
+                .await
+                .ok_or_else(|| {
+                    StereoError::InvalidParameters("No suitable GPU adapter found".to_string())
+                })?
+        };
 
         let (device, queue) = adapter
             .request_device(
@@ -59,10 +65,10 @@ impl GpuStereoMatcher {
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::ReadOnly,
-                            format: wgpu::TextureFormat::R8Unorm,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
                             view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         },
                         count: None,
                     },
@@ -70,10 +76,10 @@ impl GpuStereoMatcher {
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::ReadOnly,
-                            format: wgpu::TextureFormat::R8Unorm,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
                             view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         },
                         count: None,
                     },
@@ -121,7 +127,7 @@ impl GpuStereoMatcher {
             label: Some("Stereo Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: Some("main"),
+            entry_point: "main",
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         });
 
@@ -130,10 +136,40 @@ impl GpuStereoMatcher {
             queue,
             stereo_pipeline,
             params_bind_group_layout,
+            algorithm,
         })
     }
 
     pub fn compute_disparity(
+        &self,
+        left: &GrayImage,
+        right: &GrayImage,
+        min_disparity: i32,
+        max_disparity: i32,
+    ) -> Result<DisparityMap> {
+        if left.width() != right.width() || left.height() != right.height() {
+            return Err(StereoError::SizeMismatch(
+                "Left and right images must have the same dimensions".to_string(),
+            ));
+        }
+
+        if let Some(max_bytes) = read_gpu_max_bytes_from_env()? {
+            let estimated = estimate_gpu_bytes(left.width(), left.height());
+            if estimated > max_bytes {
+                return self.compute_disparity_batched(
+                    left,
+                    right,
+                    min_disparity,
+                    max_disparity,
+                    max_bytes,
+                );
+            }
+        }
+
+        self.compute_disparity_single(left, right, min_disparity, max_disparity)
+    }
+
+    fn compute_disparity_single(
         &self,
         left: &GrayImage,
         right: &GrayImage,
@@ -172,7 +208,7 @@ impl GpuStereoMatcher {
             height,
             min_disparity: min_disparity as u32,
             max_disparity: max_disparity as u32,
-            block_size: 11,
+            block_size: self.block_size(),
         };
 
         let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -278,6 +314,72 @@ impl GpuStereoMatcher {
         Ok(disparity)
     }
 
+    fn compute_disparity_batched(
+        &self,
+        left: &GrayImage,
+        right: &GrayImage,
+        min_disparity: i32,
+        max_disparity: i32,
+        max_bytes: usize,
+    ) -> Result<DisparityMap> {
+        let width = left.width();
+        let height = left.height();
+        let half_block = self.block_size() / 2;
+        let per_row_bytes = estimate_gpu_bytes(width, 1);
+
+        if max_bytes < per_row_bytes {
+            return Err(StereoError::InvalidParameters(format!(
+                "RUSTCV_GPU_MAX_BYTES={} is too small; need at least {} bytes for one row",
+                max_bytes, per_row_bytes
+            )));
+        }
+
+        let max_input_rows = (max_bytes / per_row_bytes) as u32;
+        if max_input_rows < (2 * half_block + 1) {
+            return Err(StereoError::InvalidParameters(format!(
+                "RUSTCV_GPU_MAX_BYTES={} too small for block_size={} (requires at least {} rows)",
+                max_bytes,
+                self.block_size(),
+                2 * half_block + 1
+            )));
+        }
+
+        // Process output rows in chunks while preserving halo for block matching near tile edges.
+        let max_output_rows = (max_input_rows - 2 * half_block).max(1);
+        let mut disparity = DisparityMap::new(width, height, min_disparity, max_disparity);
+        let width_usize = width as usize;
+        let mut output_start = 0u32;
+
+        while output_start < height {
+            let output_end = (output_start + max_output_rows).min(height);
+            let input_start = output_start.saturating_sub(half_block);
+            let input_end = (output_end + half_block).min(height);
+
+            let left_tile = extract_rows(left, input_start, input_end)?;
+            let right_tile = extract_rows(right, input_start, input_end)?;
+            let tile = self.compute_disparity_single(
+                &left_tile,
+                &right_tile,
+                min_disparity,
+                max_disparity,
+            )?;
+
+            let local_start = (output_start - input_start) as usize;
+            let local_end = (output_end - input_start) as usize;
+            for local_row in local_start..local_end {
+                let global_row = output_start as usize + (local_row - local_start);
+                let src = &tile.data[local_row * width_usize..(local_row + 1) * width_usize];
+                let dst = &mut disparity.data
+                    [global_row * width_usize..(global_row + 1) * width_usize];
+                dst.copy_from_slice(src);
+            }
+
+            output_start = output_end;
+        }
+
+        Ok(disparity)
+    }
+
     fn create_input_texture(
         &self,
         image: &GrayImage,
@@ -291,8 +393,7 @@ impl GpuStereoMatcher {
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::R8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING 
-                 | wgpu::TextureUsages::COPY_DST
-                 | wgpu::TextureUsages::STORAGE_BINDING,
+                 | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
 
@@ -315,6 +416,69 @@ impl GpuStereoMatcher {
 
         texture
     }
+
+    fn block_size(&self) -> u32 {
+        match self.algorithm {
+            GpuStereoAlgorithm::BlockMatching { block_size } => block_size,
+            GpuStereoAlgorithm::Sgm => 11,
+        }
+    }
+}
+
+fn select_integrated_adapter(instance: &wgpu::Instance) -> Option<wgpu::Adapter> {
+    instance
+        .enumerate_adapters(wgpu::Backends::all())
+        .into_iter()
+        .find(|adapter| adapter.get_info().device_type == wgpu::DeviceType::IntegratedGpu)
+}
+
+fn estimate_gpu_bytes(width: u32, height: u32) -> usize {
+    // Approx: left r8 + right r8 + disparity r32 + readback buffer r32.
+    // Add fixed overhead so guard errs on the safe side.
+    let pixels = width as usize * height as usize;
+    pixels * 10 + 4096
+}
+
+fn read_gpu_max_bytes_from_env() -> Result<Option<usize>> {
+    let raw = match env::var("RUSTCV_GPU_MAX_BYTES") {
+        Ok(v) => v,
+        Err(env::VarError::NotPresent) => return Ok(None),
+        Err(e) => {
+            return Err(StereoError::InvalidParameters(format!(
+                "Failed to read RUSTCV_GPU_MAX_BYTES: {e}"
+            )))
+        }
+    };
+
+    let parsed: usize = raw.parse().map_err(|_| {
+        StereoError::InvalidParameters(format!(
+            "RUSTCV_GPU_MAX_BYTES must be a positive integer, got '{raw}'"
+        ))
+    })?;
+    if parsed == 0 {
+        return Err(StereoError::InvalidParameters(
+            "RUSTCV_GPU_MAX_BYTES must be >= 1".to_string(),
+        ));
+    }
+
+    Ok(Some(parsed))
+}
+
+fn extract_rows(image: &GrayImage, start_row: u32, end_row: u32) -> Result<GrayImage> {
+    if start_row >= end_row || end_row > image.height() {
+        return Err(StereoError::InvalidParameters(format!(
+            "Invalid row range [{start_row}, {end_row}) for image height {}",
+            image.height()
+        )));
+    }
+
+    let width = image.width() as usize;
+    let start_idx = start_row as usize * width;
+    let end_idx = end_row as usize * width;
+    let data = image.as_raw()[start_idx..end_idx].to_vec();
+    GrayImage::from_raw(image.width(), end_row - start_row, data).ok_or_else(|| {
+        StereoError::InvalidParameters("Failed to build temporary image tile".to_string())
+    })
 }
 
 #[repr(C)]
@@ -334,6 +498,16 @@ pub async fn is_gpu_available() -> bool {
         .request_adapter(&wgpu::RequestAdapterOptions::default())
         .await
         .is_some()
+}
+
+/// Enumerate adapters visible to wgpu on this machine.
+pub fn enumerate_adapters() -> Vec<wgpu::AdapterInfo> {
+    let instance = wgpu::Instance::default();
+    instance
+        .enumerate_adapters(wgpu::Backends::all())
+        .into_iter()
+        .map(|adapter| adapter.get_info())
+        .collect()
 }
 
 #[cfg(test)]
@@ -367,5 +541,17 @@ mod tests {
     async fn test_gpu_availability() {
         let available = is_gpu_available().await;
         println!("GPU available: {}", available);
+
+        let adapters = enumerate_adapters();
+        for info in &adapters {
+            println!(
+                "Adapter: name='{}', type={:?}, backend={:?}",
+                info.name, info.device_type, info.backend
+            );
+        }
+        let integrated = adapters
+            .iter()
+            .any(|a| a.device_type == wgpu::DeviceType::IntegratedGpu);
+        println!("Integrated GPU visible: {}", integrated);
     }
 }
