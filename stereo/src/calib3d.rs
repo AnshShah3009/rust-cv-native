@@ -1,5 +1,5 @@
 use crate::{Result, StereoError};
-use cv_core::{skew_symmetric, CameraExtrinsics, CameraIntrinsics};
+use cv_core::{skew_symmetric, CameraExtrinsics, CameraIntrinsics, Distortion};
 use image::GrayImage;
 use nalgebra::{
     DMatrix, Matrix2, Matrix3, Matrix3x4, Matrix4, Point2, Point3, SymmetricEigen, Vector2,
@@ -733,6 +733,85 @@ pub fn solve_pnp_ransac(
     };
 
     Ok((refined_pose, best_inliers))
+}
+
+pub fn undistort_points(
+    distorted_points: &[Point2<f64>],
+    intrinsics: &CameraIntrinsics,
+    distortion: &Distortion,
+) -> Result<Vec<Point2<f64>>> {
+    if intrinsics.fx.abs() <= 1e-12 || intrinsics.fy.abs() <= 1e-12 {
+        return Err(StereoError::InvalidParameters(
+            "undistort_points requires non-zero focal lengths".to_string(),
+        ));
+    }
+
+    let mut out = Vec::with_capacity(distorted_points.len());
+    for p in distorted_points {
+        let xd = (p.x - intrinsics.cx) / intrinsics.fx;
+        let yd = (p.y - intrinsics.cy) / intrinsics.fy;
+        let (xu, yu) = distortion.remove(xd, yd);
+        out.push(Point2::new(
+            intrinsics.fx * xu + intrinsics.cx,
+            intrinsics.fy * yu + intrinsics.cy,
+        ));
+    }
+    Ok(out)
+}
+
+pub fn init_undistort_rectify_map(
+    image_size: (u32, u32),
+    intrinsics: &CameraIntrinsics,
+    distortion: &Distortion,
+    rectification: &Matrix3<f64>,
+    new_intrinsics: &CameraIntrinsics,
+) -> Result<(Vec<f32>, Vec<f32>)> {
+    if image_size.0 == 0 || image_size.1 == 0 {
+        return Err(StereoError::InvalidParameters(
+            "init_undistort_rectify_map requires non-zero image size".to_string(),
+        ));
+    }
+    if intrinsics.fx.abs() <= 1e-12
+        || intrinsics.fy.abs() <= 1e-12
+        || new_intrinsics.fx.abs() <= 1e-12
+        || new_intrinsics.fy.abs() <= 1e-12
+    {
+        return Err(StereoError::InvalidParameters(
+            "init_undistort_rectify_map requires non-zero focal lengths".to_string(),
+        ));
+    }
+    let (width, height) = image_size;
+    let mut map_x = vec![0.0f32; (width * height) as usize];
+    let mut map_y = vec![0.0f32; (width * height) as usize];
+
+    let k_new_inv = new_intrinsics
+        .matrix()
+        .try_inverse()
+        .unwrap_or(Matrix3::identity());
+    let r_inv = rectification.try_inverse().unwrap_or(Matrix3::identity());
+
+    for y in 0..height {
+        for x in 0..width {
+            let dst = Vector3::new(x as f64, y as f64, 1.0);
+            let rectified_norm = k_new_inv * dst;
+            let original_norm = r_inv * rectified_norm;
+
+            if original_norm[2].abs() <= 1e-12 {
+                continue;
+            }
+            let xn = original_norm[0] / original_norm[2];
+            let yn = original_norm[1] / original_norm[2];
+            let (xd, yd) = distortion.apply(xn, yn);
+            let src_x = intrinsics.fx * xd + intrinsics.cx;
+            let src_y = intrinsics.fy * yd + intrinsics.cy;
+
+            let idx = (y * width + x) as usize;
+            map_x[idx] = src_x as f32;
+            map_y[idx] = src_y as f32;
+        }
+    }
+
+    Ok((map_x, map_y))
 }
 
 pub fn essential_from_extrinsics(extrinsics: &CameraExtrinsics) -> Matrix3<f64> {
@@ -2079,6 +2158,50 @@ mod tests {
         }
         assert!(cnt > 0);
         assert!(sum / cnt as f64 <= 1.0);
+    }
+
+    #[test]
+    fn undistort_points_inverts_forward_distortion() {
+        let k = CameraIntrinsics::new(620.0, 615.0, 320.0, 240.0, 640, 480);
+        let d = Distortion::new(0.12, -0.05, 0.001, -0.0007, 0.01);
+        let ideal = vec![
+            Point2::new(120.0, 100.0),
+            Point2::new(300.0, 220.0),
+            Point2::new(500.0, 360.0),
+            Point2::new(340.0, 140.0),
+        ];
+
+        let distorted: Vec<Point2<f64>> = ideal
+            .iter()
+            .map(|p| {
+                let x = (p.x - k.cx) / k.fx;
+                let y = (p.y - k.cy) / k.fy;
+                let (xd, yd) = d.apply(x, y);
+                Point2::new(k.fx * xd + k.cx, k.fy * yd + k.cy)
+            })
+            .collect();
+
+        let recovered = undistort_points(&distorted, &k, &d).unwrap();
+        for (r, g) in recovered.iter().zip(ideal.iter()) {
+            assert!((r - g).norm() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn init_undistort_rectify_map_identity_case() {
+        let size = (64u32, 48u32);
+        let k = CameraIntrinsics::new(120.0, 120.0, 32.0, 24.0, size.0, size.1);
+        let d = Distortion::none();
+        let r = Matrix3::<f64>::identity();
+        let (map_x, map_y) = init_undistort_rectify_map(size, &k, &d, &r, &k).unwrap();
+
+        for y in [0u32, 7, 23, 47] {
+            for x in [0u32, 11, 31, 63] {
+                let idx = (y * size.0 + x) as usize;
+                assert!((map_x[idx] - x as f32).abs() < 1e-4);
+                assert!((map_y[idx] - y as f32).abs() < 1e-4);
+            }
+        }
     }
 
     #[test]
