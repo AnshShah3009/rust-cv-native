@@ -110,6 +110,209 @@ pub fn essential_from_extrinsics(extrinsics: &CameraExtrinsics) -> Matrix3<f64> 
     skew_symmetric(&extrinsics.translation) * extrinsics.rotation
 }
 
+pub fn find_essential_mat(
+    pts1: &[Point2<f64>],
+    pts2: &[Point2<f64>],
+    intrinsics: &CameraIntrinsics,
+) -> Result<Matrix3<f64>> {
+    if pts1.len() != pts2.len() || pts1.len() < 8 {
+        return Err(StereoError::InvalidParameters(
+            "find_essential_mat needs >=8 paired points".to_string(),
+        ));
+    }
+    let (n1, n2) = normalize_with_intrinsics(pts1, pts2, intrinsics);
+    estimate_essential_8_point(&n1, &n2)
+}
+
+pub fn find_essential_mat_ransac(
+    pts1: &[Point2<f64>],
+    pts2: &[Point2<f64>],
+    intrinsics: &CameraIntrinsics,
+    threshold_px: f64,
+    max_iters: usize,
+) -> Result<(Matrix3<f64>, Vec<bool>)> {
+    if pts1.len() != pts2.len() || pts1.len() < 8 {
+        return Err(StereoError::InvalidParameters(
+            "find_essential_mat_ransac needs >=8 paired points".to_string(),
+        ));
+    }
+    if threshold_px <= 0.0 {
+        return Err(StereoError::InvalidParameters(
+            "threshold_px must be > 0".to_string(),
+        ));
+    }
+
+    let (n1, n2) = normalize_with_intrinsics(pts1, pts2, intrinsics);
+    let n = n1.len();
+    let f = 0.5 * (intrinsics.fx + intrinsics.fy);
+    let thresh_norm = threshold_px / f.max(1e-12);
+    let thresh2 = thresh_norm * thresh_norm;
+
+    let mut best_inliers = vec![false; n];
+    let mut best_count = 0usize;
+    let mut best_e = None;
+
+    let iters = max_iters.max(32);
+    for i in 0..iters {
+        let idx = sample_unique_indices(n, 8, i as u64 + 1);
+        let s1: Vec<Point2<f64>> = idx.iter().map(|&j| n1[j]).collect();
+        let s2: Vec<Point2<f64>> = idx.iter().map(|&j| n2[j]).collect();
+
+        let e = match estimate_essential_8_point(&s1, &s2) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let mut mask = vec![false; n];
+        let mut count = 0usize;
+        for j in 0..n {
+            let err = sampson_error(&e, &n1[j], &n2[j]);
+            if err <= thresh2 {
+                mask[j] = true;
+                count += 1;
+            }
+        }
+
+        if count > best_count {
+            best_count = count;
+            best_inliers = mask;
+            best_e = Some(e);
+        }
+    }
+
+    let best_e = best_e.ok_or_else(|| {
+        StereoError::InvalidParameters("RANSAC failed to estimate essential matrix".to_string())
+    })?;
+
+    let in1: Vec<Point2<f64>> = n1
+        .iter()
+        .zip(best_inliers.iter())
+        .filter_map(|(p, &m)| if m { Some(*p) } else { None })
+        .collect();
+    let in2: Vec<Point2<f64>> = n2
+        .iter()
+        .zip(best_inliers.iter())
+        .filter_map(|(p, &m)| if m { Some(*p) } else { None })
+        .collect();
+
+    let refined = if in1.len() >= 8 {
+        estimate_essential_8_point(&in1, &in2).unwrap_or(best_e)
+    } else {
+        best_e
+    };
+
+    Ok((refined, best_inliers))
+}
+
+fn normalize_with_intrinsics(
+    pts1: &[Point2<f64>],
+    pts2: &[Point2<f64>],
+    intrinsics: &CameraIntrinsics,
+) -> (Vec<Point2<f64>>, Vec<Point2<f64>>) {
+    let k_inv = intrinsics.inverse_matrix();
+    let n1: Vec<Point2<f64>> = pts1
+        .iter()
+        .map(|p| {
+            let v = k_inv * Vector3::new(p.x, p.y, 1.0);
+            Point2::new(v[0] / v[2], v[1] / v[2])
+        })
+        .collect();
+    let n2: Vec<Point2<f64>> = pts2
+        .iter()
+        .map(|p| {
+            let v = k_inv * Vector3::new(p.x, p.y, 1.0);
+            Point2::new(v[0] / v[2], v[1] / v[2])
+        })
+        .collect();
+    (n1, n2)
+}
+
+fn estimate_essential_8_point(pts1: &[Point2<f64>], pts2: &[Point2<f64>]) -> Result<Matrix3<f64>> {
+    if pts1.len() != pts2.len() || pts1.len() < 8 {
+        return Err(StereoError::InvalidParameters(
+            "estimate_essential_8_point needs >=8 paired points".to_string(),
+        ));
+    }
+
+    let n = pts1.len();
+    let mut a = DMatrix::<f64>::zeros(n, 9);
+    for i in 0..n {
+        let x1 = pts1[i].x;
+        let y1 = pts1[i].y;
+        let x2 = pts2[i].x;
+        let y2 = pts2[i].y;
+        a[(i, 0)] = x2 * x1;
+        a[(i, 1)] = x2 * y1;
+        a[(i, 2)] = x2;
+        a[(i, 3)] = y2 * x1;
+        a[(i, 4)] = y2 * y1;
+        a[(i, 5)] = y2;
+        a[(i, 6)] = x1;
+        a[(i, 7)] = y1;
+        a[(i, 8)] = 1.0;
+    }
+
+    let svd = a.svd(true, true);
+    let vt = svd.v_t.ok_or_else(|| {
+        StereoError::InvalidParameters("SVD failed in estimate_essential_8_point".to_string())
+    })?;
+    let evec = vt.row(vt.nrows() - 1);
+    let e = Matrix3::new(
+        evec[(0, 0)],
+        evec[(0, 1)],
+        evec[(0, 2)],
+        evec[(0, 3)],
+        evec[(0, 4)],
+        evec[(0, 5)],
+        evec[(0, 6)],
+        evec[(0, 7)],
+        evec[(0, 8)],
+    );
+    enforce_essential_constraints(&e)
+}
+
+fn enforce_essential_constraints(e: &Matrix3<f64>) -> Result<Matrix3<f64>> {
+    let svd = e.svd(true, true);
+    let u = svd.u.ok_or_else(|| {
+        StereoError::InvalidParameters("SVD U missing in essential constraints".to_string())
+    })?;
+    let vt = svd.v_t.ok_or_else(|| {
+        StereoError::InvalidParameters("SVD V^T missing in essential constraints".to_string())
+    })?;
+    let s = 0.5 * (svd.singular_values[0] + svd.singular_values[1]);
+    let sigma = Matrix3::new(s, 0.0, 0.0, 0.0, s, 0.0, 0.0, 0.0, 0.0);
+    Ok(u * sigma * vt)
+}
+
+fn sampson_error(e: &Matrix3<f64>, p1: &Point2<f64>, p2: &Point2<f64>) -> f64 {
+    let x1 = Vector3::new(p1.x, p1.y, 1.0);
+    let x2 = Vector3::new(p2.x, p2.y, 1.0);
+    let ex1 = e * x1;
+    let etx2 = e.transpose() * x2;
+    let x2tex1 = x2.dot(&ex1);
+    let denom = ex1[0] * ex1[0] + ex1[1] * ex1[1] + etx2[0] * etx2[0] + etx2[1] * etx2[1];
+    if denom <= 1e-18 {
+        f64::INFINITY
+    } else {
+        (x2tex1 * x2tex1) / denom
+    }
+}
+
+fn sample_unique_indices(n: usize, k: usize, seed: u64) -> Vec<usize> {
+    let mut out = Vec::with_capacity(k);
+    let mut used = vec![false; n];
+    let mut state = seed ^ 0x9E3779B97F4A7C15;
+    while out.len() < k {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let idx = (state as usize) % n;
+        if !used[idx] {
+            used[idx] = true;
+            out.push(idx);
+        }
+    }
+    out
+}
+
 pub fn triangulate_points(
     p1: &Matrix3x4<f64>,
     p2: &Matrix3x4<f64>,
@@ -347,5 +550,50 @@ mod tests {
         assert!(recovered.rotation.determinant() > 0.0);
         let dir_dot = recovered.translation.normalize().dot(&gt.translation.normalize());
         assert!(dir_dot > 0.9);
+    }
+
+    #[test]
+    fn find_essential_mat_ransac_handles_outliers() {
+        let k = CameraIntrinsics::new(750.0, 760.0, 320.0, 240.0, 640, 480);
+        let rot = Rotation3::from_euler_angles(0.03, -0.02, 0.01)
+            .matrix()
+            .clone_owned();
+        let t = Vector3::new(0.18, -0.01, 0.02).normalize();
+        let gt = CameraExtrinsics::new(rot, t);
+        let i_ext = CameraExtrinsics::default();
+
+        let mut world = vec![];
+        for i in 0..20 {
+            let x = -0.5 + 0.05 * i as f64;
+            let y = -0.2 + 0.03 * (i % 7) as f64;
+            let z = 3.0 + 0.2 * (i % 5) as f64;
+            world.push(Point3::new(x, y, z));
+        }
+        let pts1: Vec<Point2<f64>> = world.iter().map(|p| project_point(&k, &i_ext, p)).collect();
+        let mut pts2: Vec<Point2<f64>> = world.iter().map(|p| project_point(&k, &gt, p)).collect();
+
+        // Inject outliers.
+        for i in 0..5 {
+            pts2[i] = Point2::new(50.0 + i as f64 * 20.0, 400.0 - i as f64 * 15.0);
+        }
+
+        let (e, inliers) = find_essential_mat_ransac(&pts1, &pts2, &k, 3.0, 600).unwrap();
+        let inlier_count = inliers.iter().filter(|&&m| m).count();
+        assert!(inlier_count >= 10);
+
+        let in1: Vec<Point2<f64>> = pts1
+            .iter()
+            .zip(inliers.iter())
+            .filter_map(|(p, &m)| if m { Some(*p) } else { None })
+            .collect();
+        let in2: Vec<Point2<f64>> = pts2
+            .iter()
+            .zip(inliers.iter())
+            .filter_map(|(p, &m)| if m { Some(*p) } else { None })
+            .collect();
+
+        let recovered = recover_pose_from_essential(&e, &in1, &in2, &k).unwrap();
+        assert!(recovered.rotation.determinant() > 0.0);
+        assert!(recovered.translation.norm() > 1e-6);
     }
 }
