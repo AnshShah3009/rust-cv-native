@@ -10,10 +10,10 @@ struct StereoParams {
 }
 
 @group(0) @binding(0)
-var left_image: texture_storage_2d<r8unorm, read>;
+var left_image: texture_2d<f32>;
 
 @group(0) @binding(1)
-var right_image: texture_storage_2d<r8unorm, read>;
+var right_image: texture_2d<f32>;
 
 @group(0) @binding(2)
 var disparity_output: texture_storage_2d<r32float, write>;
@@ -39,8 +39,8 @@ fn compute_sad(x: u32, y: u32, disparity: u32) -> f32 {
                 lx < i32(params.width) && ly < i32(params.height) &&
                 rx < i32(params.width) && ry < i32(params.height)) {
                 
-                let left_val = textureLoad(left_image, vec2<i32>(lx, ly)).r;
-                let right_val = textureLoad(right_image, vec2<i32>(rx, ry)).r;
+                let left_val = textureLoad(left_image, vec2<i32>(lx, ly), 0).r;
+                let right_val = textureLoad(right_image, vec2<i32>(rx, ry), 0).r;
                 
                 sad = sad + abs(left_val - right_val);
                 count = count + 1u;
