@@ -1,7 +1,9 @@
 use crate::{Result, StereoError};
 use cv_core::{skew_symmetric, CameraExtrinsics, CameraIntrinsics};
+use image::GrayImage;
 use nalgebra::{
-    DMatrix, Matrix3, Matrix3x4, Matrix4, Point2, Point3, Vector3,
+    DMatrix, Matrix2, Matrix3, Matrix3x4, Matrix4, Point2, Point3, SymmetricEigen, Vector2,
+    Vector3,
 };
 
 #[derive(Debug, Clone)]
@@ -86,6 +88,113 @@ pub fn calibrate_camera_planar(
         extrinsics,
         rms_reprojection_error: rms,
     })
+}
+
+pub fn find_chessboard_corners(
+    image: &GrayImage,
+    pattern_size: (usize, usize),
+) -> Result<Vec<Point2<f64>>> {
+    let (cols, rows) = pattern_size;
+    let need = cols * rows;
+    if cols < 2 || rows < 2 {
+        return Err(StereoError::InvalidParameters(
+            "pattern_size must be at least (2,2)".to_string(),
+        ));
+    }
+    if image.width() < 8 || image.height() < 8 {
+        return Err(StereoError::InvalidParameters(
+            "image too small for chessboard detection".to_string(),
+        ));
+    }
+
+    let (response, width, height) = harris_response(image, 0.04, 1);
+    let max_r = response
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max)
+        .max(0.0);
+    if max_r <= 0.0 {
+        return Err(StereoError::InvalidParameters(
+            "no chessboard-like corners found".to_string(),
+        ));
+    }
+    let threshold = max_r * 0.01;
+    let mut cands = non_max_suppression_response(&response, width, height, threshold);
+    if cands.len() < need {
+        return Err(StereoError::InvalidParameters(format!(
+            "insufficient corner candidates: found {}, need {need}",
+            cands.len()
+        )));
+    }
+
+    cands.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    cands.truncate((need * 10).max(need));
+    let mut ordered = assign_grid_points(&cands, pattern_size)?;
+    corner_subpix(image, &mut ordered, 3, 25, 1e-3)?;
+    Ok(ordered)
+}
+
+pub fn corner_subpix(
+    image: &GrayImage,
+    corners: &mut [Point2<f64>],
+    win_radius: usize,
+    max_iters: usize,
+    eps: f64,
+) -> Result<()> {
+    if win_radius == 0 {
+        return Err(StereoError::InvalidParameters(
+            "win_radius must be >= 1".to_string(),
+        ));
+    }
+    let w = image.width() as i32;
+    let h = image.height() as i32;
+    for p in corners.iter_mut() {
+        let mut x = p.x;
+        let mut y = p.y;
+        for _ in 0..max_iters {
+            let mut sw = 0.0f64;
+            let mut sx = 0.0f64;
+            let mut sy = 0.0f64;
+            let cx = x.round() as i32;
+            let cy = y.round() as i32;
+            for dy in -(win_radius as i32)..=(win_radius as i32) {
+                for dx in -(win_radius as i32)..=(win_radius as i32) {
+                    let xx = cx + dx;
+                    let yy = cy + dy;
+                    if xx <= 0 || yy <= 0 || xx >= w - 1 || yy >= h - 1 {
+                        continue;
+                    }
+                    let gx = (image.get_pixel((xx + 1) as u32, yy as u32)[0] as f64
+                        - image.get_pixel((xx - 1) as u32, yy as u32)[0] as f64)
+                        * 0.5;
+                    let gy = (image.get_pixel(xx as u32, (yy + 1) as u32)[0] as f64
+                        - image.get_pixel(xx as u32, (yy - 1) as u32)[0] as f64)
+                        * 0.5;
+                    let wgt = (gx * gx + gy * gy).sqrt();
+                    if wgt <= 1e-9 {
+                        continue;
+                    }
+                    sw += wgt;
+                    sx += wgt * xx as f64;
+                    sy += wgt * yy as f64;
+                }
+            }
+            if sw <= 1e-9 {
+                break;
+            }
+            let nx = sx / sw;
+            let ny = sy / sw;
+            let shift = ((nx - x) * (nx - x) + (ny - y) * (ny - y)).sqrt();
+            x = nx;
+            y = ny;
+            if shift < eps {
+                break;
+            }
+        }
+        p.x = x.clamp(0.0, (image.width() - 1) as f64);
+        p.y = y.clamp(0.0, (image.height() - 1) as f64);
+    }
+    Ok(())
 }
 
 pub fn solve_pnp_dlt(
@@ -855,6 +964,192 @@ fn v_ij(h: &Matrix3<f64>, i: usize, j: usize) -> [f64; 6] {
     ]
 }
 
+fn harris_response(image: &GrayImage, k: f64, win_radius: usize) -> (Vec<f64>, usize, usize) {
+    let width = image.width() as usize;
+    let height = image.height() as usize;
+    let mut ix = vec![0.0f64; width * height];
+    let mut iy = vec![0.0f64; width * height];
+
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let gx = image.get_pixel((x + 1) as u32, y as u32)[0] as f64
+                - image.get_pixel((x - 1) as u32, y as u32)[0] as f64;
+            let gy = image.get_pixel(x as u32, (y + 1) as u32)[0] as f64
+                - image.get_pixel(x as u32, (y - 1) as u32)[0] as f64;
+            ix[y * width + x] = gx * 0.5;
+            iy[y * width + x] = gy * 0.5;
+        }
+    }
+
+    let mut resp = vec![0.0f64; width * height];
+    let r = win_radius as i32;
+    for y in win_radius..(height - win_radius) {
+        for x in win_radius..(width - win_radius) {
+            let mut sxx = 0.0;
+            let mut sxy = 0.0;
+            let mut syy = 0.0;
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    let xx = (x as i32 + dx) as usize;
+                    let yy = (y as i32 + dy) as usize;
+                    let gx = ix[yy * width + xx];
+                    let gy = iy[yy * width + xx];
+                    sxx += gx * gx;
+                    sxy += gx * gy;
+                    syy += gy * gy;
+                }
+            }
+            let det = sxx * syy - sxy * sxy;
+            let trace = sxx + syy;
+            resp[y * width + x] = det - k * trace * trace;
+        }
+    }
+    (resp, width, height)
+}
+
+fn non_max_suppression_response(
+    response: &[f64],
+    width: usize,
+    height: usize,
+    threshold: f64,
+) -> Vec<(f64, f64, f64)> {
+    let mut out = Vec::new();
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let r = response[y * width + x];
+            if r <= threshold {
+                continue;
+            }
+            let mut is_max = true;
+            for yy in (y - 1)..=(y + 1) {
+                for xx in (x - 1)..=(x + 1) {
+                    if (xx != x || yy != y) && response[yy * width + xx] > r {
+                        is_max = false;
+                        break;
+                    }
+                }
+                if !is_max {
+                    break;
+                }
+            }
+            if is_max {
+                out.push((x as f64, y as f64, r));
+            }
+        }
+    }
+    out
+}
+
+fn assign_grid_points(
+    candidates: &[(f64, f64, f64)],
+    pattern_size: (usize, usize),
+) -> Result<Vec<Point2<f64>>> {
+    let (cols, rows) = pattern_size;
+    let points: Vec<Vector2<f64>> = candidates
+        .iter()
+        .map(|(x, y, _)| Vector2::new(*x, *y))
+        .collect();
+    if points.len() < cols * rows {
+        return Err(StereoError::InvalidParameters(
+            "not enough candidates to assign grid".to_string(),
+        ));
+    }
+
+    let mean = points
+        .iter()
+        .fold(Vector2::zeros(), |acc, p| acc + p)
+        / points.len() as f64;
+    let mut cov = Matrix2::<f64>::zeros();
+    for p in &points {
+        let d = p - mean;
+        cov += d * d.transpose();
+    }
+    cov /= points.len() as f64;
+    let eig = SymmetricEigen::new(cov);
+    let (i0, i1) = if eig.eigenvalues[0] >= eig.eigenvalues[1] {
+        (0usize, 1usize)
+    } else {
+        (1usize, 0usize)
+    };
+    let e0 = eig.eigenvectors.column(i0).into_owned();
+    let e1 = eig.eigenvectors.column(i1).into_owned();
+
+    let mut uv = Vec::with_capacity(points.len());
+    for p in &points {
+        let d = p - mean;
+        uv.push((d.dot(&e0), d.dot(&e1)));
+    }
+    let u_vals: Vec<f64> = uv.iter().map(|(u, _)| *u).collect();
+    let v_vals: Vec<f64> = uv.iter().map(|(_, v)| *v).collect();
+    let mut u_centers = kmeans_1d(&u_vals, cols, 30);
+    let mut v_centers = kmeans_1d(&v_vals, rows, 30);
+    u_centers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    v_centers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut used = vec![false; points.len()];
+    let mut out = Vec::with_capacity(cols * rows);
+    for vc in &v_centers {
+        for uc in &u_centers {
+            let mut best = None;
+            let mut best_cost = f64::INFINITY;
+            for (i, (u, v)) in uv.iter().enumerate() {
+                if used[i] {
+                    continue;
+                }
+                let du = u - uc;
+                let dv = v - vc;
+                let cost = du * du + dv * dv;
+                if cost < best_cost {
+                    best_cost = cost;
+                    best = Some(i);
+                }
+            }
+            let idx = best.ok_or_else(|| {
+                StereoError::InvalidParameters("failed to assign all chessboard corners".to_string())
+            })?;
+            used[idx] = true;
+            out.push(Point2::new(points[idx][0], points[idx][1]));
+        }
+    }
+    Ok(out)
+}
+
+fn kmeans_1d(values: &[f64], k: usize, iters: usize) -> Vec<f64> {
+    let min_v = values.iter().copied().fold(f64::INFINITY, f64::min);
+    let max_v = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if k == 1 || (max_v - min_v).abs() < 1e-12 {
+        return vec![0.5 * (min_v + max_v); k];
+    }
+
+    let mut centers = (0..k)
+        .map(|i| min_v + (i as f64) * (max_v - min_v) / (k as f64 - 1.0))
+        .collect::<Vec<_>>();
+
+    for _ in 0..iters {
+        let mut sums = vec![0.0f64; k];
+        let mut cnts = vec![0usize; k];
+        for &v in values {
+            let mut bi = 0usize;
+            let mut bd = (v - centers[0]).abs();
+            for (i, &c) in centers.iter().enumerate().skip(1) {
+                let d = (v - c).abs();
+                if d < bd {
+                    bd = d;
+                    bi = i;
+                }
+            }
+            sums[bi] += v;
+            cnts[bi] += 1;
+        }
+        for i in 0..k {
+            if cnts[i] > 0 {
+                centers[i] = sums[i] / cnts[i] as f64;
+            }
+        }
+    }
+    centers
+}
+
 pub fn triangulate_points(
     p1: &Matrix3x4<f64>,
     p2: &Matrix3x4<f64>,
@@ -993,6 +1288,7 @@ pub fn recover_pose_from_essential(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::Luma;
     use nalgebra::Rotation3;
 
     fn project_point(k: &CameraIntrinsics, ext: &CameraExtrinsics, p: &Point3<f64>) -> Point2<f64> {
@@ -1000,6 +1296,45 @@ mod tests {
         let u = k.fx * (pc[0] / pc[2]) + k.cx;
         let v = k.fy * (pc[1] / pc[2]) + k.cy;
         Point2::new(u, v)
+    }
+
+    fn synthetic_checkerboard(
+        pattern: (usize, usize),
+        square: u32,
+        margin_x: u32,
+        margin_y: u32,
+    ) -> (GrayImage, Vec<Point2<f64>>) {
+        let (cols, rows) = pattern;
+        let squares_x = cols as u32 + 1;
+        let squares_y = rows as u32 + 1;
+        let width = margin_x * 2 + squares_x * square;
+        let height = margin_y * 2 + squares_y * square;
+        let mut img = GrayImage::from_pixel(width, height, Luma([180]));
+
+        for sy in 0..squares_y {
+            for sx in 0..squares_x {
+                let is_black = (sx + sy) % 2 == 0;
+                let val = if is_black { 30u8 } else { 220u8 };
+                let x0 = margin_x + sx * square;
+                let y0 = margin_y + sy * square;
+                for y in y0..(y0 + square) {
+                    for x in x0..(x0 + square) {
+                        img.put_pixel(x, y, Luma([val]));
+                    }
+                }
+            }
+        }
+
+        let mut gt = Vec::with_capacity(cols * rows);
+        for y in 0..rows {
+            for x in 0..cols {
+                gt.push(Point2::new(
+                    (margin_x + (x as u32 + 1) * square) as f64,
+                    (margin_y + (y as u32 + 1) * square) as f64,
+                ));
+            }
+        }
+        (img, gt)
     }
 
     #[test]
@@ -1253,5 +1588,40 @@ mod tests {
         assert!((calib.intrinsics.cy - gt_k.cy).abs() < 1e-2);
         assert!(calib.rms_reprojection_error < 1e-5);
         assert_eq!(calib.extrinsics.len(), views.len());
+    }
+
+    #[test]
+    fn find_chessboard_corners_detects_expected_count() {
+        let pattern = (7, 6);
+        let (img, gt) = synthetic_checkerboard(pattern, 20, 40, 30);
+        let corners = find_chessboard_corners(&img, pattern).unwrap();
+        assert_eq!(corners.len(), pattern.0 * pattern.1);
+
+        // Validate board-like coverage even if ordering and exact localization vary.
+        let min_x = corners.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+        let max_x = corners.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+        let min_y = corners.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+        let max_y = corners.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+
+        let gt_min_x = gt.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+        let gt_max_x = gt.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+        let gt_min_y = gt.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+        let gt_max_y = gt.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+
+        assert!((min_x - gt_min_x).abs() < 25.0);
+        assert!((max_x - gt_max_x).abs() < 25.0);
+        assert!((min_y - gt_min_y).abs() < 25.0);
+        assert!((max_y - gt_max_y).abs() < 25.0);
+    }
+
+    #[test]
+    fn corner_subpix_refines_toward_local_corner() {
+        let pattern = (7, 6);
+        let (img, gt) = synthetic_checkerboard(pattern, 24, 30, 30);
+        let mut p = vec![Point2::new(gt[10].x + 2.3, gt[10].y - 1.9)];
+        let before = (p[0] - gt[10]).norm();
+        corner_subpix(&img, &mut p, 4, 40, 1e-4).unwrap();
+        let after = (p[0] - gt[10]).norm();
+        assert!(after < before);
     }
 }
