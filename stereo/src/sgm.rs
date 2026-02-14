@@ -5,6 +5,7 @@
 
 use crate::{DisparityMap, Result, StereoError};
 use image::GrayImage;
+use rayon::prelude::*;
 
 /// SGM stereo matcher
 pub struct SgmMatcher {
@@ -81,13 +82,17 @@ impl SgmMatcher {
             self.max_disparity,
         );
 
-        for y in 0..height {
-            for x in 0..width {
-                let best_d =
-                    self.find_best_disparity(&aggregated_costs, x, y, width, num_disparities);
-                disparity.set(x as u32, y as u32, best_d as f32);
-            }
-        }
+        disparity
+            .data
+            .par_chunks_mut(width)
+            .enumerate()
+            .for_each(|(y, row)| {
+                for (x, px) in row.iter_mut().enumerate() {
+                    let best_d =
+                        self.find_best_disparity(&aggregated_costs, x, y, width, num_disparities);
+                    *px = best_d as f32;
+                }
+            });
 
         Ok(disparity)
     }
@@ -96,6 +101,8 @@ impl SgmMatcher {
         let width = left.width() as usize;
         let height = left.height() as usize;
         let num_disparities = (self.max_disparity - self.min_disparity + 1) as usize;
+        let left_data = left.as_raw();
+        let right_data = right.as_raw();
 
         let mut costs = vec![0u32; width * height * num_disparities];
 
@@ -103,31 +110,40 @@ impl SgmMatcher {
         let window_size = 3;
         let half_window = window_size / 2;
 
-        for y in half_window..height - half_window {
-            for x in half_window..width - half_window {
-                for (d_idx, d) in (self.min_disparity..=self.max_disparity).enumerate() {
-                    let mut cost = 0u32;
+        let row_stride = width * num_disparities;
+        costs
+            .par_chunks_mut(row_stride)
+            .enumerate()
+            .for_each(|(y, row_costs)| {
+                if y < half_window || y >= height - half_window {
+                    return;
+                }
 
-                    for dy in -(half_window as i32)..=half_window as i32 {
-                        for dx in -(half_window as i32)..=half_window as i32 {
-                            let lx = (x as i32 + dx) as u32;
-                            let ly = (y as i32 + dy) as u32;
-                            let rx = (x as i32 + dx - d) as u32;
-                            let ry = (y as i32 + dy) as u32;
+                for x in half_window..width - half_window {
+                    for (d_idx, d) in (self.min_disparity..=self.max_disparity).enumerate() {
+                        let mut cost = 0u32;
 
-                            if rx < right.width() && ry < right.height() {
-                                let left_val = left.get_pixel(lx, ly)[0] as i32;
-                                let right_val = right.get_pixel(rx, ry)[0] as i32;
+                        for dy in -(half_window as i32)..=half_window as i32 {
+                            let ly = (y as i32 + dy) as usize;
+                            for dx in -(half_window as i32)..=half_window as i32 {
+                                let lx_i32 = x as i32 + dx;
+                                let rx_i32 = lx_i32 - d;
+                                if rx_i32 < 0 || rx_i32 >= width as i32 {
+                                    continue;
+                                }
+
+                                let lx = lx_i32 as usize;
+                                let rx = rx_i32 as usize;
+                                let left_val = left_data[ly * width + lx] as i32;
+                                let right_val = right_data[ly * width + rx] as i32;
                                 cost += (left_val - right_val).abs() as u32;
                             }
                         }
-                    }
 
-                    let idx = (y * width + x) * num_disparities + d_idx;
-                    costs[idx] = cost;
+                        row_costs[x * num_disparities + d_idx] = cost;
+                    }
                 }
-            }
-        }
+            });
 
         costs
     }
@@ -140,16 +156,21 @@ impl SgmMatcher {
         num_disparities: usize,
     ) -> Vec<u32> {
         let mut aggregated = vec![0u32; width * height * num_disparities];
+        // Reused scratch buffer to avoid per-direction allocation churn.
+        let mut path_costs = vec![0u32; width * height * num_disparities];
 
         // For each aggregation direction
         for &(dx, dy) in &self.paths {
-            let path_costs =
-                self.aggregate_along_path(cost_volume, width, height, num_disparities, dx, dy);
-
-            // Sum costs from all directions
-            for i in 0..aggregated.len() {
-                aggregated[i] += path_costs[i];
-            }
+            self.aggregate_along_path(
+                cost_volume,
+                &mut aggregated,
+                &mut path_costs,
+                width,
+                height,
+                num_disparities,
+                dx,
+                dy,
+            );
         }
 
         aggregated
@@ -158,65 +179,74 @@ impl SgmMatcher {
     fn aggregate_along_path(
         &self,
         cost_volume: &[u32],
+        aggregated: &mut [u32],
+        path_costs: &mut [u32],
         width: usize,
         height: usize,
         num_disparities: usize,
         dx: i32,
         dy: i32,
-    ) -> Vec<u32> {
-        let mut path_costs = vec![0u32; width * height * num_disparities];
-
-        // Determine scan direction
-        let (x_range, y_range): (Vec<usize>, Vec<usize>) = if dx >= 0 && dy >= 0 {
-            ((0..width).collect(), (0..height).collect())
-        } else if dx < 0 && dy >= 0 {
-            (((0..width).rev()).collect(), (0..height).collect())
-        } else if dx >= 0 && dy < 0 {
-            ((0..width).collect(), ((0..height).rev()).collect())
+    ) {
+        let (x_start, x_end, x_step) = if dx >= 0 {
+            (0i32, width as i32, 1i32)
         } else {
-            (((0..width).rev()).collect(), ((0..height).rev()).collect())
+            (width as i32 - 1, -1i32, -1i32)
+        };
+        let (y_start, y_end, y_step) = if dy >= 0 {
+            (0i32, height as i32, 1i32)
+        } else {
+            (height as i32 - 1, -1i32, -1i32)
         };
 
-        for &y in &y_range {
-            for &x in &x_range {
+        let mut y = y_start;
+        while y != y_end {
+            let mut x = x_start;
+            while x != x_end {
                 let px = x as i32 - dx;
                 let py = y as i32 - dy;
+                let idx_base = (y as usize * width + x as usize) * num_disparities;
 
-                for d in 0..num_disparities {
-                    let idx = (y * width + x) * num_disparities + d;
-                    let mut min_cost = cost_volume[idx];
-
-                    if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
-                        let prev_idx = (py as usize * width + px as usize) * num_disparities;
-
-                        // Find minimum previous cost
-                        let mut min_prev = u32::MAX;
-                        for pd in 0..num_disparities {
-                            let pd_idx = prev_idx + pd;
-                            if pd_idx < path_costs.len() {
-                                let cost = path_costs[pd_idx];
-                                let penalty = if d == pd {
-                                    0
-                                } else if (d as i32 - pd as i32).abs() == 1 {
-                                    self.p1
-                                } else {
-                                    self.p2
-                                };
-                                min_prev = min_prev.min(cost + penalty);
-                            }
-                        }
-
-                        if min_prev != u32::MAX {
-                            min_cost = min_cost.saturating_add(min_prev);
-                        }
+                if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                    let prev_idx = (py as usize * width + px as usize) * num_disparities;
+                    let mut prev_min = u32::MAX;
+                    for pd in 0..num_disparities {
+                        prev_min = prev_min.min(path_costs[prev_idx + pd]);
                     }
+                    if prev_min == u32::MAX {
+                        prev_min = 0;
+                    }
+                    let p2_base = prev_min.saturating_add(self.p2);
 
-                    path_costs[idx] = min_cost;
+                    for d in 0..num_disparities {
+                        let cd = cost_volume[idx_base + d];
+                        let l0 = path_costs[prev_idx + d];
+                        let l1 = if d > 0 {
+                            path_costs[prev_idx + d - 1].saturating_add(self.p1)
+                        } else {
+                            u32::MAX
+                        };
+                        let l2 = if d + 1 < num_disparities {
+                            path_costs[prev_idx + d + 1].saturating_add(self.p1)
+                        } else {
+                            u32::MAX
+                        };
+                        let best_prev = l0.min(l1).min(l2).min(p2_base);
+                        let lr = cd.saturating_add(best_prev.saturating_sub(prev_min));
+                        path_costs[idx_base + d] = lr;
+                        aggregated[idx_base + d] = aggregated[idx_base + d].saturating_add(lr);
+                    }
+                } else {
+                    for d in 0..num_disparities {
+                        let cd = cost_volume[idx_base + d];
+                        path_costs[idx_base + d] = cd;
+                        aggregated[idx_base + d] = aggregated[idx_base + d].saturating_add(cd);
+                    }
                 }
-            }
-        }
 
-        path_costs
+                x += x_step;
+            }
+            y += y_step;
+        }
     }
 
     fn find_best_disparity(
