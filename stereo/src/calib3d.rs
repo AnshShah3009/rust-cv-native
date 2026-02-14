@@ -3,8 +3,8 @@ use cv_core::{skew_symmetric, CameraExtrinsics, CameraIntrinsics, Distortion};
 use cv_imgproc::{remap, BorderMode, Interpolation};
 use image::GrayImage;
 use nalgebra::{
-    DMatrix, Matrix2, Matrix3, Matrix3x4, Matrix4, Point2, Point3, SymmetricEigen, Vector2,
-    Vector3,
+    DMatrix, Matrix2, Matrix3, Matrix3x4, Matrix4, Point2, Point3, Rotation3, SymmetricEigen,
+    Vector2, Vector3,
 };
 use std::path::Path;
 
@@ -762,6 +762,69 @@ pub fn solve_pnp_ransac(
     Ok((refined_pose, best_inliers))
 }
 
+pub fn solve_pnp_refine(
+    initial: &CameraExtrinsics,
+    object_points: &[Point3<f64>],
+    image_points: &[Point2<f64>],
+    intrinsics: &CameraIntrinsics,
+    max_iters: usize,
+) -> Result<CameraExtrinsics> {
+    if object_points.len() != image_points.len() || object_points.len() < 6 {
+        return Err(StereoError::InvalidParameters(
+            "solve_pnp_refine needs >=6 paired points".to_string(),
+        ));
+    }
+
+    let mut params = extrinsics_to_params(initial);
+    let iters = max_iters.max(1);
+
+    for _ in 0..iters {
+        let base = params_to_extrinsics(&params);
+        let mut j = DMatrix::<f64>::zeros(2 * object_points.len(), 6);
+        let mut r = DMatrix::<f64>::zeros(2 * object_points.len(), 1);
+
+        for (i, (p3, p2)) in object_points.iter().zip(image_points.iter()).enumerate() {
+            let pred = project_point(intrinsics, &base, p3);
+            r[(2 * i, 0)] = pred.x - p2.x;
+            r[(2 * i + 1, 0)] = pred.y - p2.y;
+        }
+
+        let eps = 1e-6;
+        for k in 0..6 {
+            let mut p_perturbed = params;
+            p_perturbed[k] += eps;
+            let ext_p = params_to_extrinsics(&p_perturbed);
+
+            for (i, p3) in object_points.iter().enumerate() {
+                let p0 = project_point(intrinsics, &base, p3);
+                let p1 = project_point(intrinsics, &ext_p, p3);
+                j[(2 * i, k)] = (p1.x - p0.x) / eps;
+                j[(2 * i + 1, k)] = (p1.y - p0.y) / eps;
+            }
+        }
+
+        let jt = j.transpose();
+        let h = &jt * &j;
+        let g = &jt * &r;
+        let delta = h
+            .lu()
+            .solve(&g)
+            .ok_or_else(|| StereoError::InvalidParameters("solve_pnp_refine normal equation failed".to_string()))?;
+
+        let mut max_step = 0.0f64;
+        for k in 0..6 {
+            let step = delta[(k, 0)];
+            params[k] -= step;
+            max_step = max_step.max(step.abs());
+        }
+        if max_step < 1e-9 {
+            break;
+        }
+    }
+
+    Ok(params_to_extrinsics(&params))
+}
+
 pub fn undistort_points(
     distorted_points: &[Point2<f64>],
     intrinsics: &CameraIntrinsics,
@@ -1319,6 +1382,33 @@ fn reprojection_error_px(
     let u = intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx;
     let v = intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy;
     ((u - image_point.x).powi(2) + (v - image_point.y).powi(2)).sqrt()
+}
+
+fn extrinsics_to_params(ext: &CameraExtrinsics) -> [f64; 6] {
+    let r = Rotation3::from_matrix_unchecked(ext.rotation);
+    let omega = r.scaled_axis();
+    [
+        omega[0],
+        omega[1],
+        omega[2],
+        ext.translation[0],
+        ext.translation[1],
+        ext.translation[2],
+    ]
+}
+
+fn params_to_extrinsics(params: &[f64; 6]) -> CameraExtrinsics {
+    let rot = Rotation3::new(Vector3::new(params[0], params[1], params[2])).into_inner();
+    let t = Vector3::new(params[3], params[4], params[5]);
+    CameraExtrinsics::new(rot, t)
+}
+
+fn project_point(intrinsics: &CameraIntrinsics, ext: &CameraExtrinsics, p: &Point3<f64>) -> Point2<f64> {
+    let pc = ext.rotation * p.coords + ext.translation;
+    Point2::new(
+        intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx,
+        intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy,
+    )
 }
 
 fn sample_unique_indices(n: usize, k: usize, seed: u64) -> Vec<usize> {
@@ -2236,6 +2326,46 @@ mod tests {
         }
         assert!(cnt > 0);
         assert!(sum / cnt as f64 <= 1.0);
+    }
+
+    #[test]
+    fn solve_pnp_refine_reduces_reprojection_error() {
+        let k = CameraIntrinsics::new(700.0, 705.0, 320.0, 240.0, 640, 480);
+        let gt = CameraExtrinsics::new(
+            Rotation3::from_euler_angles(-0.05, 0.06, 0.02).into_inner(),
+            Vector3::new(0.12, -0.03, 0.28),
+        );
+        let initial = CameraExtrinsics::new(
+            Rotation3::from_euler_angles(-0.01, 0.02, 0.03).into_inner(),
+            Vector3::new(0.2, 0.02, 0.4),
+        );
+
+        let mut world = Vec::new();
+        for i in 0..40usize {
+            let x = ((i * 13 % 17) as f64 - 8.0) * 0.06;
+            let y = ((i * 7 % 19) as f64 - 9.0) * 0.05;
+            let z = 2.4 + ((i * 11 % 23) as f64) * 0.08;
+            world.push(Point3::new(x, y, z));
+        }
+        let pixels: Vec<Point2<f64>> = world.iter().map(|p| project_point(&k, &gt, p)).collect();
+
+        let err_before = world
+            .iter()
+            .zip(pixels.iter())
+            .map(|(w, p)| (project_point(&k, &initial, w) - p).norm())
+            .sum::<f64>()
+            / world.len() as f64;
+
+        let refined = solve_pnp_refine(&initial, &world, &pixels, &k, 25).unwrap();
+        let err_after = world
+            .iter()
+            .zip(pixels.iter())
+            .map(|(w, p)| (project_point(&k, &refined, w) - p).norm())
+            .sum::<f64>()
+            / world.len() as f64;
+
+        assert!(err_after < err_before * 0.2);
+        assert!(err_after < 0.5);
     }
 
     #[test]
