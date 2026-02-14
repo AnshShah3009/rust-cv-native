@@ -9,6 +9,7 @@ pub mod block_matching;
 pub mod sgm;
 pub mod depth;
 pub mod rectification;
+pub mod calib3d;
 mod parallel;
 
 #[cfg(feature = "gpu")]
@@ -18,6 +19,7 @@ pub use block_matching::*;
 pub use sgm::*;
 pub use depth::*;
 pub use rectification::*;
+pub use calib3d::*;
 
 #[cfg(feature = "gpu")]
 pub use gpu::*;
