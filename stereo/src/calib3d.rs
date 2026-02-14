@@ -5,6 +5,7 @@ use nalgebra::{
     DMatrix, Matrix2, Matrix3, Matrix3x4, Matrix4, Point2, Point3, SymmetricEigen, Vector2,
     Vector3,
 };
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct StereoRectifyMatrices {
@@ -29,6 +30,20 @@ pub struct StereoCalibrationResult {
     pub relative_extrinsics: CameraExtrinsics,
     pub essential_matrix: Matrix3<f64>,
     pub fundamental_matrix: Matrix3<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CalibrationFileReport {
+    pub total_images: usize,
+    pub used_images: usize,
+    pub rejected_images: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StereoCalibrationFileReport {
+    pub total_pairs: usize,
+    pub used_pairs: usize,
+    pub rejected_pairs: Vec<usize>,
 }
 
 pub fn generate_chessboard_object_points(
@@ -92,11 +107,17 @@ pub fn calibrate_camera_planar(
     }
 
     let rms = compute_rms_reprojection(&intrinsics, &extrinsics, object_points, image_points)?;
-    Ok(CameraCalibrationResult {
+    let result = CameraCalibrationResult {
         intrinsics,
         extrinsics,
         rms_reprojection_error: rms,
-    })
+    };
+    if !is_valid_camera_calibration(&result) {
+        return Err(StereoError::InvalidParameters(
+            "calibrate_camera_planar produced non-finite or degenerate calibration".to_string(),
+        ));
+    }
+    Ok(result)
 }
 
 pub fn calibrate_camera_from_chessboard_images(
@@ -134,6 +155,76 @@ pub fn calibrate_camera_from_chessboard_images(
     }
 
     calibrate_camera_planar(&object_points, &image_points, (w, h))
+}
+
+pub fn calibrate_camera_from_chessboard_files<P: AsRef<Path>>(
+    image_paths: &[P],
+    pattern_size: (usize, usize),
+    square_size: f64,
+) -> Result<(CameraCalibrationResult, CalibrationFileReport)> {
+    if image_paths.is_empty() {
+        return Err(StereoError::InvalidParameters(
+            "calibration file list cannot be empty".to_string(),
+        ));
+    }
+
+    let board = generate_chessboard_object_points(pattern_size, square_size);
+    let mut object_points = Vec::new();
+    let mut image_points = Vec::new();
+    let mut rejected = Vec::new();
+    let mut expected_dims = None;
+
+    for (idx, path) in image_paths.iter().enumerate() {
+        let img = match image::open(path) {
+            Ok(i) => i.to_luma8(),
+            Err(_) => {
+                rejected.push(idx);
+                continue;
+            }
+        };
+
+        if let Some((w, h)) = expected_dims {
+            if img.dimensions() != (w, h) {
+                rejected.push(idx);
+                continue;
+            }
+        } else {
+            expected_dims = Some(img.dimensions());
+        }
+
+        match find_chessboard_corners(&img, pattern_size) {
+            Ok(corners) => {
+                object_points.push(board.clone());
+                image_points.push(corners);
+            }
+            Err(_) => rejected.push(idx),
+        }
+    }
+
+    if object_points.len() < 3 {
+        return Err(StereoError::InvalidParameters(format!(
+            "need at least 3 valid chessboard images, found {}",
+            object_points.len()
+        )));
+    }
+    let dims = expected_dims.ok_or_else(|| {
+        StereoError::InvalidParameters("no readable images in provided file list".to_string())
+    })?;
+
+    let calib = calibrate_camera_planar(&object_points, &image_points, dims).map_err(|e| {
+        StereoError::InvalidParameters(format!(
+            "camera calibration failed for file subset (used {} / {} images): {}",
+            object_points.len(),
+            image_paths.len(),
+            e
+        ))
+    })?;
+    let report = CalibrationFileReport {
+        total_images: image_paths.len(),
+        used_images: object_points.len(),
+        rejected_images: rejected,
+    };
+    Ok((calib, report))
 }
 
 pub fn stereo_calibrate_planar(
@@ -250,6 +341,85 @@ pub fn stereo_calibrate_from_chessboard_images(
     }
 
     stereo_calibrate_planar(&object_points, &left_points, &right_points, (w, h))
+}
+
+pub fn stereo_calibrate_from_chessboard_files<P: AsRef<Path>>(
+    left_paths: &[P],
+    right_paths: &[P],
+    pattern_size: (usize, usize),
+    square_size: f64,
+) -> Result<(StereoCalibrationResult, StereoCalibrationFileReport)> {
+    if left_paths.len() != right_paths.len() || left_paths.is_empty() {
+        return Err(StereoError::InvalidParameters(
+            "left/right file lists must be non-empty and equal-sized".to_string(),
+        ));
+    }
+
+    let board = generate_chessboard_object_points(pattern_size, square_size);
+    let mut object_points = Vec::new();
+    let mut left_points = Vec::new();
+    let mut right_points = Vec::new();
+    let mut rejected = Vec::new();
+    let mut expected_dims = None;
+
+    for i in 0..left_paths.len() {
+        let left = image::open(&left_paths[i]).map(|v| v.to_luma8());
+        let right = image::open(&right_paths[i]).map(|v| v.to_luma8());
+        let (left, right) = match (left, right) {
+            (Ok(l), Ok(r)) => (l, r),
+            _ => {
+                rejected.push(i);
+                continue;
+            }
+        };
+
+        if let Some((w, h)) = expected_dims {
+            if left.dimensions() != (w, h) || right.dimensions() != (w, h) {
+                rejected.push(i);
+                continue;
+            }
+        } else {
+            expected_dims = Some(left.dimensions());
+        }
+
+        let cl = find_chessboard_corners(&left, pattern_size);
+        let cr = find_chessboard_corners(&right, pattern_size);
+        if let (Ok(pl), Ok(pr)) = (cl, cr) {
+            object_points.push(board.clone());
+            left_points.push(pl);
+            right_points.push(pr);
+        } else {
+            rejected.push(i);
+        }
+    }
+
+    if object_points.len() < 3 {
+        return Err(StereoError::InvalidParameters(format!(
+            "need at least 3 valid stereo pairs, found {}",
+            object_points.len()
+        )));
+    }
+    let dims = expected_dims.ok_or_else(|| {
+        StereoError::InvalidParameters("no readable stereo pairs in provided file lists".to_string())
+    })?;
+
+    let calib =
+        stereo_calibrate_planar(&object_points, &left_points, &right_points, dims).map_err(
+            |e| {
+                StereoError::InvalidParameters(format!(
+                    "stereo calibration failed for file subset (used {} / {} pairs): {}",
+                    object_points.len(),
+                    left_paths.len(),
+                    e
+                ))
+            },
+        )?;
+    let report = StereoCalibrationFileReport {
+        total_pairs: left_paths.len(),
+        used_pairs: object_points.len(),
+        rejected_pairs: rejected,
+    };
+    Ok((calib, report))
 }
 
 pub fn find_chessboard_corners(
@@ -1115,6 +1285,23 @@ fn compute_rms_reprojection(
     Ok((sq_sum / count as f64).sqrt())
 }
 
+fn is_valid_camera_calibration(result: &CameraCalibrationResult) -> bool {
+    let k = &result.intrinsics;
+    let intrinsics_valid = k.fx.is_finite()
+        && k.fy.is_finite()
+        && k.cx.is_finite()
+        && k.cy.is_finite()
+        && k.fx.abs() > 1e-12
+        && k.fy.abs() > 1e-12;
+    if !intrinsics_valid || !result.rms_reprojection_error.is_finite() {
+        return false;
+    }
+
+    result.extrinsics.iter().all(|ext| {
+        ext.rotation.iter().all(|v| v.is_finite()) && ext.translation.iter().all(|v| v.is_finite())
+    })
+}
+
 pub fn refine_camera_calibration_iterative(
     initial: &CameraCalibrationResult,
     object_points: &[Vec<Point3<f64>>],
@@ -1564,8 +1751,11 @@ pub fn recover_pose_from_essential(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cv_imgproc::{warp_perspective_ex, BorderMode, Interpolation};
     use image::Luma;
     use nalgebra::Rotation3;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn project_point(k: &CameraIntrinsics, ext: &CameraExtrinsics, p: &Point3<f64>) -> Point2<f64> {
         let pc = ext.rotation * p.coords + ext.translation;
@@ -1611,6 +1801,38 @@ mod tests {
             }
         }
         (img, gt)
+    }
+
+    fn synthetic_checkerboard_fixed(
+        pattern: (usize, usize),
+        square: u32,
+        width: u32,
+        height: u32,
+        offset_x: u32,
+        offset_y: u32,
+    ) -> GrayImage {
+        let (cols, rows) = pattern;
+        let squares_x = cols as u32 + 1;
+        let squares_y = rows as u32 + 1;
+        let mut img = GrayImage::from_pixel(width, height, Luma([180]));
+
+        for sy in 0..squares_y {
+            for sx in 0..squares_x {
+                let is_black = (sx + sy) % 2 == 0;
+                let val = if is_black { 30u8 } else { 220u8 };
+                let x0 = offset_x + sx * square;
+                let y0 = offset_y + sy * square;
+                if x0 + square > width || y0 + square > height {
+                    continue;
+                }
+                for y in y0..(y0 + square) {
+                    for x in x0..(x0 + square) {
+                        img.put_pixel(x, y, Luma([val]));
+                    }
+                }
+            }
+        }
+        img
     }
 
     #[test]
@@ -1953,5 +2175,62 @@ mod tests {
         corner_subpix(&img, &mut p, 4, 40, 1e-4).unwrap();
         let after = (p[0] - gt[10]).norm();
         assert!(after < before);
+    }
+
+    #[test]
+    fn calibrate_camera_from_chessboard_files_reports_usage() {
+        let pattern = (7, 6);
+        let mut paths: Vec<PathBuf> = Vec::new();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        let base = synthetic_checkerboard_fixed(pattern, 16, 320, 240, 70, 50);
+        let transforms = [
+            Matrix3::new(1.00, 0.00, 0.0, 0.00, 1.00, 0.0, 0.0000, 0.0000, 1.0),
+            Matrix3::new(0.92, -0.03, 14.0, 0.04, 1.00, -9.0, 0.0024, -0.0012, 1.0),
+            Matrix3::new(1.06, 0.06, -20.0, -0.03, 0.94, 13.0, -0.0020, 0.0015, 1.0),
+            Matrix3::new(0.89, 0.02, 18.0, -0.05, 1.08, 8.0, 0.0016, 0.0021, 1.0),
+            Matrix3::new(1.04, -0.07, -15.0, 0.03, 0.90, -7.0, -0.0018, -0.0013, 1.0),
+            Matrix3::new(0.95, 0.05, 10.0, 0.02, 1.04, 6.0, 0.0012, -0.0020, 1.0),
+        ];
+
+        for (i, m) in transforms.iter().enumerate() {
+            let img = warp_perspective_ex(
+                &base,
+                m,
+                320,
+                240,
+                Interpolation::Linear,
+                BorderMode::Constant(180),
+            );
+            let p = std::env::temp_dir().join(format!(
+                "rustcv_calib_{}_{}_{}.png",
+                std::process::id(),
+                stamp,
+                i
+            ));
+            img.save(&p).unwrap();
+            paths.push(p);
+        }
+
+        paths.push(std::env::temp_dir().join(format!(
+            "rustcv_calib_missing_{}_{}.png",
+            std::process::id(),
+            stamp
+        )));
+
+        let (calib, report) =
+            calibrate_camera_from_chessboard_files(&paths, pattern, 0.04).unwrap();
+        assert_eq!(report.total_images, 7);
+        assert!(report.used_images >= 3);
+        assert!(!report.rejected_images.is_empty());
+        assert!(calib.intrinsics.fx.is_finite() && calib.intrinsics.fy.is_finite());
+        assert!(calib.intrinsics.fx.abs() > 1e-6 && calib.intrinsics.fy.abs() > 1e-6);
+
+        for p in paths {
+            let _ = std::fs::remove_file(p);
+        }
     }
 }
