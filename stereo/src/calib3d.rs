@@ -631,6 +631,110 @@ pub fn solve_pnp_dlt(
     Ok(CameraExtrinsics::new(r, t))
 }
 
+pub fn project_points(
+    object_points: &[Point3<f64>],
+    intrinsics: &CameraIntrinsics,
+    extrinsics: &CameraExtrinsics,
+) -> Result<Vec<Point2<f64>>> {
+    let mut out = Vec::with_capacity(object_points.len());
+    for p in object_points {
+        let pc = extrinsics.rotation * p.coords + extrinsics.translation;
+        if !pc.iter().all(|v| v.is_finite()) || pc[2].abs() <= 1e-12 {
+            return Err(StereoError::InvalidParameters(
+                "project_points encountered non-finite or near-zero depth point".to_string(),
+            ));
+        }
+        out.push(Point2::new(
+            intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx,
+            intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy,
+        ));
+    }
+    Ok(out)
+}
+
+pub fn solve_pnp_ransac(
+    object_points: &[Point3<f64>],
+    image_points: &[Point2<f64>],
+    intrinsics: &CameraIntrinsics,
+    reprojection_threshold_px: f64,
+    max_iters: usize,
+) -> Result<(CameraExtrinsics, Vec<bool>)> {
+    if object_points.len() != image_points.len() || object_points.len() < 6 {
+        return Err(StereoError::InvalidParameters(
+            "solve_pnp_ransac needs >=6 paired points".to_string(),
+        ));
+    }
+    if reprojection_threshold_px <= 0.0 {
+        return Err(StereoError::InvalidParameters(
+            "reprojection_threshold_px must be > 0".to_string(),
+        ));
+    }
+
+    let n = object_points.len();
+    let sample_k = 6usize;
+    let iters = max_iters.max(64);
+    let mut best_pose = None;
+    let mut best_inliers = vec![false; n];
+    let mut best_count = 0usize;
+    let mut best_error = f64::INFINITY;
+
+    for i in 0..iters {
+        let idx = sample_unique_indices(n, sample_k, i as u64 + 11);
+        let sample_obj: Vec<Point3<f64>> = idx.iter().map(|&j| object_points[j]).collect();
+        let sample_img: Vec<Point2<f64>> = idx.iter().map(|&j| image_points[j]).collect();
+
+        let pose = match solve_pnp_dlt(&sample_obj, &sample_img, intrinsics) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let mut inliers = vec![false; n];
+        let mut count = 0usize;
+        let mut sum_err = 0.0f64;
+        for j in 0..n {
+            let err = reprojection_error_px(&pose, intrinsics, &object_points[j], &image_points[j]);
+            if err.is_finite() && err <= reprojection_threshold_px {
+                inliers[j] = true;
+                count += 1;
+                sum_err += err;
+            }
+        }
+        if count == 0 {
+            continue;
+        }
+        let mean_err = sum_err / count as f64;
+        if count > best_count || (count == best_count && mean_err < best_error) {
+            best_pose = Some(pose);
+            best_inliers = inliers;
+            best_count = count;
+            best_error = mean_err;
+        }
+    }
+
+    let best_pose = best_pose.ok_or_else(|| {
+        StereoError::InvalidParameters("RANSAC failed to estimate PnP pose".to_string())
+    })?;
+
+    let inlier_obj: Vec<Point3<f64>> = object_points
+        .iter()
+        .zip(best_inliers.iter())
+        .filter_map(|(p, &m)| if m { Some(*p) } else { None })
+        .collect();
+    let inlier_img: Vec<Point2<f64>> = image_points
+        .iter()
+        .zip(best_inliers.iter())
+        .filter_map(|(p, &m)| if m { Some(*p) } else { None })
+        .collect();
+
+    let refined_pose = if inlier_obj.len() >= 6 {
+        solve_pnp_dlt(&inlier_obj, &inlier_img, intrinsics).unwrap_or(best_pose)
+    } else {
+        best_pose
+    };
+
+    Ok((refined_pose, best_inliers))
+}
+
 pub fn essential_from_extrinsics(extrinsics: &CameraExtrinsics) -> Matrix3<f64> {
     skew_symmetric(&extrinsics.translation) * extrinsics.rotation
 }
@@ -1069,6 +1173,21 @@ fn sampson_error(e: &Matrix3<f64>, p1: &Point2<f64>, p2: &Point2<f64>) -> f64 {
     } else {
         (x2tex1 * x2tex1) / denom
     }
+}
+
+fn reprojection_error_px(
+    extrinsics: &CameraExtrinsics,
+    intrinsics: &CameraIntrinsics,
+    object_point: &Point3<f64>,
+    image_point: &Point2<f64>,
+) -> f64 {
+    let pc = extrinsics.rotation * object_point.coords + extrinsics.translation;
+    if !pc.iter().all(|v| v.is_finite()) || pc[2].abs() <= 1e-12 {
+        return f64::INFINITY;
+    }
+    let u = intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx;
+    let v = intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy;
+    ((u - image_point.x).powi(2) + (v - image_point.y).powi(2)).sqrt()
 }
 
 fn sample_unique_indices(n: usize, k: usize, seed: u64) -> Vec<usize> {
@@ -1896,6 +2015,70 @@ mod tests {
             .sum::<f64>()
             / world.len() as f64;
         assert!(reproj_err < 1e-6);
+    }
+
+    #[test]
+    fn project_points_matches_manual_projection() {
+        let k = CameraIntrinsics::new(520.0, 515.0, 320.0, 240.0, 640, 480);
+        let ext = CameraExtrinsics::new(
+            Rotation3::from_euler_angles(0.05, -0.08, 0.03).into_inner(),
+            Vector3::new(0.1, -0.03, 0.2),
+        );
+        let world = vec![
+            Point3::new(-0.2, -0.1, 2.0),
+            Point3::new(0.3, 0.2, 3.5),
+            Point3::new(0.1, -0.25, 4.0),
+        ];
+
+        let proj = project_points(&world, &k, &ext).unwrap();
+        assert_eq!(proj.len(), world.len());
+        for (p3, pix) in world.iter().zip(proj.iter()) {
+            let expected = project_point(&k, &ext, p3);
+            assert!((expected - pix).norm() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn solve_pnp_ransac_handles_outliers() {
+        let k = CameraIntrinsics::new(700.0, 705.0, 320.0, 240.0, 640, 480);
+        let gt = CameraExtrinsics::new(
+            Rotation3::from_euler_angles(-0.06, 0.04, 0.08).into_inner(),
+            Vector3::new(0.15, -0.04, 0.3),
+        );
+
+        let mut world = Vec::new();
+        for i in 0..96usize {
+            let x = ((i * 17 % 29) as f64 - 14.0) * 0.04;
+            let y = ((i * 11 % 23) as f64 - 11.0) * 0.05;
+            let z = 2.5 + ((i * 7 % 31) as f64) * 0.06;
+            world.push(Point3::new(x, y, z));
+        }
+        let mut pixels: Vec<Point2<f64>> = world.iter().map(|p| project_point(&k, &gt, p)).collect();
+        for i in (0..pixels.len()).step_by(8) {
+            pixels[i].x += 35.0;
+            pixels[i].y -= 28.0;
+        }
+
+        let (est, inliers) = solve_pnp_ransac(&world, &pixels, &k, 2.0, 500).unwrap();
+        let inlier_count = inliers.iter().filter(|&&v| v).count();
+        assert!(inlier_count >= 70);
+
+        let t_err = (est.translation - gt.translation).norm();
+        let r_err = (est.rotation - gt.rotation).norm();
+        assert!(t_err < 0.08);
+        assert!(r_err < 0.08);
+
+        let projected = project_points(&world, &k, &est).unwrap();
+        let mut sum = 0.0f64;
+        let mut cnt = 0usize;
+        for i in 0..world.len() {
+            if inliers[i] {
+                sum += (projected[i] - pixels[i]).norm();
+                cnt += 1;
+            }
+        }
+        assert!(cnt > 0);
+        assert!(sum / cnt as f64 <= 1.0);
     }
 
     #[test]
