@@ -1,0 +1,32 @@
+[package]
+name = "rust-cv-native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Native Rust computer vision library with multi-backend acceleration"
+
+[workspace]
+resolver = "2"
+members = [
+    "hal",
+    "core",
+    "imgproc",
+    "features",
+    "geometry",
+    "ml",
+    "examples",
+]
+
+[workspace.dependencies]
+rayon = "1.10"
+nalgebra = "0.33"
+image = "0.25"
+wgpu = "0.28"
+ort = "2.0"
+wide = "0.7"
+pulp = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

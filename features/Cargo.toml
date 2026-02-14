@@ -1,0 +1,18 @@
+[package]
+name = "cv-features"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Feature detection and description algorithms"
+
+[dependencies]
+cv-core = { path = "../core" }
+cv-imgproc = { path = "../imgproc" }
+cv-hal = { path = "../hal" }
+nalgebra = { workspace = true }
+rayon = { workspace = true }
+
+thiserror = "2.0"
+
+[dev-dependencies]
+criterion = "0.5"

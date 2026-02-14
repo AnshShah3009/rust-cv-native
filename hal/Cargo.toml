@@ -1,0 +1,22 @@
+[package]
+name = "cv-hal"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Hardware Abstraction Layer for multi-backend acceleration"
+
+[dependencies]
+cv-core = { path = "../core" }
+rayon = { workspace = true }
+nalgebra = { workspace = true }
+
+[target.'cfg(not(target_arch = "spirv"))'.dependencies]
+wide = { workspace = true }
+pulp = { workspace = true }
+
+[features]
+default = ["cpu", "simd"]
+cuda = ["ort/cuda"]
+tensorrt = ["ort/tensorrt"]
+directml = ["ort/directml"]
+webgpu = []
