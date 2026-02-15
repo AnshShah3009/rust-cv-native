@@ -6,3 +6,6 @@ Cargo.lock
 *.swp
 *.swo
 *~
+
+# Rerun
+*.rrd
