@@ -4,7 +4,7 @@
 //! using the ONNX Runtime.
 
 use std::fmt::Debug;
-use ort::session::{Session, builder::SessionBuilder};
+use ort::session::Session;
 
 pub type Result<T> = std::result::Result<T, DnnError>;
 
@@ -18,14 +18,14 @@ pub enum DnnError {
 }
 
 pub struct Net {
-    session: Session,
+    _session: Session,
 }
 
 impl Net {
     pub fn from_file(path: &str) -> Result<Self> {
         let session = Session::builder()?
             .commit_from_file(path)?;
-        Ok(Self { session })
+        Ok(Self { _session: session })
     }
 
     pub fn forward(&mut self, _input_blob: &[f32]) -> Result<Vec<f32>> {

@@ -3,10 +3,10 @@
 //! Rectify stereo image pairs so that epipolar lines are horizontal
 //! and aligned, making stereo matching much simpler.
 
-use crate::{Result, StereoError};
+use crate::Result;
 use cv_core::{CameraExtrinsics, CameraIntrinsics};
-use image::{GrayImage, RgbImage};
-use nalgebra::{Matrix3, Matrix4, Vector3};
+use image::GrayImage;
+use nalgebra::{Matrix3, Vector3};
 
 /// Stereo rectification result
 #[derive(Debug, Clone)]
@@ -106,14 +106,13 @@ fn compute_rectification_transforms(
 
 /// Compute rotation matrix for rectification
 fn compute_rectification_rotation(
-    relative_rotation: &Matrix3<f64>,
+    _relative_rotation: &Matrix3<f64>,
     relative_translation: &Vector3<f64>,
 ) -> Matrix3<f64> {
     // Simplified rectification - make epipole go to infinity
     // Full implementation would use Bouguet's algorithm
 
     let t = relative_translation.normalize();
-    let r = relative_rotation;
 
     // New x-axis: translation direction
     let e1 = t;

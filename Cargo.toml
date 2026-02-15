@@ -42,7 +42,7 @@ members = [
     "photo",
     "dnn",
     "sfm",
-    "slam",
+    "slam", "runtime", "optimize", "scientific", "python",
 ]
 
 [workspace.dependencies]
@@ -55,6 +55,8 @@ wide = "0.7"
 pulp = "0.5"
 thiserror = "2.0"
 criterion = "0.5"
+core_affinity = "0.8"
+ndarray = "0.15"
 
 [profile.release]
 opt-level = 3

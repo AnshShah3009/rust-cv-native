@@ -240,3 +240,46 @@ impl Default for Distortion {
         Self::none()
     }
 }
+
+/// A simple axis-aligned rectangle (Bounding Box)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Rect {
+    pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self { x, y, w, h }
+    }
+
+    pub fn x1(&self) -> f32 { self.x }
+    pub fn y1(&self) -> f32 { self.y }
+    pub fn x2(&self) -> f32 { self.x + self.w }
+    pub fn y2(&self) -> f32 { self.y + self.h }
+
+    pub fn area(&self) -> f32 {
+        self.w * self.h
+    }
+
+    /// Intersection over Union (IoU) between two rectangles.
+    pub fn iou(&self, other: &Rect) -> f32 {
+        let x1 = self.x1().max(other.x1());
+        let y1 = self.y1().max(other.y1());
+        let x2 = self.x2().min(other.x2());
+        let y2 = self.y2().min(other.y2());
+
+        let w = (x2 - x1).max(0.0);
+        let h = (y2 - y1).max(0.0);
+        let intersection = w * h;
+
+        if intersection == 0.0 {
+            return 0.0;
+        }
+
+        let union = self.area() + other.area() - intersection;
+        intersection / union
+    }
+}

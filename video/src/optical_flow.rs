@@ -66,7 +66,6 @@ impl LucasKanade {
         }
 
         // Compute spatial gradients in prev_frame
-        let (mut ix_sum, mut iy_sum, mut it_sum) = (0.0f32, 0.0f32, 0.0f32);
         let mut a: Matrix2<f64> = Matrix2::zeros();
         let mut b: Vector2<f64> = Vector2::zeros();
 
@@ -315,12 +314,14 @@ impl Farneback {
 /// Polynomial expansion coefficients (A, B, C, D, E, F) for:
 /// f(x,y) ~ Ax^2 + Bxy + Cy^2 + Dx + Ey + F
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct PolyCoeffs(f32, f32, f32, f32, f32, f32);
 
 /// Polynomial expansion result
 struct PolynomialExpansion {
     coeffs: Vec<PolyCoeffs>,
     width: u32,
+    #[allow(dead_code)]
     height: u32,
 }
 
@@ -345,7 +346,6 @@ fn polynomial_expansion(img: &GrayImage, poly_n: usize, sigma: f32) -> Polynomia
     for y in 0..height {
         for x in 0..width {
             // Fit quadratic polynomial in neighborhood using weighted least squares
-            let mut g = [0.0f32; 6]; // [x^2, xy, y^2, x, y, 1]
             let mut a = [[0.0f32; 6]; 6];
             let mut b = [0.0f32; 6];
 

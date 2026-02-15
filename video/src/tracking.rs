@@ -3,7 +3,6 @@
 //! Various tracking methods for following objects in video sequences
 
 use crate::Result;
-use cv_core::KeyPoint;
 use image::GrayImage;
 
 /// Tracker interface

@@ -1,5 +1,4 @@
 use nalgebra::Point3;
-use cv_core::KeyPoint;
 
 pub struct MapPoint {
     pub position: Point3<f64>,
@@ -20,5 +19,16 @@ impl Map {
 
     pub fn add_point(&mut self, point: MapPoint) {
         self.points.push(point);
+    }
+
+    pub fn get_descriptors(&self) -> cv_features::Descriptors {
+        let mut descs = cv_features::Descriptors::new();
+        for p in &self.points {
+            descs.push(cv_features::Descriptor::new(
+                p.descriptor.clone(),
+                cv_core::KeyPoint::default(), // Placeholder keypoint
+            ));
+        }
+        descs
     }
 }

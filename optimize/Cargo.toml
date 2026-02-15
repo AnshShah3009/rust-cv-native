@@ -1,0 +1,9 @@
+[package]
+name = "cv-optimize"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nalgebra = { workspace = true }
+cv-core = { path = "../core" }
+thiserror = { workspace = true }

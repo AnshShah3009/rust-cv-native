@@ -26,7 +26,7 @@ Building a **native Rust computer vision library** as a complete replacement for
 
 ---
 
-## Current Status: Phase 1 Foundations (40% Feature Parity)
+## Current Status: Phase 10 Python Bindings (Completed)
 
 ### ✅ Completed Modules (9 Crates)
 
@@ -47,11 +47,37 @@ Building a **native Rust computer vision library** as a complete replacement for
 
 ### ✅ Completed Modules (7 Crates)
 
+#### [NEW] 10. **cv-sfm** - Structure from Motion
+
+- **Location:** `sfm/src/`
+- **Implemented:** Triangulation (DLT), Bundle Adjustment.
+
+#### [NEW] 11. **cv-slam** - Simultaneous Localization and Mapping
+
+- **Location:** `slam/src/`
+- **Implemented:** Tracking, Mapping, Keyframes.
+
+#### [NEW] 12. **cv-dnn** - Deep Learning (Skeleton)
+
+- **Location:** `dnn/src/`
+- **Implemented:** Basic Blob structures.
+
+#### [NEW] 13. **cv-optimize** - Optimization Framework
+
+- **Location:** `optimize/src/`
+- **Implemented:** Basic graph solver structures.
+
+#### [NEW] 14. **cv-photo** - Computational Photography
+
+- **Location:** `photo/src/`
+- **Implemented:** Bilateral Filter. Stitching skeleton.
+
 #### 1. **cv-core** - Core Data Structures
 
-**Location:** `core/src/`
-
-**Implemented:**
+- **Location:** `core/src/`
+- **Docs:** `core/README.md`
+- **Status:** **Stable**
+- **Features:** `ImageBuffer`, `Tensor`, `KeyPoint`, `Match`, `CameraModel`, `StereoBlock`, `Rect`, `PointCloud`.
 
 - `ImageBuffer<T>` - Generic image container with channel support
 - `CvImage` trait - Common interface for image operations
@@ -346,6 +372,26 @@ cargo bench
   - Hamming distance matching: ArUco (exact match), AprilTag (up to 1-bit error)
   - Next steps: perspective robustness, multi-scale detection, blur/noise handling
 
+#### 2. **cv-scientific** - Geometric Algorithms
+
+- **Location:** `scientific/src/`
+- **Docs:** `scientific/README.md`
+- **Status:** **Implemented**
+- **Features:**
+  - `SpatialIndex` (R-tree)
+  - `convex_hull`, `simplify`
+  - `buffer` (offset polygons)
+  - `iou`, `polygon_iou`
+  - **[NEW] Point Cloud Processing:** `voxel_down_sample`, `estimate_normals`, PLY I/O.
+- **Geometry:**
+  - `vectorized_iou`: High-performance Intersection over Union for bounding boxes using `ndarray`.
+  - `SpatialIndex`: R-Tree based spatial indexing via `rstar` with `contains` and `intersects` predicates.
+  - Advanced Operations: `buffer` (geo-buffer), `convex_hull`, `simplify`.
+  - Python bindings exposed via `cv_scientific` (partially deferred).
+- **Math Utilities:**
+  - Basic statistics (mean, std).
+  - Interpolation (1D lerp, interp1d).
+
 ### calib3d Parity Expansion
 
 - Merged `e848667` (`feature/calib3d-file-wrappers-stability`)
@@ -360,6 +406,19 @@ cargo bench
   - Added `project_points_with_distortion(...)`
   - Added `undistort_image(...)`
 
+### Phase 10: Python Bindings and Ecosystem (February 15, 2026)
+
+- **Native Python Extension (`cv_native`)**:
+  - Implemented high-performance bindings using PyO3 0.21.
+  - Support for `gaussian_blur`, `detect_orb`, `match_descriptors`, and `SlamSystem`.
+  - Zero-copy data exchange via NumPy arrays.
+- **Resource Management**:
+  - Introduced the `@resource_group` decorator for steered thread scheduling.
+  - Allows Python users to manage compute resources for intensive Rust-backed tasks.
+- **Ecosystem Integration**:
+  - Integrated `shapely` for efficient 2D spatial analysis and geometric predicates.
+  - Verified end-to-end pipeline in a specialized Conda environment.
+
 ### Current Validation Snapshot (February 15, 2026 - P0 Complete)
 
 - ✅ `cargo build --features gpu` - Successful (debug & release)
@@ -372,7 +431,17 @@ cargo bench
 - ✅ **P0 COMPLETE: Unified Rayon thread pool initialization** - respects RUSTCV_CPU_THREADS
 - ✅ **P0 COMPLETE: GPU memory budgeting** - respects RUSTCV_GPU_MAX_BYTES, shared cv-hal helpers
 - ✅ **P0 COMPLETE: GPU adapter policies documented** - respects RUSTCV_GPU_ADAPTER
+- ✅ **P0 COMPLETE: GPU adapter policies documented** - respects RUSTCV_GPU_ADAPTER
 - GPU tests may show `libEGL` permission warnings in restricted environments; tests still pass.
+
+### Shapely-in-Rust Geometry (February 15, 2026)
+
+- **Advanced Geometric Operations (`cv-scientific`):**
+  - **Spatial Indexing:** Added `SpatialIndex` struct backed by R-Tree (`rstar`), enabling fast spatial queries.
+  - **Predicates:** Implemented `contains` (point-in-polygon) and `intersects` (polygon-polygon) queries.
+  - **Advanced Ops:** Added `convex_hull`, `simplify` (RDP), and `buffer` (offset polygons).
+  - **Euclidean Distance:** Implemented point-to-polygon distance for nearest-neighbor search.
+- **Verification:** Native Rust tests (`cargo test -p cv-scientific`) verify all new operations.
 
 ---
 
@@ -504,21 +573,39 @@ cargo bench
          └──────────────────┼──────────────────┘
                             ▼
                   ┌──────────────┐
-                  │ cv-imgproc   │
-                  │              │
-                  │ Blur, Edges  │
-                  │ Color, Morph │
-                  └──────────────┘
-                            │
-         ┌──────────────────┴──────────────────┐
-         ▼                                      ▼
-┌──────────────┐                      ┌──────────────┐
-│   cv-hal     │                      │   cv-core    │
-│              │                      │              │
-│ CPU Backend  │                      │ ImageBuffer  │
-│ GPU Backend  │                      │ KeyPoint     │
-│ DeviceManager│                      │ Tensor       │
-└──────────────┘                      └──────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        High-Level Systems                               │
+│          ┌───────────────┐              ┌───────────────┐               │
+│          │    cv-slam    │              │    cv-sfm     │               │
+│          └───────┬───────┘              └───────┬───────┘               │
+└──────────────────┼──────────────────────────────┼───────────────────────┘
+                   │                              │
+                   ▼                              ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Algorithm Modules                                │
+│ ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
+│ │ features │  │  stereo  │  │  video   │  │ calib3d  │  │   dnn    │    │
+│ └──────────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
+└──────────────────────────────────┬──────────────────────────────────────┘
+                                   │
+                 ┌─────────────────┴─────────────────┐
+                 ▼                                   ▼
+       ┌──────────────────┐                 ┌────────────────────┐
+       │   cv-imgproc     │                 │    cv-videoio      │
+       │ (Image Process)  │                 │  (Capture/Codec)   │
+       └─────────┬────────┘                 └──────────┬─────────┘
+                 │                                     │
+                 ▼                                     ▼
+       ┌──────────────────┐                 ┌────────────────────┐
+       │      cv-hal      │                 │     cv-optimize    │
+       │  (Execution Mgr) │<───────────────>│   (Graph/Solvers)  │
+       └─────────┬────────┘                 └──────────┬─────────┘
+                 │                                     │
+                 ▼                                     ▼
+       ┌──────────────────┐                 ┌────────────────────┐
+       │     cv-core      │                 │   cv-scientific    │
+       │ (Data Structures)│                 │  (Geometry/Math)   │
+       └──────────────────┘                 └────────────────────┘
 ```
 
 ---
@@ -633,12 +720,10 @@ cargo test --workspace
 
 #### ❌ **Missing (High Priority)**
 
-**Video I/O:**
+#### [PARTIAL] **Video I/O (cv-videoio):**
 
-- Video capture from cameras/files
-- Video encoding (H.264, VP9, AV1)
-- Streaming support (RTSP, WebRTC)
-- Frame buffering and synchronization
+- **Implemented:** Traits and basic backend skeletons.
+- **Missing:** Robust FFmpeg/GStreamer integration, encoding support.
 
 **Advanced Features:**
 
@@ -654,26 +739,21 @@ cargo test --workspace
 - **QR code detection:** Barcode reading
 - **ArUco markers:** Fiducial marker detection
 
-**Camera Calibration:**
+#### [IMPLEMENTED] **Camera Calibration (cv-calib3d):**
 
-- **Checkerboard pattern detection**
-- **Intrinsic parameter estimation**
-- **Extrinsic calibration** (multi-camera)
-- **Bundle adjustment** (optimization)
+- **Implemented:** Chessboard detection, PnP (RANSAC), Intrinsic calibration, Undistortion.
+- **Missing:** Multi-camera extrinsic calibration, fisheye models.
 
-**Computational Photography:**
+#### [PARTIAL] **Computational Photography (cv-photo):**
 
-- **HDR imaging:** Tone mapping, exposure fusion
-- **Image stitching:** Panorama creation
-- **Inpainting:** Content-aware fill
-- **Denoising:** Non-local means, bilateral filter
+- **Implemented:** Bilateral Filter.
+- **Missing:** HDR imaging, Inpainting, Panorama stitching (skeleton exists).
 
-**3D Reconstruction:**
+#### [IMPLEMENTED] **3D Reconstruction (cv-sfm / cv-slam):**
 
-- **Structure from Motion (SfM)**
-- **Multi-view stereo (MVS)**
-- **SLAM:** Simultaneous localization and mapping
-- **Dense reconstruction** (volumetric)
+- **cv-sfm:** Triangulation (DLT), Bundle Adjustment (files exist).
+- **cv-slam:** Mapping, Tracking, Keyframe management.
+- **Missing:** Loop closure, Dense reconstruction (MVS).
 
 #### ❌ **Missing (Medium Priority)**
 
@@ -951,16 +1031,17 @@ impl ImagePool {
 
 **Estimated Effort:** 4-6 weeks
 
-1. **cv-sfm crate:**
-   - Structure from Motion (incremental, global)
-   - Bundle adjustment (Ceres-like optimizer)
-   - Multi-view stereo
+1. **cv-sfm crate:** [IN PROGRESS]
+   - [x] Linear Triangulation (DLT)
+   - [x] Sparse Bundle Adjustment (LM Optimizer)
+   - [ ] Multi-view stereo foundations
 
-2. **cv-slam crate:**
-   - Visual odometry
-   - Loop closure detection
-   - Pose graph optimization
-   - Dense mapping
+2. **cv-slam crate:** [IN PROGRESS]
+   - [x] Map Initialization (Epipolar Geometry)
+   - [x] 2D-3D PnP Tracking (RANSAC)
+   - [x] Keyframe Management
+   - [ ] Loop closure detection
+   - [ ] Pose graph optimization
 
 **Value:** Robotics, AR/VR applications
 
@@ -1141,15 +1222,15 @@ refactor(crate-name): restructure code
 
 ### Q: Why is performance slower than OpenCV?
 
-**A:** Current implementation lacks SIMD, memory pooling, and algorithm-specific optimizations. See "Known Performance Bottlenecks" section above.
+**A:** While we have integrated SIMD (via `wide` crate) and memory pooling in `cv-core`, many algorithms still lack specialized optimizations (e.g., AVX2 intrinsics for specific kernels, advanced block matching heuristics). We are actively working on this.
 
 ### Q: Can I use CUDA for GPU acceleration?
 
-**A:** Not yet. Currently only wgpu (Vulkan/Metal/DX12) is supported. CUDA backend planned for Phase 4.
+**A:** Not directly. We use `wgpu` for cross-platform GPU acceleration (Vulkan, Metal, DX12), which runs on NVIDIA GPUs but doesn't use CUDA kernels. A dedicated CUDA backend is planned for a later phase.
 
 ### Q: How do I load images?
 
-**A:** Use the `image` crate:
+**A:** Use the `image` crate integration:
 
 ```rust
 use image::open;
@@ -1157,15 +1238,15 @@ let img = open("photo.jpg").unwrap();
 let buffer = ImageBuffer::from_image(img);
 ```
 
-### Q: Why no video capture?
+### Q: How do I capture video?
 
-**A:** Video I/O is planned for Phase 1. Currently must extract frames externally.
+**A:** Use the `cv-videoio` crate (in development). It provides traits for camera capture and file reading. Robust FFmpeg integration is currently in progress.
 
 ### Q: Can I run on embedded devices?
 
-**A:** Not tested. May work on ARM with `no_std` modifications, but requires significant porting effort.
+**A:** Likely, but untested. The core crates are designed to be `no_std` compatible in the future, but currently require `std`. ARM Linux devices (RPi) should work.
 
-### Q: How to add a new backend (e.g., CUDA)?
+### Q: How to add a new backend?
 
 **A:**
 

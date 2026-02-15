@@ -1,0 +1,12 @@
+[package]
+name = "cv-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rayon = { workspace = true }
+nalgebra = { workspace = true }
+thiserror = { workspace = true }
+cv-hal = { path = "../hal" }
+cv-core = { path = "../core" }
+core_affinity = { workspace = true }

@@ -1,5 +1,4 @@
 use image::{GrayImage, Luma};
-use std::f32::consts::PI;
 
 pub fn bilateral_filter(
     src: &GrayImage,

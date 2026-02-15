@@ -7,16 +7,20 @@ use crate::descriptor::{Descriptor, DescriptorExtractor, Descriptors};
 use crate::fast::fast_detect;
 use cv_core::{KeyPoint, KeyPoints};
 use image::GrayImage;
-use std::f64::consts::PI;
+// use std::f64::consts::PI;
 
 /// ORB feature detector and descriptor
 pub struct Orb {
     n_features: usize,
     scale_factor: f32,
     n_levels: usize,
+    #[allow(dead_code)]
     edge_threshold: i32,
+    #[allow(dead_code)]
     first_level: i32,
+    #[allow(dead_code)]
     wta_k: i32,
+    #[allow(dead_code)]
     score_type: ScoreType,
     patch_size: i32,
     fast_threshold: u8,

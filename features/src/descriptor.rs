@@ -1,6 +1,7 @@
 use cv_core::{KeyPoint, KeyPoints};
 use image::GrayImage;
 
+#[derive(Debug, Clone)]
 pub struct Descriptor {
     pub data: Vec<u8>,
     pub keypoint: KeyPoint,
@@ -24,6 +25,7 @@ impl Descriptor {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Descriptors {
     pub descriptors: Vec<Descriptor>,
 }

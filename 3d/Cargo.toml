@@ -1,0 +1,11 @@
+[package]
+name = "cv-3d"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nalgebra = { workspace = true }
+cv-core = { path = "../core" }
+cv-runtime = { path = "../runtime" }
+thiserror = { workspace = true }
+kd-tree = "0.6"
