@@ -1,6 +1,6 @@
 use rayon::ThreadPoolBuilder;
 use std::env;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 static THREAD_POOL_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
@@ -48,4 +48,40 @@ fn read_cpu_threads_from_env() -> Result<Option<usize>, String> {
         return Err("RUSTCV_CPU_THREADS must be >= 1".to_string());
     }
     Ok(Some(parsed))
+}
+
+/// A simple global buffer pool for reusing memory allocations.
+pub struct BufferPool {
+    pool: Mutex<Vec<Vec<u8>>>,
+}
+
+static GLOBAL_BUFFER_POOL: OnceLock<BufferPool> = OnceLock::new();
+
+impl BufferPool {
+    pub fn global() -> &'static self::BufferPool {
+        GLOBAL_BUFFER_POOL.get_or_init(|| BufferPool {
+            pool: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Get a buffer of at least `min_size` bytes.
+    pub fn get(&self, min_size: usize) -> Vec<u8> {
+        let mut pool = self.pool.lock().unwrap();
+        if let Some(mut buf) = pool.pop() {
+            if buf.capacity() >= min_size {
+                buf.clear();
+                return buf;
+            }
+        }
+        Vec::with_capacity(min_size)
+    }
+
+    /// Return a buffer to the pool for later reuse.
+    pub fn return_buffer(&self, mut buf: Vec<u8>) {
+        let mut pool = self.pool.lock().unwrap();
+        if pool.len() < 32 { // Limit pool size
+            buf.clear();
+            pool.push(buf);
+        }
+    }
 }

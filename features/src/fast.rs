@@ -1,35 +1,5 @@
-use cv_core::KeyPoint;
+use cv_core::{KeyPoint, KeyPoints};
 use image::GrayImage;
-
-pub struct KeyPoints {
-    pub keypoints: Vec<KeyPoint>,
-}
-
-impl KeyPoints {
-    pub fn new() -> Self {
-        Self {
-            keypoints: Vec::new(),
-        }
-    }
-
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            keypoints: Vec::with_capacity(capacity),
-        }
-    }
-
-    pub fn push(&mut self, kp: KeyPoint) {
-        self.keypoints.push(kp);
-    }
-
-    pub fn len(&self) -> usize {
-        self.keypoints.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.keypoints.is_empty()
-    }
-}
 
 /// FAST-9 corner detector
 /// Uses a 16-pixel Bresenham circle of radius 3

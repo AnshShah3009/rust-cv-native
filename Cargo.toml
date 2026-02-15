@@ -37,6 +37,12 @@ members = [
     "features",
     "stereo",
     "video",
+    "videoio",
+    "calib3d",
+    "photo",
+    "dnn",
+    "sfm",
+    "slam",
 ]
 
 [workspace.dependencies]
