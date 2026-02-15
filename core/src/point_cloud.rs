@@ -1,15 +1,14 @@
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, Scalar, Vector3};
 
-/// A 3D Point Cloud with optional colors and normals.
 #[derive(Debug, Clone, Default)]
-pub struct PointCloud {
-    pub points: Vec<Point3<f32>>,
-    pub colors: Option<Vec<Point3<f32>>>,
-    pub normals: Option<Vec<Vector3<f32>>>,
+pub struct PointCloud<T: Scalar = f32> {
+    pub points: Vec<Point3<T>>,
+    pub colors: Option<Vec<Point3<T>>>,
+    pub normals: Option<Vec<Vector3<T>>>,
 }
 
-impl PointCloud {
-    pub fn new(points: Vec<Point3<f32>>) -> Self {
+impl<T: Scalar> PointCloud<T> {
+    pub fn new(points: Vec<Point3<T>>) -> Self {
         Self {
             points,
             colors: None,
@@ -17,22 +16,28 @@ impl PointCloud {
         }
     }
 
-    pub fn with_colors(mut self, colors: Vec<Point3<f32>>) -> Self {
+    pub fn with_colors(mut self, colors: Vec<Point3<T>>) -> Self {
         if colors.len() == self.points.len() {
             self.colors = Some(colors);
         } else {
-            // In a real scenario, we might return Result. For now, just panic or ignore?
-            // Let's inconsistent state is bad.
-            panic!("Color count {} does not match point count {}", colors.len(), self.points.len());
+            panic!(
+                "Color count {} does not match point count {}",
+                colors.len(),
+                self.points.len()
+            );
         }
         self
     }
 
-    pub fn with_normals(mut self, normals: Vec<Vector3<f32>>) -> Self {
+    pub fn with_normals(mut self, normals: Vec<Vector3<T>>) -> Self {
         if normals.len() == self.points.len() {
             self.normals = Some(normals);
         } else {
-            panic!("Normal count {} does not match point count {}", normals.len(), self.points.len());
+            panic!(
+                "Normal count {} does not match point count {}",
+                normals.len(),
+                self.points.len()
+            );
         }
         self
     }
@@ -45,3 +50,6 @@ impl PointCloud {
         self.points.is_empty()
     }
 }
+
+pub type PointCloudf32 = PointCloud<f32>;
+pub type PointCloudf64 = PointCloud<f64>;

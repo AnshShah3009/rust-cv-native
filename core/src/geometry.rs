@@ -1,4 +1,4 @@
-use nalgebra::{Matrix3, Matrix4, Point2, Point3, Rotation3, UnitQuaternion, Vector3};
+use nalgebra::{Matrix3, Matrix4, Point2, Point3, Vector3};
 
 pub type Vector6<T> = nalgebra::Vector6<T>;
 
@@ -26,14 +26,11 @@ impl CameraIntrinsics {
 
     pub fn new_ideal(width: u32, height: u32) -> Self {
         let fx = width as f64;
-        let fy = width as f64;
-        let cx = width as f64 / 2.0;
-        let cy = height as f64 / 2.0;
         Self {
             fx,
-            fy,
-            cx,
-            cy,
+            fy: fx,
+            cx: fx / 2.0,
+            cy: height as f64 / 2.0,
             width,
             height,
         }
@@ -64,6 +61,62 @@ impl CameraIntrinsics {
     }
 }
 
+pub type CameraIntrinsicsf32 = CameraIntrinsicsF32;
+
+#[derive(Debug, Clone, Copy)]
+pub struct CameraIntrinsicsF32 {
+    pub fx: f32,
+    pub fy: f32,
+    pub cx: f32,
+    pub cy: f32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl CameraIntrinsicsF32 {
+    pub fn new(fx: f32, fy: f32, cx: f32, cy: f32, width: u32, height: u32) -> Self {
+        Self {
+            fx,
+            fy,
+            cx,
+            cy,
+            width,
+            height,
+        }
+    }
+
+    pub fn from_intrinsics(i: &CameraIntrinsics) -> Self {
+        Self {
+            fx: i.fx as f32,
+            fy: i.fy as f32,
+            cx: i.cx as f32,
+            cy: i.cy as f32,
+            width: i.width,
+            height: i.height,
+        }
+    }
+
+    pub fn matrix(&self) -> Matrix3<f32> {
+        Matrix3::new(self.fx, 0.0, self.cx, 0.0, self.fy, self.cy, 0.0, 0.0, 1.0)
+    }
+
+    pub fn project(&self, point: &Point3<f32>) -> Point2<f32> {
+        let z = point.z;
+        if z == 0.0 {
+            return Point2::new(self.cx, self.cy);
+        }
+        let x = point.x / z;
+        let y = point.y / z;
+        Point2::new(x * self.fx + self.cx, y * self.fy + self.cy)
+    }
+
+    pub fn unproject(&self, pixel: Point2<f32>, depth: f32) -> Point3<f32> {
+        let x = (pixel.x - self.cx) / self.fx;
+        let y = (pixel.y - self.cy) / self.fy;
+        Point3::new(x * depth, y * depth, depth)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CameraExtrinsics {
     pub rotation: Matrix3<f64>,
@@ -82,14 +135,6 @@ impl CameraExtrinsics {
         Self {
             rotation: *r,
             translation: *t,
-        }
-    }
-
-    pub fn from_twist(twist: &Vector6<f64>) -> Self {
-        let (r, t) = twist_to_se3(twist);
-        Self {
-            rotation: r,
-            translation: t,
         }
     }
 
@@ -124,47 +169,69 @@ impl Default for CameraExtrinsics {
     }
 }
 
+pub type CameraExtrinsicsf32 = CameraExtrinsicsF32;
+
 #[derive(Debug, Clone, Copy)]
-pub struct Pose {
-    pub rotation: UnitQuaternion<f64>,
-    pub translation: Vector3<f64>,
+pub struct CameraExtrinsicsF32 {
+    pub rotation: Matrix3<f32>,
+    pub translation: Vector3<f32>,
 }
 
-impl Pose {
-    pub fn new(rotation: UnitQuaternion<f64>, translation: Vector3<f64>) -> Self {
+impl CameraExtrinsicsF32 {
+    pub fn new(rotation: Matrix3<f32>, translation: Vector3<f32>) -> Self {
         Self {
             rotation,
             translation,
         }
     }
 
-    pub fn from_matrix(transform: &Matrix4<f64>) -> Self {
-        let r = Matrix3::from(transform.fixed_view::<3, 3>(0, 0));
-        let t = Vector3::from(transform.fixed_view::<3, 1>(0, 3));
-        let rotation = UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(r));
+    pub fn from_extrinsics(e: &CameraExtrinsics) -> Self {
         Self {
-            rotation,
-            translation: t,
+            rotation: Matrix3::new(
+                e.rotation.m11 as f32,
+                e.rotation.m12 as f32,
+                e.rotation.m13 as f32,
+                e.rotation.m21 as f32,
+                e.rotation.m22 as f32,
+                e.rotation.m23 as f32,
+                e.rotation.m31 as f32,
+                e.rotation.m32 as f32,
+                e.rotation.m33 as f32,
+            ),
+            translation: Vector3::new(
+                e.translation[0] as f32,
+                e.translation[1] as f32,
+                e.translation[2] as f32,
+            ),
         }
     }
 
-    pub fn matrix(&self) -> Matrix4<f64> {
+    pub fn matrix(&self) -> Matrix4<f32> {
         let mut m = Matrix4::identity();
-        let rot_matrix: Matrix3<f64> = self.rotation.to_rotation_matrix().into();
-        m.fixed_view_mut::<3, 3>(0, 0).copy_from(&rot_matrix);
+        m.fixed_view_mut::<3, 3>(0, 0).copy_from(&self.rotation);
         m.fixed_view_mut::<3, 1>(0, 3).copy_from(&self.translation);
         m
     }
 
-    pub fn transform_point(&self, point: &Point3<f64>) -> Point3<f64> {
-        self.rotation * point + self.translation
+    pub fn transform_point(&self, point: &Point3<f32>) -> Point3<f32> {
+        let transformed = self.rotation * point.coords + self.translation;
+        Point3::from(transformed)
+    }
+
+    pub fn inverse(&self) -> Self {
+        let r_inv = self.rotation.transpose();
+        let t_inv = -r_inv * self.translation;
+        Self {
+            rotation: r_inv,
+            translation: t_inv,
+        }
     }
 }
 
-impl Default for Pose {
+impl Default for CameraExtrinsicsF32 {
     fn default() -> Self {
         Self {
-            rotation: UnitQuaternion::identity(),
+            rotation: Matrix3::identity(),
             translation: Vector3::zeros(),
         }
     }
@@ -241,7 +308,68 @@ impl Default for Distortion {
     }
 }
 
-/// A simple axis-aligned rectangle (Bounding Box)
+pub type Distortionf32 = DistortionF32;
+
+#[derive(Debug, Clone, Copy)]
+pub struct DistortionF32 {
+    pub k1: f32,
+    pub k2: f32,
+    pub p1: f32,
+    pub p2: f32,
+    pub k3: f32,
+}
+
+impl DistortionF32 {
+    pub fn new(k1: f32, k2: f32, p1: f32, p2: f32, k3: f32) -> Self {
+        Self { k1, k2, p1, p2, k3 }
+    }
+
+    pub fn from_distortion(d: &Distortion) -> Self {
+        Self {
+            k1: d.k1 as f32,
+            k2: d.k2 as f32,
+            p1: d.p1 as f32,
+            p2: d.p2 as f32,
+            k3: d.k3 as f32,
+        }
+    }
+
+    pub fn none() -> Self {
+        Self {
+            k1: 0.0,
+            k2: 0.0,
+            p1: 0.0,
+            p2: 0.0,
+            k3: 0.0,
+        }
+    }
+
+    pub fn apply(&self, x: f32, y: f32) -> (f32, f32) {
+        let r2 = x * x + y * y;
+        let radial = 1.0 + self.k1 * r2 + self.k2 * r2 * r2 + self.k3 * r2 * r2 * r2;
+        let dx = 2.0 * self.p1 * x * y + self.p2 * (r2 + 2.0 * x * x);
+        let dy = self.p1 * (r2 + 2.0 * y * y) + 2.0 * self.p2 * x * y;
+        (x * radial + dx, y * radial + dy)
+    }
+
+    pub fn remove(&self, x: f32, y: f32) -> (f32, f32) {
+        let mut xd = x;
+        let mut yd = y;
+        for _ in 0..10 {
+            let (xu, yu) = self.apply(xd, yd);
+            xd += x - xu;
+            yd += y - yu;
+        }
+        (xd, yd)
+    }
+}
+
+impl Default for DistortionF32 {
+    fn default() -> Self {
+        Self::none()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Rect {
     pub x: f32,
@@ -255,16 +383,23 @@ impl Rect {
         Self { x, y, w, h }
     }
 
-    pub fn x1(&self) -> f32 { self.x }
-    pub fn y1(&self) -> f32 { self.y }
-    pub fn x2(&self) -> f32 { self.x + self.w }
-    pub fn y2(&self) -> f32 { self.y + self.h }
+    pub fn x1(&self) -> f32 {
+        self.x
+    }
+    pub fn y1(&self) -> f32 {
+        self.y
+    }
+    pub fn x2(&self) -> f32 {
+        self.x + self.w
+    }
+    pub fn y2(&self) -> f32 {
+        self.y + self.h
+    }
 
     pub fn area(&self) -> f32 {
         self.w * self.h
     }
 
-    /// Intersection over Union (IoU) between two rectangles.
     pub fn iou(&self, other: &Rect) -> f32 {
         let x1 = self.x1().max(other.x1());
         let y1 = self.y1().max(other.y1());
