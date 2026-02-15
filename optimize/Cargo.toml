@@ -7,3 +7,4 @@ edition = "2021"
 nalgebra = { workspace = true }
 cv-core = { path = "../core" }
 thiserror = { workspace = true }
+faer = "0.24.0"

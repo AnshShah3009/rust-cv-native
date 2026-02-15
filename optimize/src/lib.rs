@@ -1,6 +1,8 @@
 use nalgebra::{DVector, DMatrix};
 // use std::sync::Arc;
 
+pub mod sparse;
+
 pub trait Factor: Send + Sync {
     fn residual(&self, variables: &[DVector<f64>]) -> DVector<f64>;
     fn jacobian(&self, variables: &[DVector<f64>]) -> Vec<DMatrix<f64>>;
