@@ -1069,4 +1069,25 @@ mod tests {
         let threads = current_cpu_threads();
         assert!(threads >= 1);
     }
+
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn gpu_memory_budget_validation() {
+        // Test GPU memory budget parsing and validation
+        use cv_hal::gpu_utils;
+
+        // Test parsing various formats
+        assert_eq!(gpu_utils::parse_bytes_with_suffix("100MB").unwrap(), 100 * 1024 * 1024);
+        assert_eq!(gpu_utils::parse_bytes_with_suffix("1GB").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(gpu_utils::parse_bytes_with_suffix("512KB").unwrap(), 512 * 1024);
+
+        // Test memory fitting in budget
+        assert!(gpu_utils::fits_in_budget(100, Some(200)));
+        assert!(!gpu_utils::fits_in_budget(200, Some(100)));
+        assert!(gpu_utils::fits_in_budget(1000, None)); // No limit
+
+        // Test image buffer estimation
+        let size = gpu_utils::estimate_image_buffer_size(1920, 1080, 4);
+        assert_eq!(size, 1920 * 1080 * 4);
+    }
 }
