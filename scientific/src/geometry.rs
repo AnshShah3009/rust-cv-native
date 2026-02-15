@@ -1,9 +1,9 @@
 use cv_core::Rect;
-use ndarray::Array2;
-use geo::{Polygon, Area, BooleanOps, EuclideanDistance};
 use geo::algorithm::convex_hull::ConvexHull;
 use geo::algorithm::simplify::Simplify;
-use rstar::{RTree, RTreeObject, AABB, PointDistance};
+use geo::{Area, BooleanOps, EuclideanDistance, Polygon};
+use ndarray::Array2;
+use rstar::{PointDistance, RTree, RTreeObject, AABB};
 
 /// Wrapper for a Polygon that implements RTreeObject.
 #[derive(Debug, Clone)]
@@ -18,12 +18,9 @@ impl RTreeObject for IndexedPolygon {
     fn envelope(&self) -> Self::Envelope {
         use geo::BoundingRect;
         let bbox = self.polygon.bounding_rect().unwrap_or_else(|| {
-            geo::Rect::new(
-                geo::Coord { x: 0.0, y: 0.0 }, 
-                geo::Coord { x: 0.0, y: 0.0 }
-            )
+            geo::Rect::new(geo::Coord { x: 0.0, y: 0.0 }, geo::Coord { x: 0.0, y: 0.0 })
         });
-        
+
         let min = bbox.min();
         let max = bbox.max();
         AABB::from_corners([min.x, min.y], [max.x, max.y])
@@ -45,7 +42,9 @@ pub struct SpatialIndex {
 
 impl SpatialIndex {
     pub fn new(polygons: Vec<Polygon<f64>>) -> Self {
-        let indexed: Vec<IndexedPolygon> = polygons.into_iter().enumerate()
+        let indexed: Vec<IndexedPolygon> = polygons
+            .into_iter()
+            .enumerate()
             .map(|(id, polygon)| IndexedPolygon { id, polygon })
             .collect();
         Self {
@@ -56,7 +55,8 @@ impl SpatialIndex {
     /// Find all polygons that intersect with the given query envelope.
     pub fn query_bbox(&self, min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Vec<usize> {
         let envelope = AABB::from_corners([min_x, min_y], [max_x, max_y]);
-        self.tree.locate_in_envelope_intersecting(&envelope)
+        self.tree
+            .locate_in_envelope_intersecting(&envelope)
             .map(|ip| ip.id)
             .collect()
     }
@@ -71,7 +71,8 @@ impl SpatialIndex {
         use geo::Contains;
         let point = geo::Point::new(x, y);
         let envelope = AABB::from_point([x, y]);
-        self.tree.locate_in_envelope_intersecting(&envelope)
+        self.tree
+            .locate_in_envelope_intersecting(&envelope)
             .filter(|ip| ip.polygon.contains(&point))
             .map(|ip| ip.id)
             .collect()
@@ -84,8 +85,9 @@ impl SpatialIndex {
             let min = bbox.min();
             let max = bbox.max();
             let envelope = AABB::from_corners([min.x, min.y], [max.x, max.y]);
-            
-            self.tree.locate_in_envelope_intersecting(&envelope)
+
+            self.tree
+                .locate_in_envelope_intersecting(&envelope)
                 .filter(|ip| ip.polygon.intersects(polygon))
                 .map(|ip| ip.id)
                 .collect()
@@ -146,7 +148,7 @@ pub fn polygon_iou(p1: &Polygon<f64>, p2: &Polygon<f64>) -> f64 {
 /// Vectorized Polygon IoU.
 pub fn vectorized_polygon_iou(polys1: &[Polygon<f64>], polys2: &[Polygon<f64>]) -> Array2<f64> {
     let mut ious = Array2::zeros((polys1.len(), polys2.len()));
-    
+
     // TODO: parallelize with rayon
     for (i, p1) in polys1.iter().enumerate() {
         for (j, p2) in polys2.iter().enumerate() {
@@ -159,7 +161,7 @@ pub fn vectorized_polygon_iou(polys1: &[Polygon<f64>], polys2: &[Polygon<f64>]) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{LineString, Coord};
+    use geo::{Coord, LineString};
 
     fn make_square(x: f64, y: f64, size: f64) -> Polygon<f64> {
         let coords = vec![
@@ -187,7 +189,7 @@ mod tests {
         ];
         let poly = Polygon::new(LineString::from(coords), vec![]);
         let hull = convex_hull(&poly);
-        
+
         // Hull should remove the dent (5,5).
         // Area of hull should be larger than poly.
         assert!(hull.unsigned_area() > poly.unsigned_area());
@@ -206,27 +208,27 @@ mod tests {
         ];
         let poly = Polygon::new(LineString::from(coords), vec![]);
         let simple = simplify(&poly, 0.2);
-        
+
         // Should remove (5.0, 0.1)
         // Check vertex count
         assert!(simple.exterior().0.len() < poly.exterior().0.len());
     }
-    
+
     #[test]
     fn test_spatial_index() {
         let polygons = vec![
-            make_square(0.0, 0.0, 10.0), // (0,0)-(10,10)
+            make_square(0.0, 0.0, 10.0),   // (0,0)-(10,10)
             make_square(20.0, 20.0, 10.0), // (20,20)-(30,30)
         ];
         let index = SpatialIndex::new(polygons);
-        
+
         // Query intersecting (5,5). Should match index 0.
         let hits = index.query_bbox(4.0, 4.0, 6.0, 6.0);
         assert_eq!(hits, vec![0]);
-        
+
         // Nearest to (5,5) -> 0
         assert_eq!(index.nearest(5.0, 5.0), Some(0));
-        
+
         // Nearest to (25,25) -> 1
         assert_eq!(index.nearest(25.0, 25.0), Some(1));
     }
@@ -235,7 +237,7 @@ mod tests {
     fn test_buffer() {
         let poly = make_square(0.0, 0.0, 10.0);
         let buffered = buffer(&poly, 1.0);
-        
+
         // Original area 100.
         // Buffered by 1.0 -> approx (10+2)*(10+2) = 144 (corners are rounded, so slightly less).
         // Check finding area.
@@ -248,7 +250,7 @@ mod tests {
     #[test]
     fn test_predicates() {
         let polygons = vec![
-            make_square(0.0, 0.0, 10.0), // (0,0)-(10,10)
+            make_square(0.0, 0.0, 10.0),   // (0,0)-(10,10)
             make_square(20.0, 20.0, 10.0), // (20,20)-(30,30)
         ];
         let index = SpatialIndex::new(polygons);
@@ -257,7 +259,7 @@ mod tests {
         // (5,5) is inside poly 0
         let hits = index.query_contains_point(5.0, 5.0);
         assert_eq!(hits, vec![0]);
-        
+
         // (25,25) is inside poly 1
         let hits = index.query_contains_point(25.0, 25.0);
         assert_eq!(hits, vec![1]);
