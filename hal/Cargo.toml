@@ -14,7 +14,6 @@ thiserror = "2.0"
 wgpu.workspace = true
 pollster = "0.4.0"
 futures.workspace = true
-wgpu-util = "0.2.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
 
 [features]

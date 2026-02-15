@@ -15,7 +15,7 @@ cv-video = { path = "./video" }
 rayon = { workspace = true }
 
 [dev-dependencies]
-# criterion = { workspace = true }
+criterion = { workspace = true }
 image = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
@@ -42,21 +42,22 @@ members = [
     "photo",
     "dnn",
     "sfm",
-    "slam", "runtime", "optimize", "scientific", # "python", "viewer", "features",
+    "slam", "runtime", "optimize", "scientific", "python", "features",
+    # "viewer", # Excluded pending eframe/rerun update to support wgpu 28
 ]
 
 [workspace.dependencies]
 rayon = "1.10"
 nalgebra = "0.33"
 image = "0.25"
-wgpu = "0.20.1"
+wgpu = "28.0.0"
 bytemuck = { version = "1.21.0", features = ["derive"] }
 ort = "2.0.0-rc.11"
 wide = "0.7"
 pulp = "0.5"
 futures = "0.3.31"
 thiserror = "2.0"
-criterion = "0.5"
+criterion = { version = "0.5", default-features = false, features = ["rayon", "cargo_bench_support"] }
 core_affinity = "0.8"
 ndarray = "0.15"
 

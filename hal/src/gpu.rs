@@ -14,7 +14,7 @@ impl GpuContext {
     /// Selects the best available adapter (HighPerformance).
     pub fn new() -> Option<Self> {
         // Create instance
-        let instance = Instance::new(wgpu::InstanceDescriptor {
+        let instance = Instance::new(&wgpu::InstanceDescriptor {
             backends: Backends::all(),
             ..Default::default()
         });
@@ -24,16 +24,16 @@ impl GpuContext {
             power_preference: PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
-        }))?;
+        })).ok()?;
 
-        // Request device
+        // Request device (wgpu 28: no trace param)
         let (device, queue) = block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("CV-HAL Device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(), // Compatible limits
+                required_limits: wgpu::Limits::downlevel_defaults(),
+                ..Default::default()
             },
-            None,
         )).ok()?;
 
         Some(Self {
@@ -42,8 +42,7 @@ impl GpuContext {
         })
     }
     
-    /// Create a simplified compute pipeline for normal estimation.
-    /// This is a placeholder for the actual implementation later.
+    /// Create a simplified compute pipeline.
     pub fn create_compute_pipeline(&self, shader_source: &str, entry_point: &str) -> wgpu::ComputePipeline {
         let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Compute Shader"),
@@ -52,16 +51,14 @@ impl GpuContext {
         
         self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Compute Pipeline"),
-            layout: None, // Auto layout
+            layout: None,
             module: &shader,
-            entry_point,
+            entry_point: Some(entry_point),
             compilation_options: Default::default(),
+            cache: None,
         })
     }
 }
-
-// Global lazy static or singleton could be used, but for now we instantiate on demand.
-// In a real system, we'd want a meaningful resource manager.
 
 #[cfg(test)]
 mod tests {
@@ -69,8 +66,6 @@ mod tests {
 
     #[test]
     fn test_gpu_context_creation() {
-        // This test might fail in CI/environment without GPU or software backend.
-        // We'll just check if it runs without panic.
         let ctx = GpuContext::new();
         match ctx {
             Some(c) => println!("GPU Context created: {:?}", c.device),
