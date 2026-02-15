@@ -12,9 +12,7 @@ pub struct Map {
 
 impl Map {
     pub fn new() -> Self {
-        Self {
-            points: Vec::new(),
-        }
+        Self { points: Vec::new() }
     }
 
     pub fn add_point(&mut self, point: MapPoint) {

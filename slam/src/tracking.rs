@@ -1,8 +1,8 @@
+use cv_calib3d::solve_pnp_ransac;
+use cv_core::{CameraExtrinsics, CameraIntrinsics, KeyPoints};
+use cv_features::{DescriptorExtractor, Descriptors, MatchType, Matcher, Orb};
 use image::GrayImage;
 use nalgebra::Point2;
-use cv_core::{KeyPoints, CameraExtrinsics, CameraIntrinsics};
-use cv_features::{Orb, Descriptors, Matcher, MatchType, DescriptorExtractor};
-use cv_calib3d::solve_pnp_ransac;
 
 pub struct Frame {
     pub image: GrayImage,
@@ -29,15 +29,15 @@ impl Tracker {
     }
 
     pub fn process_frame(
-        &mut self, 
-        image: &image::GrayImage, 
-        map: &crate::mapping::Map
+        &mut self,
+        image: &image::GrayImage,
+        map: &crate::mapping::Map,
     ) -> Result<(CameraExtrinsics, Vec<usize>), String> {
         // 1. Detect and describe features
         let mut keypoints = self.detector.detect(image);
         self.detector.compute_orientations(image, &mut keypoints);
         let descriptors = self.detector.extract(image, &keypoints);
-        
+
         let mut frame = Frame {
             image: image.clone(),
             keypoints,
@@ -63,15 +63,14 @@ impl Tracker {
                     image_pts.push(Point2::new(kp.x, kp.y));
                 }
 
-                if let Ok((pose, inliers)) = solve_pnp_ransac(
-                    &object_pts, 
-                    &image_pts, 
-                    &self.intrinsics, 
-                    2.0, 
-                    100
-                ) {
+                if let Ok((pose, inliers)) =
+                    solve_pnp_ransac(&object_pts, &image_pts, &self.intrinsics, 2.0, 100)
+                {
                     frame.pose = pose;
-                    let tracked_indices = matches.matches.iter().enumerate()
+                    let tracked_indices = matches
+                        .matches
+                        .iter()
+                        .enumerate()
                         .filter(|(i, _)| inliers[*i])
                         .map(|(_, m)| m.train_idx as usize)
                         .collect();
@@ -85,7 +84,7 @@ impl Tracker {
         if !tracking_success {
             if let Some(ref last) = self.last_frame {
                 // FALLBACK: Just use last pose
-                frame.pose = last.pose; 
+                frame.pose = last.pose;
             } else {
                 self.last_frame = self.current_frame.take();
                 self.current_frame = Some(frame);
@@ -95,7 +94,7 @@ impl Tracker {
 
         self.last_frame = self.current_frame.take();
         self.current_frame = Some(frame);
-        
+
         Ok((self.current_frame.as_ref().unwrap().pose, Vec::new()))
     }
 }
