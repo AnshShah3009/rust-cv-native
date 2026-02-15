@@ -6,10 +6,10 @@ pub struct NativeViewer {
     // Scene data
     point_clouds: Vec<Arc<PointCloud>>,
     
-    // Camera state (orbit)
-    camera_pitch: f32,
-    camera_yaw: f32,
-    camera_dist: f32,
+    // Camera state (orbit) - planned for future use
+    _camera_pitch: f32,
+    _camera_yaw: f32,
+    _camera_dist: f32,
 }
 
 impl NativeViewer {
@@ -18,9 +18,9 @@ impl NativeViewer {
         // For now, simple init
         Self {
             point_clouds: Vec::new(),
-            camera_pitch: 0.0,
-            camera_yaw: 0.0,
-            camera_dist: 5.0,
+            _camera_pitch: 0.0,
+            _camera_yaw: 0.0,
+            _camera_dist: 5.0,
         }
     }
     
