@@ -7,5 +7,13 @@ edition = "2021"
 nalgebra = { workspace = true }
 cv-core = { path = "../core" }
 cv-runtime = { path = "../runtime" }
+cv-hal = { path = "../hal" }
 thiserror = { workspace = true }
-kd-tree = "0.6"
+rayon = { workspace = true }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+rand = "0.8"
+num_cpus = "1.16"
+
+[features]
+default = []
