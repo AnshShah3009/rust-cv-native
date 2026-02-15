@@ -67,7 +67,13 @@ Building a **native Rust computer vision library** as a complete replacement for
 - **Location:** `optimize/src/`
 - **Implemented:** `FactorGraph` (Dense LM), `SparseMatrix` (Faer integration, Solver stub).
 
-#### [NEW] 14. **cv-photo** - Computational Photography
+#### [NEW] 14. **cv-viewer** - Visualization Tools
+
+- **Location:** `viewer/src/`
+- **Implemented:** `RerunLogger` (Remote point cloud/normals logging).
+- **Status:** **Partial** (Integrated Rerun SDK 0.29).
+
+#### [NEW] 15. **cv-photo** - Computational Photography
 
 - **Location:** `photo/src/`
 - **Implemented:** Bilateral Filter. Stitching skeleton.
@@ -612,7 +618,13 @@ cargo bench
        ┌──────────────────┐                 ┌────────────────────┐
        │     cv-core      │                 │   cv-scientific    │
        │ (Data Structures)│                 │  (Geometry/Math)   │
-       └──────────────────┘                 └────────────────────┘
+       └──────────────────┘                 └──────────┬─────────┘
+                 ▲                                     │
+                 │                                     ▼
+                 └───────────────────────────────┌─────────────┐
+                                                 │  cv-viewer  │
+                                                 │(Viz/Logging)│
+                                                 └─────────────┘
 ```
 
 ---
