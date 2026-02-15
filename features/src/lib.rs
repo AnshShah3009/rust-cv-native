@@ -7,6 +7,10 @@ pub mod matcher;
 pub mod markers;
 pub mod orb;
 pub mod ransac;
+pub mod hog;
+pub mod akaze;
+pub mod gftt;
+pub mod sift;
 
 pub use brief::*;
 pub use descriptor::*;
@@ -17,8 +21,12 @@ pub use matcher::*;
 pub use markers::*;
 pub use orb::*;
 pub use ransac::*;
+pub use hog::*;
+pub use akaze::*;
+pub use gftt::*;
+pub use sift::*;
 
-use cv_core::{KeyPoint, KeyPoints};
+pub use cv_core::{KeyPoint, KeyPoints};
 use image::GrayImage;
 
 pub type Result<T> = std::result::Result<T, FeatureError>;
@@ -37,7 +45,5 @@ pub enum FeatureError {
 
 pub fn detect_keypoints(image: &GrayImage, max_keypoints: usize) -> KeyPoints {
     let mut kps = fast::fast_detect(image, 20, max_keypoints);
-    KeyPoints {
-        keypoints: kps.keypoints,
-    }
+    kps
 }

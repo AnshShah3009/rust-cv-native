@@ -1,0 +1,14 @@
+[package]
+name = "cv-videoio"
+version = "0.1.0"
+edition = "2021"
+description = "Video input/output and camera capture for Rust Computer Vision"
+
+[dependencies]
+cv-core = { path = "../core" }
+image = "0.24"
+thiserror = "1.0"
+log = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+v4l = "0.14" # Video4Linux2 wrapper

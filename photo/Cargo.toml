@@ -1,0 +1,10 @@
+[package]
+name = "cv-photo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cv-core = { path = "../core" }
+cv-imgproc = { path = "../imgproc" }
+image = { workspace = true }
+thiserror = { workspace = true }

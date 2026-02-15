@@ -7,9 +7,11 @@ use image::GrayImage;
 
 pub mod optical_flow;
 pub mod tracking;
+pub mod kalman;
 
 pub use optical_flow::*;
 pub use tracking::*;
+pub use kalman::*;
 
 pub type Result<T> = std::result::Result<T, VideoError>;
 

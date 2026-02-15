@@ -1,5 +1,6 @@
 use crate::{gaussian_blur_with_border, BorderMode};
 use image::GrayImage;
+use wide::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThresholdType {
@@ -18,10 +19,38 @@ pub enum AdaptiveMethod {
 
 pub fn threshold(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType) -> GrayImage {
     let mut dst = GrayImage::new(src.width(), src.height());
+    let len = src.as_raw().len();
+    let src_raw = src.as_raw();
+    let dst_raw = dst.as_mut();
 
-    for (i, out_px) in dst.as_mut().iter_mut().enumerate() {
-        let value = src.as_raw()[i];
-        *out_px = apply_threshold(value, thresh, max_value, typ);
+    let thresh_v = f32x8::splat(thresh as f32);
+    let max_v = f32x8::splat(max_value as f32);
+    let zero_v = f32x8::ZERO;
+
+    for i in (0..len).step_by(8) {
+        let end = (i + 8).min(len);
+        if i + 8 <= len {
+            let s_v = f32x8::from([
+                src_raw[i] as f32, src_raw[i+1] as f32, src_raw[i+2] as f32, src_raw[i+3] as f32,
+                src_raw[i+4] as f32, src_raw[i+5] as f32, src_raw[i+6] as f32, src_raw[i+7] as f32,
+            ]);
+            let res = match typ {
+                ThresholdType::Binary => s_v.cmp_gt(thresh_v).blend(max_v, zero_v),
+                ThresholdType::BinaryInv => s_v.cmp_gt(thresh_v).blend(zero_v, max_v),
+                ThresholdType::Trunc => s_v.min(thresh_v),
+                ThresholdType::ToZero => s_v.cmp_gt(thresh_v).blend(s_v, zero_v),
+                ThresholdType::ToZeroInv => s_v.cmp_gt(thresh_v).blend(zero_v, s_v),
+            };
+            let res_arr: [f32; 8] = res.into();
+            for j in 0..8 {
+                dst_raw[i + j] = res_arr[j] as u8;
+            }
+        } else {
+            // Tail
+            for idx in i..end {
+                dst_raw[idx] = apply_threshold(src_raw[idx], thresh, max_value, typ);
+            }
+        }
     }
 
     dst
@@ -94,27 +123,49 @@ pub fn adaptive_threshold(
         AdaptiveMethod::GaussianC => local_gaussian_image(src, block_size),
     };
 
-    for i in 0..src.as_raw().len() {
-        let value = src.as_raw()[i] as f32;
-        let threshold = local.as_raw()[i] as f32 - c;
-        let out = match typ {
-            ThresholdType::Binary => {
-                if value > threshold {
-                    max_value
-                } else {
-                    0
-                }
+    let len = src.as_raw().len();
+    let src_raw = src.as_raw();
+    let local_raw = local.as_raw();
+    let dst_raw = dst.as_mut();
+
+    let c_v = f32x8::splat(c);
+    let max_v = f32x8::splat(max_value as f32);
+    let zero_v = f32x8::ZERO;
+
+    for i in (0..len).step_by(8) {
+        let end = (i + 8).min(len);
+        if i + 8 <= len {
+            let s_v = f32x8::from([
+                src_raw[i] as f32, src_raw[i+1] as f32, src_raw[i+2] as f32, src_raw[i+3] as f32,
+                src_raw[i+4] as f32, src_raw[i+5] as f32, src_raw[i+6] as f32, src_raw[i+7] as f32,
+            ]);
+            let l_v = f32x8::from([
+                local_raw[i] as f32, local_raw[i+1] as f32, local_raw[i+2] as f32, local_raw[i+3] as f32,
+                local_raw[i+4] as f32, local_raw[i+5] as f32, local_raw[i+6] as f32, local_raw[i+7] as f32,
+            ]);
+            
+            let thresh_v = l_v - c_v;
+            let res = match typ {
+                ThresholdType::Binary => s_v.cmp_gt(thresh_v).blend(max_v, zero_v),
+                ThresholdType::BinaryInv => s_v.cmp_gt(thresh_v).blend(zero_v, max_v),
+                _ => zero_v,
+            };
+            
+            let res_arr: [f32; 8] = res.into();
+            for j in 0..8 {
+                dst_raw[i + j] = res_arr[j] as u8;
             }
-            ThresholdType::BinaryInv => {
-                if value > threshold {
-                    0
-                } else {
-                    max_value
-                }
+        } else {
+            for idx in i..end {
+                let value = src_raw[idx] as f32;
+                let threshold = local_raw[idx] as f32 - c;
+                dst_raw[idx] = if match typ {
+                    ThresholdType::Binary => value > threshold,
+                    ThresholdType::BinaryInv => value <= threshold,
+                    _ => false,
+                } { max_value } else { 0 };
             }
-            _ => 0,
-        };
-        dst.as_mut()[i] = out;
+        }
     }
 
     dst
@@ -168,7 +219,14 @@ fn local_mean_image(src: &GrayImage, block_size: u32) -> GrayImage {
     let radius = (block_size / 2) as i32;
     let stride = width + 1;
 
-    let mut integral = vec![0u32; (width + 1) * (height + 1)];
+    let pool = cv_core::BufferPool::global();
+    let mut integral_vec = pool.get((width + 1) * (height + 1) * 4);
+    let integral: &mut [u32] = unsafe {
+        std::slice::from_raw_parts_mut(integral_vec.as_mut_ptr() as *mut u32, (width + 1) * (height + 1))
+    };
+    // Ensure it's zeroed since we use it for accumulation
+    integral.fill(0);
+
     for y in 0..height {
         let mut row_sum = 0u32;
         for x in 0..width {
@@ -193,6 +251,8 @@ fn local_mean_image(src: &GrayImage, block_size: u32) -> GrayImage {
             out.as_mut()[y * width + x] = (sum / area).min(255) as u8;
         }
     }
+
+    pool.return_buffer(integral_vec);
     out
 }
 

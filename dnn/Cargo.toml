@@ -1,0 +1,10 @@
+[package]
+name = "cv-dnn"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cv-core = { path = "../core" }
+image = { workspace = true }
+ort = { workspace = true }
+thiserror = { workspace = true }

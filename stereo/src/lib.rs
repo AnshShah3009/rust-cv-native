@@ -9,7 +9,7 @@ pub mod block_matching;
 pub mod sgm;
 pub mod depth;
 pub mod rectification;
-pub mod calib3d;
+pub use cv_calib3d as calib3d;
 mod parallel;
 
 #[cfg(feature = "gpu")]

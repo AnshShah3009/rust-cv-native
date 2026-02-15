@@ -217,6 +217,8 @@ pub fn convolve_with_border_into(
     }
 }
 
+use wide::*;
+
 pub fn separable_convolve(image: &GrayImage, kernel_1d: &[f32], border: BorderMode) -> GrayImage {
     let mut out = GrayImage::new(image.width(), image.height());
     separable_convolve_into(image, &mut out, kernel_1d, border);
@@ -239,42 +241,109 @@ pub fn separable_convolve_into(
     let radius = (kernel_1d.len() / 2) as isize;
     let src = image.as_raw();
 
-    let mut tmp = vec![0.0f32; width * height];
+    // Use BufferPool for temporary storage
+    let pool = cv_core::BufferPool::global();
+    let mut tmp_vec = pool.get(width * height * 4); // 4 bytes per f32
+    let tmp: &mut [f32] = unsafe {
+        std::slice::from_raw_parts_mut(tmp_vec.as_mut_ptr() as *mut f32, width * height)
+    };
+
+    // Horizontal Pass (SIMD optimized)
     for y in 0..height {
-        for x in 0..width {
-            let mut sum = 0.0f32;
-            for (k, &w) in kernel_1d.iter().enumerate() {
-                let sx = x as isize + k as isize - radius;
-                let px = match map_coord(sx, width, border) {
-                    Some(ix) => src[y * width + ix] as f32,
-                    None => match border {
-                        BorderMode::Constant(v) => v as f32,
-                        _ => 0.0,
-                    },
-                };
-                sum += px * w;
+        let row_offset = y * width;
+        for x in (0..width).step_by(8) {
+            let mut sum_v = f32x8::ZERO;
+            let end = (x + 8).min(width);
+            
+            if x + 8 <= width {
+                for (k, &w) in kernel_1d.iter().enumerate() {
+                    let w_v = f32x8::splat(w);
+                    let mut px_v = [0.0f32; 8];
+                    for i in 0..8 {
+                        let sx = (x + i) as isize + k as isize - radius;
+                        px_v[i] = match map_coord(sx, width, border) {
+                            Some(ix) => src[row_offset + ix] as f32,
+                            None => match border {
+                                BorderMode::Constant(v) => v as f32,
+                                _ => 0.0,
+                            },
+                        };
+                    }
+                    sum_v += f32x8::from(px_v) * w_v;
+                }
+                let results: [f32; 8] = sum_v.into();
+                tmp[row_offset + x..row_offset + x + 8].copy_from_slice(&results);
+            } else {
+                // Scalar fallback for row tail
+                for cur_x in x..end {
+                    let mut sum = 0.0f32;
+                    for (k, &w) in kernel_1d.iter().enumerate() {
+                        let sx = cur_x as isize + k as isize - radius;
+                        let px = match map_coord(sx, width, border) {
+                            Some(ix) => src[row_offset + ix] as f32,
+                            None => match border {
+                                BorderMode::Constant(v) => v as f32,
+                                _ => 0.0,
+                            },
+                        };
+                        sum += px * w;
+                    }
+                    tmp[row_offset + cur_x] = sum;
+                }
             }
-            tmp[y * width + x] = sum;
         }
     }
 
+    // Vertical Pass (SIMD optimized)
     for y in 0..height {
-        for x in 0..width {
-            let mut sum = 0.0f32;
-            for (k, &w) in kernel_1d.iter().enumerate() {
-                let sy = y as isize + k as isize - radius;
-                let py = match map_coord(sy, height, border) {
-                    Some(iy) => tmp[iy * width + x],
-                    None => match border {
-                        BorderMode::Constant(v) => v as f32,
-                        _ => 0.0,
-                    },
-                };
-                sum += py * w;
+        let row_offset = y * width;
+        for x in (0..width).step_by(8) {
+            let mut sum_v = f32x8::ZERO;
+            let end = (x + 8).min(width);
+
+            if x + 8 <= width {
+                for (k, &w) in kernel_1d.iter().enumerate() {
+                    let w_v = f32x8::splat(w);
+                    let mut py_v = [0.0f32; 8];
+                    let sy_base = y as isize + k as isize - radius;
+                    let target_y = map_coord(sy_base, height, border);
+                    
+                    if let Some(iy) = target_y {
+                        let src_offset = iy * width + x;
+                        py_v.copy_from_slice(&tmp[src_offset..src_offset + 8]);
+                    } else if let BorderMode::Constant(v) = border {
+                        py_v = [v as f32; 8];
+                    }
+                    
+                    sum_v += f32x8::from(py_v) * w_v;
+                }
+                let results: [f32; 8] = sum_v.into();
+                let out_row = out.as_mut();
+                for i in 0..8 {
+                    out_row[row_offset + x + i] = results[i].clamp(0.0, 255.0) as u8;
+                }
+            } else {
+                // Scalar fallback for row tail
+                for cur_x in x..end {
+                    let mut sum = 0.0f32;
+                    for (k, &w) in kernel_1d.iter().enumerate() {
+                        let sy = y as isize + k as isize - radius;
+                        let py = match map_coord(sy, height, border) {
+                            Some(iy) => tmp[iy * width + cur_x],
+                            None => match border {
+                                BorderMode::Constant(v) => v as f32,
+                                _ => 0.0,
+                            },
+                        };
+                        sum += py * w;
+                    }
+                    out.as_mut()[row_offset + cur_x] = sum.clamp(0.0, 255.0) as u8;
+                }
             }
-            out.as_mut()[y * width + x] = sum.clamp(0.0, 255.0) as u8;
         }
     }
+
+    pool.return_buffer(tmp_vec);
 }
 
 pub fn gaussian_blur_with_border(image: &GrayImage, sigma: f32, border: BorderMode) -> GrayImage {

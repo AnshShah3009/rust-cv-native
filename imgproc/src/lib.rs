@@ -8,6 +8,7 @@ pub mod morph;
 pub mod resize;
 pub mod template_matching;
 pub mod threshold;
+pub mod local_threshold;
 
 pub use color::*;
 pub use contours::*;
@@ -19,6 +20,7 @@ pub use morph::*;
 pub use resize::*;
 pub use template_matching::*;
 pub use threshold::*;
+pub use local_threshold::*;
 
 pub type Result<T> = std::result::Result<T, ImgprocError>;
 
