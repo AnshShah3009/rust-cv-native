@@ -1,6 +1,7 @@
 use nalgebra::DVector;
 use faer::sparse::{SparseColMat, Triplet};
-use faer::mat::MatRef;
+use faer::Mat;
+use faer::prelude::Solve;
 
 /// Sparse Matrix representation using Faer as backend.
 pub struct SparseMatrix {
@@ -41,40 +42,37 @@ pub struct CholeskySolver;
 
 impl LinearSolver for CholeskySolver {
     fn solve(&self, A: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String> {
-        let faer_mat = A.to_faer();
+        // TEMPORARY: Convert sparse to dense and use dense Cholesky
+        // TODO: Implement proper sparse Cholesky or GPU compute shader solver
+        // (avoiding CUDA bindings as per user preference)
         
-        // Convert nalgebra DVector to faer MatRef
-        // faer 0.24 Use MatRef directly
-        let b_faer = MatRef::from_column_major_slice(
-            b.as_slice(),
-            b.len(),
-            1,
-        );
-
-        // Cholesky decomposition
-        // Llt = A
-        // Solve Ax = b
+        use faer::Mat;
+        use faer::linalg::cholesky::llt;
         
-        // faer 0.24 API breakdown
-        // TODO: Re-enable generic solver when API is clear.
-        // SimplicialLlt seems to be replaced or moved.
-        todo!("Implement sparse solver with faer 0.24 API");
+        // Convert sparse matrix to dense
+        let mut dense = Mat::zeros(A.rows, A.cols);
+        for triplet in &A.triplets {
+            *dense.get_mut(triplet.row, triplet.col) = triplet.val;
+        }
         
-        /*
-        let llt = SimplicialLlt::new(faer_mat.symbolic());
-        let llt = llt.decompose(&faer_mat).map_err(|_| "Decomposition failed")?;
+        // Convert b to faer Mat
+        let mut b_mat = Mat::zeros(b.len(), 1);
+        for i in 0..b.len() {
+            *b_mat.get_mut(i, 0) = b[i];
+        }
         
-        let x_faer = llt.solve(b_faer);
+        // Use LU decomposition for general linear solve
+        // TODO: Implement proper sparse solver or GPU compute shader
+        let lu = dense.full_piv_lu();
+        let x_faer = lu.solve(b_mat.as_ref());
         
         // Convert back to DVector
-        // x_faer is likely a Mat<f64>
         let mut x_vec = Vec::with_capacity(x_faer.nrows());
         for i in 0..x_faer.nrows() {
-            x_vec.push(x_faer.read(i, 0));
+            x_vec.push(*x_faer.get(i, 0));
         }
         
         Ok(DVector::from_vec(x_vec))
-        */
     }
 }
 
@@ -96,9 +94,9 @@ mod tests {
         let b = DVector::from_vec(vec![2.0, 4.0]);
         
         let solver = CholeskySolver;
-        // let x = solver.solve(&mat, &b).expect("Solve failed");
+        let x = solver.solve(&mat, &b).expect("Solve failed");
         
-        // assert!((x[0] - 1.0).abs() < 1e-6);
-        // assert!((x[1] - 2.0).abs() < 1e-6);
+        assert!((x[0] - 1.0).abs() < 1e-6);
+        assert!((x[1] - 2.0).abs() < 1e-6);
     }
 }
