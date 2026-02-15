@@ -1,4 +1,4 @@
-use image::{GrayImage, Luma, Rgb, RgbImage, RgbaImage};
+use image::{GrayImage, Luma, Rgb, RgbImage};
 
 pub fn convert_gray_to_rgb(gray: &GrayImage) -> RgbImage {
     let (w, h) = gray.dimensions();

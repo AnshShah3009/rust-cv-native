@@ -8,6 +8,7 @@ use std::sync::Arc;
 /// - row_ptr: offsets into col_indices/values for each row
 /// - col_indices: column index for each non-zero
 /// - values: value for each non-zero
+#[allow(dead_code)]
 pub struct GpuSparseMatrix {
     pub rows: usize,
     pub cols: usize,

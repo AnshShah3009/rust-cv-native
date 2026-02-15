@@ -199,7 +199,10 @@ pub fn convolve_with_border_into(
                     let src_x = x as isize + kx as isize - kx_center;
                     let src_y = y as isize + ky as isize - ky_center;
 
-                    let pixel_val = match (map_coord(src_x, width, border), map_coord(src_y, height, border)) {
+                    let pixel_val = match (
+                        map_coord(src_x, width, border),
+                        map_coord(src_y, height, border),
+                    ) {
                         (Some(ix), Some(iy)) => input_data[iy * width + ix] as f32,
                         _ => match border {
                             BorderMode::Constant(v) => v as f32,
@@ -244,9 +247,8 @@ pub fn separable_convolve_into(
     // Use BufferPool for temporary storage
     let pool = cv_core::BufferPool::global();
     let mut tmp_vec = pool.get(width * height * 4); // 4 bytes per f32
-    let tmp: &mut [f32] = unsafe {
-        std::slice::from_raw_parts_mut(tmp_vec.as_mut_ptr() as *mut f32, width * height)
-    };
+    let tmp: &mut [f32] =
+        unsafe { std::slice::from_raw_parts_mut(tmp_vec.as_mut_ptr() as *mut f32, width * height) };
 
     // Horizontal Pass (SIMD optimized)
     for y in 0..height {
@@ -254,7 +256,7 @@ pub fn separable_convolve_into(
         for x in (0..width).step_by(8) {
             let mut sum_v = f32x8::ZERO;
             let end = (x + 8).min(width);
-            
+
             if x + 8 <= width {
                 for (k, &w) in kernel_1d.iter().enumerate() {
                     let w_v = f32x8::splat(w);
@@ -307,14 +309,14 @@ pub fn separable_convolve_into(
                     let mut py_v = [0.0f32; 8];
                     let sy_base = y as isize + k as isize - radius;
                     let target_y = map_coord(sy_base, height, border);
-                    
+
                     if let Some(iy) = target_y {
                         let src_offset = iy * width + x;
                         py_v.copy_from_slice(&tmp[src_offset..src_offset + 8]);
                     } else if let BorderMode::Constant(v) = border {
                         py_v = [v as f32; 8];
                     }
-                    
+
                     sum_v += f32x8::from(py_v) * w_v;
                 }
                 let results: [f32; 8] = sum_v.into();

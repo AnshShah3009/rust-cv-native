@@ -20,6 +20,7 @@ pub fn resize(
     resize_linear(src, width, height)
 }
 
+#[allow(dead_code)]
 fn resize_nearest(src: &GrayImage, width: u32, height: u32) -> GrayImage {
     let mut dst = GrayImage::new(width, height);
     let src_width = src.width() as f32;
@@ -82,7 +83,7 @@ pub fn resize_rgb(
     src: &RgbImage,
     width: u32,
     height: u32,
-    interpolation: Interpolation,
+    _interpolation: Interpolation,
 ) -> RgbImage {
     if width == 0 || height == 0 {
         return RgbImage::new(0, 0);

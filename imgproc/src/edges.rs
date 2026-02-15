@@ -3,7 +3,10 @@ use image::GrayImage;
 fn sobel_kernels_1d(ksize: usize) -> Option<(Vec<f32>, Vec<f32>)> {
     match ksize {
         3 => Some((vec![-1.0, 0.0, 1.0], vec![1.0, 2.0, 1.0])),
-        5 => Some((vec![-1.0, -2.0, 0.0, 2.0, 1.0], vec![1.0, 4.0, 6.0, 4.0, 1.0])),
+        5 => Some((
+            vec![-1.0, -2.0, 0.0, 2.0, 1.0],
+            vec![1.0, 4.0, 6.0, 4.0, 1.0],
+        )),
         7 => Some((
             vec![-1.0, -4.0, -5.0, 0.0, 5.0, 4.0, 1.0],
             vec![1.0, 6.0, 15.0, 20.0, 15.0, 6.0, 1.0],
@@ -48,8 +51,16 @@ pub fn sobel_ex(
         (vec![-1.0, 0.0, 1.0], vec![1.0, 2.0, 1.0])
     });
 
-    let kx = if dx > 0 { deriv.as_slice() } else { smooth.as_slice() };
-    let ky = if dy > 0 { deriv.as_slice() } else { smooth.as_slice() };
+    let kx = if dx > 0 {
+        deriv.as_slice()
+    } else {
+        smooth.as_slice()
+    };
+    let ky = if dy > 0 {
+        deriv.as_slice()
+    } else {
+        smooth.as_slice()
+    };
     let kernel = kernel_from_1d(kx, ky);
     let out = convolve_with_border(src, &kernel, border);
     apply_linear_transform(out, scale, delta)
@@ -64,8 +75,16 @@ pub fn scharr_ex(
     border: BorderMode,
 ) -> GrayImage {
     let (deriv, smooth) = scharr_kernels_1d();
-    let kx = if dx > 0 { deriv.as_slice() } else { smooth.as_slice() };
-    let ky = if dy > 0 { deriv.as_slice() } else { smooth.as_slice() };
+    let kx = if dx > 0 {
+        deriv.as_slice()
+    } else {
+        smooth.as_slice()
+    };
+    let ky = if dy > 0 {
+        deriv.as_slice()
+    } else {
+        smooth.as_slice()
+    };
     let kernel = kernel_from_1d(kx, ky);
     let out = convolve_with_border(src, &kernel, border);
     apply_linear_transform(out, scale, delta)
@@ -124,14 +143,10 @@ fn gradients_and_directions(src: &GrayImage) -> (Vec<f32>, Vec<u8>) {
         for x in 1..width.saturating_sub(1) {
             let p = |xx: usize, yy: usize| data[yy * width + xx] as f32;
 
-            let gx = -p(x - 1, y - 1) + p(x + 1, y - 1)
-                - 2.0 * p(x - 1, y)
-                + 2.0 * p(x + 1, y)
+            let gx = -p(x - 1, y - 1) + p(x + 1, y - 1) - 2.0 * p(x - 1, y) + 2.0 * p(x + 1, y)
                 - p(x - 1, y + 1)
                 + p(x + 1, y + 1);
-            let gy = -p(x - 1, y - 1)
-                - 2.0 * p(x, y - 1)
-                - p(x + 1, y - 1)
+            let gy = -p(x - 1, y - 1) - 2.0 * p(x, y - 1) - p(x + 1, y - 1)
                 + p(x - 1, y + 1)
                 + 2.0 * p(x, y + 1)
                 + p(x + 1, y + 1);
@@ -164,9 +179,15 @@ fn non_max_suppression(width: usize, height: usize, mag: &[f32], dir: &[u8]) -> 
             let m = mag[idx];
             let (m1, m2) = match dir[idx] {
                 0 => (mag[idx - 1], mag[idx + 1]),
-                1 => (mag[(y - 1) * width + (x + 1)], mag[(y + 1) * width + (x - 1)]),
+                1 => (
+                    mag[(y - 1) * width + (x + 1)],
+                    mag[(y + 1) * width + (x - 1)],
+                ),
                 2 => (mag[(y - 1) * width + x], mag[(y + 1) * width + x]),
-                _ => (mag[(y - 1) * width + (x - 1)], mag[(y + 1) * width + (x + 1)]),
+                _ => (
+                    mag[(y - 1) * width + (x - 1)],
+                    mag[(y + 1) * width + (x + 1)],
+                ),
             };
 
             if m >= m1 && m >= m2 {

@@ -195,9 +195,7 @@ pub fn convex_hull(contour: &Contour) -> Contour {
 
     let mut lower = Vec::new();
     for &p in &pts {
-        while lower.len() >= 2
-            && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0
-        {
+        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0 {
             lower.pop();
         }
         lower.push(p);
@@ -205,9 +203,7 @@ pub fn convex_hull(contour: &Contour) -> Contour {
 
     let mut upper = Vec::new();
     for &p in pts.iter().rev() {
-        while upper.len() >= 2
-            && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0
-        {
+        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0 {
             upper.pop();
         }
         upper.push(p);
@@ -246,7 +242,12 @@ fn rdp(points: &[(i32, i32)], epsilon: f64, out: &mut Vec<(i32, i32)>) {
     let last = points[points.len() - 1];
     let mut max_dist = 0.0f64;
     let mut idx = 0usize;
-    for (i, &p) in points.iter().enumerate().skip(1).take(points.len().saturating_sub(2)) {
+    for (i, &p) in points
+        .iter()
+        .enumerate()
+        .skip(1)
+        .take(points.len().saturating_sub(2))
+    {
         let d = point_line_distance(p, first, last);
         if d > max_dist {
             max_dist = d;

@@ -32,7 +32,10 @@ pub fn match_template(
         image.width() >= templ.width() && image.height() >= templ.height(),
         "template must fit inside source image"
     );
-    assert!(templ.width() > 0 && templ.height() > 0, "template cannot be empty");
+    assert!(
+        templ.width() > 0 && templ.height() > 0,
+        "template cannot be empty"
+    );
 
     let out_w = image.width() - templ.width() + 1;
     let out_h = image.height() - templ.height() + 1;
@@ -142,10 +145,7 @@ pub fn min_max_loc(result: &MatchResult) -> ((u32, u32, f32), (u32, u32, f32)) {
         }
     }
 
-    (
-        (min_xy.0, min_xy.1, min_val),
-        (max_xy.0, max_xy.1, max_val),
-    )
+    ((min_xy.0, min_xy.1, min_val), (max_xy.0, max_xy.1, max_val))
 }
 
 fn mean_u8(values: &[u8]) -> f32 {

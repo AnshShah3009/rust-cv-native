@@ -100,6 +100,7 @@ fn map_coord(coord: i32, len: i32, border: BorderMode) -> Option<i32> {
     }
 }
 
+#[allow(dead_code)]
 fn dilate_once(src: &GrayImage, kernel: &[(i32, i32)], border: BorderMode) -> GrayImage {
     let mut output = GrayImage::new(src.width(), src.height());
     dilate_once_into(src, &mut output, kernel, border);
@@ -140,6 +141,7 @@ fn dilate_once_into(
     }
 }
 
+#[allow(dead_code)]
 fn erode_once(src: &GrayImage, kernel: &[(i32, i32)], border: BorderMode) -> GrayImage {
     let mut output = GrayImage::new(src.width(), src.height());
     erode_once_into(src, &mut output, kernel, border);

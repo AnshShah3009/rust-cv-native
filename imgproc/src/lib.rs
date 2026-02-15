@@ -1,26 +1,28 @@
+pub mod bilateral;
 pub mod color;
 pub mod contours;
 pub mod convolve;
 pub mod edges;
 pub mod geometry;
 pub mod histogram;
+pub mod local_threshold;
 pub mod morph;
 pub mod resize;
 pub mod template_matching;
 pub mod threshold;
-pub mod local_threshold;
 
+pub use bilateral::*;
 pub use color::*;
 pub use contours::*;
 pub use convolve::*;
 pub use edges::*;
 pub use geometry::*;
 pub use histogram::*;
+pub use local_threshold::*;
 pub use morph::*;
 pub use resize::*;
 pub use template_matching::*;
 pub use threshold::*;
-pub use local_threshold::*;
 
 pub type Result<T> = std::result::Result<T, ImgprocError>;
 
