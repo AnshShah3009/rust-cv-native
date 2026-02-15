@@ -1,0 +1,9 @@
+[package]
+name = "cv-sfm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cv-core = { path = "../core" }
+nalgebra = { workspace = true }
+thiserror = { workspace = true }
