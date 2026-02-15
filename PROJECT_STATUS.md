@@ -72,6 +72,13 @@ Building a **native Rust computer vision library** as a complete replacement for
 - **Location:** `photo/src/`
 - **Implemented:** Bilateral Filter. Stitching skeleton.
 
+#### 4. **cv-hal** - Hardware Abstraction Layer
+
+- **Location:** `hal/src/`
+- **Docs:** `hal/README.md`
+- **Status:** **Partial**
+- **Features:** `BackendType` trait, `CpuBackend`, `GpuContext` (wgpu integration).
+
 #### 1. **cv-core** - Core Data Structures
 
 - **Location:** `core/src/`

@@ -1,7 +1,10 @@
 pub mod backend;
 pub mod cpu;
 pub mod device;
+pub mod gpu;
 pub mod gpu_utils;
+
+pub use gpu::*;
 
 pub use backend::{BackendType, Capability, ComputeBackend, DeviceId, QueueId, QueueType};
 pub use cpu::*;
