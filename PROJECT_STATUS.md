@@ -62,10 +62,10 @@ Building a **native Rust computer vision library** as a complete replacement for
 - **Location:** `dnn/src/`
 - **Implemented:** Basic Blob structures.
 
-#### [NEW] 13. **cv-optimize** - Optimization Framework
+#### 13. **cv-optimize** - Optimization Framework
 
 - **Location:** `optimize/src/`
-- **Implemented:** Basic graph solver structures.
+- **Implemented:** `FactorGraph` (Dense LM), `SparseMatrix` (Faer integration, Solver stub).
 
 #### [NEW] 14. **cv-photo** - Computational Photography
 

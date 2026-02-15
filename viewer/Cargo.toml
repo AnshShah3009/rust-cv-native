@@ -1,0 +1,8 @@
+[package]
+name = "cv-viewer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rerun = "0.29.2"
+cv-core = { path = "../core" }

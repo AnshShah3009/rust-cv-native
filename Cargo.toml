@@ -42,7 +42,7 @@ members = [
     "photo",
     "dnn",
     "sfm",
-    "slam", "runtime", "optimize", "scientific", "python",
+    "slam", "runtime", "optimize", "scientific", "python", "viewer",
 ]
 
 [workspace.dependencies]
