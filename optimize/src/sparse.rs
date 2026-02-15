@@ -1,5 +1,6 @@
 use nalgebra::DVector;
-use faer::sparse::{SparseColMat, Triplet};
+pub use faer::sparse::Triplet;
+use faer::sparse::SparseColMat;
 use faer::Mat;
 use faer::prelude::Solve;
 

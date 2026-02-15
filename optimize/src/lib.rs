@@ -2,6 +2,7 @@ use nalgebra::{DVector, DMatrix};
 // use std::sync::Arc;
 
 pub mod sparse;
+pub mod gpu_solver;
 
 pub trait Factor: Send + Sync {
     fn residual(&self, variables: &[DVector<f64>]) -> DVector<f64>;
