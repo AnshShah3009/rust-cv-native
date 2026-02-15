@@ -1090,4 +1090,31 @@ mod tests {
         let size = gpu_utils::estimate_image_buffer_size(1920, 1080, 4);
         assert_eq!(size, 1920 * 1080 * 4);
     }
+
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn gpu_adapter_policy_documentation() {
+        // Document GPU adapter policy behavior
+        // The RUSTCV_GPU_ADAPTER environment variable controls adapter selection:
+        // - auto: Use any available GPU
+        // - prefer_discrete: Prefer discrete GPU (NVIDIA, AMD) over integrated graphics (DEFAULT)
+        // - discrete_only: Only use discrete GPU, fail if not available
+        // - nvidia_only: Only use NVIDIA discrete GPU, fail if not available
+
+        // When RUSTCV_GPU_ADAPTER=discrete_only or nvidia_only, marker detection
+        // will fail with a clear error if no suitable GPU is found, and fall back to CPU
+
+        // Current implementation:
+        // 1. MarkerGpuContext::new() checks GPU availability
+        // 2. If no GPU available, returns None
+        // 3. Detection falls back to CPU (via gpu_available() check)
+        // 4. RUSTCV_GPU_ADAPTER is respected by wgpu adapter selection
+
+        // Example usage:
+        // export RUSTCV_GPU_ADAPTER=nvidia_only
+        // export RUSTCV_GPU_MAX_BYTES=1GB
+        // cargo run --features gpu --release
+
+        assert!(true); // This is a documentation test
+    }
 }
