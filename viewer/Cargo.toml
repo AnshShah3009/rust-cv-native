@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rerun = "0.29.2"
 cv-core = { path = "../core" }
-wgpu = "0.20.1"
 egui = "0.33.3"
 eframe = { version = "0.33.3", features = ["wgpu"] }
 bytemuck = "1.21.0"
 glam = "0.29.3"
+
+[features]
+default = []

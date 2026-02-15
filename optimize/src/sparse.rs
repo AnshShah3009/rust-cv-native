@@ -1,7 +1,6 @@
 use nalgebra::DVector;
 pub use faer::sparse::Triplet;
 use faer::sparse::SparseColMat;
-use faer::Mat;
 use faer::prelude::Solve;
 
 /// Sparse Matrix representation using Faer as backend.
@@ -36,23 +35,23 @@ impl SparseMatrix {
 
 
 pub trait LinearSolver {
-    fn solve(&self, A: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String>;
+    fn solve(&self, a: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String>;
 }
 
 pub struct CholeskySolver;
 
 impl LinearSolver for CholeskySolver {
-    fn solve(&self, A: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String> {
+    fn solve(&self, a: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String> {
         // TEMPORARY: Convert sparse to dense and use dense Cholesky
         // TODO: Implement proper sparse Cholesky or GPU compute shader solver
         // (avoiding CUDA bindings as per user preference)
         
         use faer::Mat;
-        use faer::linalg::cholesky::llt;
+        
         
         // Convert sparse matrix to dense
-        let mut dense = Mat::zeros(A.rows, A.cols);
-        for triplet in &A.triplets {
+        let mut dense = Mat::zeros(a.rows, a.cols);
+        for triplet in &a.triplets {
             *dense.get_mut(triplet.row, triplet.col) = triplet.val;
         }
         

@@ -1,6 +1,5 @@
 use crate::descriptor::Descriptors;
 use cv_core::{FeatureMatch, Matches};
-use std::cmp::Ordering;
 
 pub enum MatchType {
     BruteForce,

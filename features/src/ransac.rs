@@ -194,7 +194,7 @@ fn compute_homography_4pt(
 }
 
 /// Solve DLT for homography using simple approach
-fn solve_dlt_homography(a: &[f64]) -> Option<Matrix3<f64>> {
+fn solve_dlt_homography(_a: &[f64]) -> Option<Matrix3<f64>> {
     // Simple implementation: use the last column as solution
     // This is a simplified version - real implementation should use SVD
 
@@ -249,7 +249,7 @@ fn compute_fundamental_8pt(
 }
 
 /// Solve DLT for fundamental matrix
-fn solve_dlt_fundamental(a: &[f64]) -> Option<Matrix3<f64>> {
+fn solve_dlt_fundamental(_a: &[f64]) -> Option<Matrix3<f64>> {
     // Placeholder implementation
     let f = Matrix3::new(0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0);
 

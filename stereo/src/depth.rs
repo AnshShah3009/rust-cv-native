@@ -3,7 +3,7 @@
 //! Convert disparity values to 3D depth and point clouds.
 
 use crate::{DisparityMap, StereoParams};
-use nalgebra::{Point2, Point3, Vector3};
+use nalgebra::{Point2, Point3};
 
 /// 3D point cloud from stereo depth
 #[derive(Debug, Clone)]

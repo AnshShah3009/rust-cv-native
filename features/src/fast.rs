@@ -113,7 +113,7 @@ fn has_n_contiguous(
 }
 
 /// Compute corner score using the sum of absolute differences
-pub fn corner_score(image: &GrayImage, x: i32, y: i32, threshold: u8) -> u8 {
+pub fn corner_score(image: &GrayImage, x: i32, y: i32, _threshold: u8) -> u8 {
     let circle_offsets: [(i32, i32); 16] = [
         (0, -3),
         (1, -3),

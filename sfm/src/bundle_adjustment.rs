@@ -1,4 +1,4 @@
-use nalgebra::{DVector, DMatrix, Vector3, Point3, Point2, Matrix3x4, Rotation3};
+use nalgebra::{DVector, DMatrix, Vector3, Point3, Point2, Rotation3};
 use cv_core::{CameraIntrinsics, CameraExtrinsics};
 
 /// Data structure representing a point in 3D and its observations across frames.

@@ -50,7 +50,7 @@ pub fn harris_detect(
 
 pub fn shi_tomasi_detect(
     image: &GrayImage,
-    max_corners: usize,
+    _max_corners: usize,
     quality_level: f64,
     _min_distance: f64,
 ) -> KeyPoints {

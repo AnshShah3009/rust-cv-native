@@ -1,6 +1,6 @@
 use image::GrayImage;
-use cv_core::{KeyPoint, KeyPoints};
-use crate::fast; // Reusing fast for now or implementing custom SIFT detection
+use cv_core::KeyPoints;
+ // Reusing fast for now or implementing custom SIFT detection
 
 pub struct SiftParams {
     pub n_octaves: usize,
@@ -22,7 +22,7 @@ impl Default for SiftParams {
     }
 }
 
-pub fn sift_detect(image: &GrayImage, params: &SiftParams) -> KeyPoints {
+pub fn sift_detect(_image: &GrayImage, _params: &SiftParams) -> KeyPoints {
     // 1. Build Gaussian scale-space
     // 2. Compute Difference of Gaussians (DoG)
     // 3. Find local extrema in DoG space

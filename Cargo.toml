@@ -42,8 +42,14 @@ members = [
     "photo",
     "dnn",
     "sfm",
-    "slam", "runtime", "optimize", "scientific", "python", "features",
-    # "viewer", # Excluded pending eframe/rerun update to support wgpu 28
+    "slam",
+    "runtime",
+    "optimize",
+    "scientific",
+    "python",
+    "viewer",
+    "io",
+    "3d",
 ]
 
 [workspace.dependencies]

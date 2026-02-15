@@ -44,6 +44,6 @@ pub enum FeatureError {
 }
 
 pub fn detect_keypoints(image: &GrayImage, max_keypoints: usize) -> KeyPoints {
-    let mut kps = fast::fast_detect(image, 20, max_keypoints);
+    let kps = fast::fast_detect(image, 20, max_keypoints);
     kps
 }

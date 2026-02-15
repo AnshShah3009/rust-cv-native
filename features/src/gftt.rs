@@ -1,4 +1,4 @@
-use image::{GrayImage, Luma};
+use image::GrayImage;
 use cv_core::{KeyPoint, KeyPoints};
 
 pub fn gftt_detect(
@@ -36,7 +36,7 @@ pub fn gftt_detect(
 
             // Min eigenvalue calculation
             let trace = i_xx + i_yy;
-            let det = i_xx * i_yy - i_xy * i_xy;
+            let _det = i_xx * i_yy - i_xy * i_xy;
             let term = ((i_xx - i_yy).powi(2) + 4.0 * i_xy * i_xy).sqrt();
             let lambda_min = (trace - term) * 0.5;
 

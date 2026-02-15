@@ -1,4 +1,4 @@
-use nalgebra::{Matrix4, Vector3, Point3, Point2, Matrix3x4};
+use nalgebra::{Point3, Point2, Matrix3x4};
 
 /// Error type for SfM operations
 #[derive(Debug, thiserror::Error)]

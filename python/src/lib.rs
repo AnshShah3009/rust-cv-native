@@ -1,11 +1,11 @@
 use cv_core::Rect as RustRect;
 use cv_scientific::geometry::vectorized_iou as rust_vectorized_iou;
+#[allow(deprecated)]
 use numpy::{PyArray2, PyUntypedArrayMethods, PyArrayMethods, IntoPyArray};
 use pyo3::prelude::*;
 use cv_core::CameraIntrinsics;
 use cv_3d::PointCloud;
 use cv_slam::SlamSystem;
-use ndarray::Array2;
 use geo::Area;
 
 #[pyclass]
@@ -63,8 +63,11 @@ fn py_vectorized_iou<'py>(
     let result = rust_vectorized_iou(&rects1, &rects2);
     
     // Convert ndarray::Array2 to PyArray2
+    #[allow(deprecated)]
     let pyarray = result.into_pyarray(py);
-    Ok(pyarray.to_owned().into_bound(py))
+    #[allow(deprecated)]
+    let result = pyarray.to_owned().into_bound(py);
+    Ok(result)
 }
 
 #[pyclass]
