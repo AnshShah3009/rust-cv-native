@@ -3,6 +3,7 @@ pub mod cpu;
 pub mod device;
 pub mod gpu;
 pub mod gpu_utils;
+pub mod gpu_sparse;
 
 pub use gpu::*;
 
