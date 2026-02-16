@@ -743,8 +743,8 @@ pub mod registration {
         max_distance: f32,
         max_iterations: usize,
     ) -> Option<Matrix4<f32>> {
-        use crate::registration::registration_icp_point_to_plane;
         use cv_core::point_cloud::PointCloud;
+        use cv_registration::registration_icp_point_to_plane;
         let source_cloud = PointCloud::new(source.to_vec());
         let target_cloud = PointCloud::new(target.to_vec()).with_normals(target_normals.to_vec());
         let result = registration_icp_point_to_plane(

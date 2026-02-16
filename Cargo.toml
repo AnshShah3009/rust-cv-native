@@ -49,7 +49,7 @@ members = [
     "python",
     "viewer",
     "io",
-    "3d",
+    "3d", "rendering", "registration",
 ]
 
 [workspace.dependencies]

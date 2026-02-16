@@ -17,9 +17,38 @@ pub use global::{
 };
 pub use gnc::{registration_gnc, GNCOptimizer, GNCResult, RobustLoss, RobustLossType};
 
-use crate::spatial::KDTree;
 use cv_core::point_cloud::PointCloud;
-use nalgebra::Matrix4;
+use nalgebra::{Matrix4, Point3, Vector3};
+
+/// Simple KD-tree-like structure for nearest neighbor search
+struct SimpleNN {
+    points: Vec<Point3<f32>>,
+}
+
+impl SimpleNN {
+    fn new(points: Vec<Point3<f32>>) -> Self {
+        Self { points }
+    }
+
+    fn nearest(&self, query: &Point3<f32>) -> Option<(Point3<f32>, usize, f32)> {
+        let mut min_dist = f32::MAX;
+        let mut min_idx = 0;
+
+        for (i, pt) in self.points.iter().enumerate() {
+            let dist = (pt - query).norm_squared();
+            if dist < min_dist {
+                min_dist = dist;
+                min_idx = i;
+            }
+        }
+
+        if min_dist < f32::MAX {
+            Some((self.points[min_idx], min_idx, min_dist))
+        } else {
+            None
+        }
+    }
+}
 
 /// Standard ICP registration result
 #[derive(Debug, Clone)]
@@ -38,11 +67,8 @@ pub fn registration_icp_point_to_plane(
     init_transformation: &Matrix4<f32>,
     max_iterations: usize,
 ) -> Option<ICPResult> {
-    // Build KD-tree for target
-    let mut target_tree = KDTree::new();
-    for (i, point) in target.points.iter().enumerate() {
-        target_tree.insert(*point, i);
-    }
+    // Build simple nearest neighbor structure for target
+    let target_nn = SimpleNN::new(target.points.clone());
 
     let mut transformation = *init_transformation;
     let mut best_fitness = 0.0;
@@ -56,9 +82,7 @@ pub fn registration_icp_point_to_plane(
         for (src_idx, src_point) in source.points.iter().enumerate() {
             let transformed = transformation.transform_point(src_point);
 
-            if let Some((_target_point, target_idx, dist_sq)) =
-                target_tree.nearest_neighbor(&transformed)
-            {
+            if let Some((target_point, target_idx, dist_sq)) = target_nn.nearest(&transformed) {
                 let dist = dist_sq.sqrt();
 
                 if dist <= max_correspondence_distance {
@@ -194,17 +218,14 @@ pub fn get_information_matrix_from_point_clouds(
 ) -> nalgebra::Matrix6<f32> {
     let mut information = nalgebra::Matrix6::<f32>::zeros();
 
-    // Build KD-tree for target
-    let mut target_tree = KDTree::new();
-    for (i, point) in target.points.iter().enumerate() {
-        target_tree.insert(*point, i);
-    }
+    // Build simple nearest neighbor for target
+    let target_nn = SimpleNN::new(target.points.clone());
 
     // Accumulate information from correspondences
     for src_point in &source.points {
         let transformed = transformation.transform_point(src_point);
 
-        if let Some((target_point, _, dist_sq)) = target_tree.nearest_neighbor(&transformed) {
+        if let Some((target_point, _, dist_sq)) = target_nn.nearest(&transformed) {
             if dist_sq.sqrt() < 0.05 {
                 // Small distance threshold
                 let diff = transformed - target_point;
@@ -235,17 +256,14 @@ pub fn evaluate_registration(
     transformation: &Matrix4<f32>,
     max_correspondence_distance: f32,
 ) -> (f32, f32) {
-    let mut target_tree = KDTree::new();
-    for (i, point) in target.points.iter().enumerate() {
-        target_tree.insert(*point, i);
-    }
+    let target_nn = SimpleNN::new(target.points.clone());
 
     let mut inlier_count = 0;
     let mut total_error = 0.0;
 
     for point in &source.points {
         let transformed = transformation.transform_point(point);
-        if let Some((_, _, dist_sq)) = target_tree.nearest_neighbor(&transformed) {
+        if let Some((_, _, dist_sq)) = target_nn.nearest(&transformed) {
             let dist = dist_sq.sqrt();
             if dist < max_correspondence_distance {
                 inlier_count += 1;

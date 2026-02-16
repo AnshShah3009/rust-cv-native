@@ -3,9 +3,38 @@
 //! ICP variant that uses both geometry and color for alignment.
 //! Useful for registering RGBD scans with rich texture.
 
-use crate::spatial::KDTree;
 use cv_core::point_cloud::PointCloud;
 use nalgebra::{Matrix3, Matrix4, Point3, Vector3};
+
+/// Simple nearest neighbor
+struct SimpleNN {
+    points: Vec<Point3<f32>>,
+}
+
+impl SimpleNN {
+    fn new(points: Vec<Point3<f32>>) -> Self {
+        Self { points }
+    }
+
+    fn nearest(&self, query: &Point3<f32>) -> Option<(Point3<f32>, usize, f32)> {
+        let mut min_dist = f32::MAX;
+        let mut min_idx = 0;
+
+        for (i, pt) in self.points.iter().enumerate() {
+            let dist = (pt - query).norm_squared();
+            if dist < min_dist {
+                min_dist = dist;
+                min_idx = i;
+            }
+        }
+
+        if min_dist < f32::MAX {
+            Some((self.points[min_idx], min_idx, min_dist))
+        } else {
+            None
+        }
+    }
+}
 
 /// Colored ICP result
 #[derive(Debug, Clone)]
@@ -28,11 +57,8 @@ pub fn registration_colored_icp(
     let source_colors = source.colors.as_ref()?;
     let target_colors = target.colors.as_ref()?;
 
-    // Build KD-tree for target
-    let mut target_tree = KDTree::new();
-    for (i, point) in target.points.iter().enumerate() {
-        target_tree.insert(*point, i);
-    }
+    // Build simple NN for target
+    let target_nn = SimpleNN::new(target.points.clone());
 
     let mut transformation = *init_transformation;
     let mut best_fitness = 0.0;
@@ -53,9 +79,7 @@ pub fn registration_colored_icp(
             let transformed = transformation.transform_point(&source_point);
 
             // Find nearest neighbor in target
-            if let Some((target_point, target_idx, dist_sq)) =
-                target_tree.nearest_neighbor(&transformed)
-            {
+            if let Some((target_point, target_idx, dist_sq)) = target_nn.nearest(&transformed) {
                 let dist = dist_sq.sqrt();
 
                 if dist > max_correspondence_distance {

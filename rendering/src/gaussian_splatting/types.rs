@@ -22,7 +22,7 @@
 //! ## Example
 //!
 //! ```rust
-//! use cv_3d::gaussian_splatting::{Gaussian, GaussianCloud};
+//! use cv_rendering::gaussian_splatting::{Gaussian, GaussianCloud};
 //! use nalgebra::{Point3, Vector3, Vector4};
 //!
 //! // Create a single Gaussian

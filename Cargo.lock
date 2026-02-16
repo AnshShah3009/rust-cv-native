@@ -1209,6 +1209,7 @@ version = "0.1.0"
 dependencies = [
  "cv-core",
  "cv-hal",
+ "cv-registration",
  "cv-runtime",
  "futures",
  "nalgebra",
@@ -1348,6 +1349,29 @@ dependencies = [
  "ndarray 0.15.6",
  "numpy",
  "pyo3",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cv-registration"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "cv-core",
+ "nalgebra",
+ "rand 0.8.5",
+ "rayon",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cv-rendering"
+version = "0.1.0"
+dependencies = [
+ "cv-core",
+ "nalgebra",
+ "rand 0.8.5",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 

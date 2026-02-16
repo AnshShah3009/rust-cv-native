@@ -8,6 +8,7 @@ nalgebra = { workspace = true }
 cv-core = { path = "../core" }
 cv-runtime = { path = "../runtime" }
 cv-hal = { path = "../hal" }
+cv-registration = { path = "../registration" }
 thiserror = { workspace = true }
 rayon = { workspace = true }
 tokio = { version = "1", features = ["full"] }

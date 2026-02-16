@@ -1,12 +1,9 @@
 pub mod async_ops;
 pub mod batch;
-pub mod gaussian_splatting;
 pub mod gpu;
 pub mod mesh;
 pub mod odometry;
-// pub mod pose_graph;
 pub mod raycasting;
-pub mod registration;
 pub mod spatial;
 pub mod tsdf;
 
@@ -44,17 +41,5 @@ pub use raycasting::{
     cast_ray_mesh, cast_rays_mesh, closest_point_on_mesh, closest_points_on_mesh,
     mesh_to_mesh_distance, point_inside_mesh, Ray, RayHit,
 };
-pub use registration::{
-    evaluate_registration, get_information_matrix_from_point_clouds, registration_colored_icp,
-    registration_fgr_based_on_feature_matching, registration_gnc, registration_icp_point_to_plane,
-    registration_multi_scale_icp, registration_ransac_based_on_feature_matching, ColoredICPResult,
-    FPFHFeature, FastGlobalRegistrationOption, GNCOptimizer, GNCResult, GlobalRegistrationResult,
-    ICPResult, RobustLoss, RobustLossType,
-};
 pub use spatial::{KDTree, Octree, VoxelGrid};
 pub use tsdf::{CameraIntrinsics, TSDFVolume, Triangle, VoxelBlock};
-pub use gaussian_splatting::{
-    Gaussian, GaussianCloud, SphericalHarmonics, GaussianRasterizer, DifferentiableRasterizer,
-    GaussianOptimizer, DensificationConfig, TrainingConfig, Camera, RasterizationResult,
-    read_ply_gaussian_cloud, write_ply_gaussian_cloud,
-};
