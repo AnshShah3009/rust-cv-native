@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>3D Point Cloud</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        #container { width: 800px; height: 600px; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+    <div id="container"></div>
+    <script>
+        const container = document.getElementById('container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a2e);
+        
+        const camera = new THREE.PerspectiveCamera(75, 800/600, 0.1, 1000);
+        camera.position.set(5, 5, 5);
+        camera.lookAt(0, 0, 0);
+        
+        const renderer = new THREE.WebGLRenderer({antialias: true});
+        renderer.setSize(800, 600);
+        container.appendChild(renderer.domElement);
+        
+        const points = [{x:0,y:0,z:0},{x:1,y:1,z:0},{x:2,y:0,z:1},];
+        const colors = [[0,0,255],[0,0,255],[0,0,255],];
+        
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(points.length * 3);
+        const colorArray = new Float32Array(points.length * 3);
+        
+        for (let i = 0; i < points.length; i++) {
+            positions[i * 3] = points[i].x;
+            positions[i * 3 + 1] = points[i].y;
+            positions[i * 3 + 2] = points[i].z;
+            colorArray[i * 3] = colors[i][0] / 255;
+            colorArray[i * 3 + 1] = colors[i][1] / 255;
+            colorArray[i * 3 + 2] = colors[i][2] / 255;
+        }
+        
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+        
+        const material = new THREE.PointsMaterial({size: 3, vertexColors: true});
+        const pointCloud = new THREE.Points(geometry, material);
+        scene.add(pointCloud);
+        
+        const axesHelper = new THREE.AxesHelper(2);
+        scene.add(axesHelper);
+        
+        let isDragging = false;
+        let previousMousePosition = {x: 0, y: 0};
+        
+        container.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            previousMousePosition = {x: e.clientX, y: e.clientY};
+        });
+        
+        container.addEventListener('mouseup', () => isDragging = false);
+        container.addEventListener('mouseleave', () => isDragging = false);
+        
+        container.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const deltaX = e.clientX - previousMousePosition.x;
+            const deltaY = e.clientY - previousMousePosition.y;
+            pointCloud.rotation.y += deltaX * 0.01;
+            pointCloud.rotation.x += deltaY * 0.01;
+            previousMousePosition = {x: e.clientX, y: e.clientY};
+        });
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>

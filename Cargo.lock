@@ -1333,6 +1333,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cv-plot"
+version = "0.1.0"
+dependencies = [
+ "nalgebra",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "cv-python"
 version = "0.1.0"
 dependencies = [
@@ -1340,6 +1349,7 @@ dependencies = [
  "cv-core",
  "cv-features",
  "cv-imgproc",
+ "cv-registration",
  "cv-runtime",
  "cv-scientific",
  "cv-slam",

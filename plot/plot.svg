@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600">
+  <style>
+    .axis { font-family: Arial, sans-serif; font-size: 12px; fill: #333; }
+    .title { font-family: Arial, sans-serif; font-size: 16px; font-weight: bold; fill: #333; }
+    .label { font-family: Arial, sans-serif; font-size: 12px; fill: #666; }
+    .legend { font-family: Arial, sans-serif; font-size: 11px; fill: #333; }
+    .grid { stroke: #e0e0e0; stroke-width: 0.5; }
+  </style>
+  <text x="400" y="33" class="title" text-anchor="middle">My Plot</text>
+  <line x1="60" y1="50" x2="60" y2="550" class="grid"/>
+  <line x1="202" y1="50" x2="202" y2="550" class="grid"/>
+  <line x1="344" y1="50" x2="344" y2="550" class="grid"/>
+  <line x1="486" y1="50" x2="486" y2="550" class="grid"/>
+  <line x1="628" y1="50" x2="628" y2="550" class="grid"/>
+  <line x1="770" y1="50" x2="770" y2="550" class="grid"/>
+  <line x1="60" y1="50" x2="770" y2="50" class="grid"/>
+  <line x1="60" y1="150" x2="770" y2="150" class="grid"/>
+  <line x1="60" y1="250" x2="770" y2="250" class="grid"/>
+  <line x1="60" y1="350" x2="770" y2="350" class="grid"/>
+  <line x1="60" y1="450" x2="770" y2="450" class="grid"/>
+  <line x1="60" y1="550" x2="770" y2="550" class="grid"/>
+  <line x1="60" y1="50" x2="60" y2="550" stroke="black" stroke-width="1"/>
+  <line x1="60" y1="550" x2="770" y2="550" stroke="black" stroke-width="1"/>
+  <polyline points="119.2,508.3 316.4,425.0 513.6,286.1 710.8,91.7" fill="none" stroke="#1f77b4" stroke-width="2"/>
+  <text x="400" y="590" class="label" text-anchor="middle">X</text>
+  <text x="15" y="300" class="label" text-anchor="middle" transform="rotate(-90, 15, 300)">Y</text>
+  <rect x="670" y="60" width="12" height="12" fill="#1f77b4"/>
+  <text x="688" y="70" class="legend">y = x²</text>
+</svg>

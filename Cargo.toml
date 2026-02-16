@@ -49,8 +49,9 @@ members = [
     "python",
     "viewer",
     "io",
-    "3d", "rendering", "registration",
+    "3d", "rendering", "registration", "plot",
 ]
+exclude = ["examples"]
 
 [workspace.dependencies]
 rayon = "1.10"
