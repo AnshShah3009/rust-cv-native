@@ -10,7 +10,6 @@ pub mod sgm;
 pub mod depth;
 pub mod rectification;
 pub use cv_calib3d as calib3d;
-mod parallel;
 
 #[cfg(feature = "gpu")]
 pub mod gpu;

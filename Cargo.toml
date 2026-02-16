@@ -28,6 +28,11 @@ name = "cv_benchmarks"
 harness = false
 path = "benches/cv_benchmarks.rs"
 
+[[bench]]
+name = "async_bridge"
+harness = false
+path = "benches/async_bridge.rs"
+
 [workspace]
 resolver = "2"
 members = [
@@ -64,7 +69,7 @@ wide = "0.7"
 pulp = "0.5"
 futures = "0.3.31"
 thiserror = "2.0"
-criterion = { version = "0.5", default-features = false, features = ["rayon", "cargo_bench_support"] }
+criterion = { version = "0.5", default-features = false, features = ["rayon", "cargo_bench_support", "async_tokio"] }
 core_affinity = "0.8"
 ndarray = "0.15"
 tokio = "1.43"
