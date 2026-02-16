@@ -1,4 +1,4 @@
-use nalgebra::{Point3, Point2, Matrix3x4};
+use nalgebra::{Matrix3x4, Point2, Point3};
 
 /// Error type for SfM operations
 #[derive(Debug, thiserror::Error)]
@@ -10,7 +10,7 @@ pub enum SfmError {
 pub type Result<T> = std::result::Result<T, SfmError>;
 
 /// Triangulate a single 3D point from two views.
-/// 
+///
 /// Uses the DLT (Direct Linear Transformation) algorithm.
 /// p1, p2 are the 2D points in homogeneous coordinates (normalized or pixel).
 /// P1, P2 are the 3x4 projection matrices for each view.
@@ -41,15 +41,19 @@ pub fn triangulate_point_dlt(
 
     // Solve using SVD: Ax = 0
     let svd = a.svd(true, true);
-    let vt = svd.v_t.ok_or_else(|| SfmError::TriangulationFailed("SVD failed".to_string()))?;
-    
+    let vt = svd
+        .v_t
+        .ok_or_else(|| SfmError::TriangulationFailed("SVD failed".to_string()))?;
+
     // The solution is the last row of V^T (last column of V)
     let last_row = vt.row(3);
-    
+
     // Homogeneous to Euclidean
     let w = last_row[3];
     if w.abs() < 1e-12 {
-        return Err(SfmError::TriangulationFailed("Point at infinity".to_string()));
+        return Err(SfmError::TriangulationFailed(
+            "Point at infinity".to_string(),
+        ));
     }
 
     Ok(Point3::new(
@@ -67,7 +71,9 @@ pub fn triangulate_points(
     proj2: &Matrix3x4<f64>,
 ) -> Result<Vec<Point3<f64>>> {
     if points1.len() != points2.len() {
-        return Err(SfmError::TriangulationFailed("Point counts must match".to_string()));
+        return Err(SfmError::TriangulationFailed(
+            "Point counts must match".to_string(),
+        ));
     }
 
     let mut result = Vec::with_capacity(points1.len());
@@ -80,7 +86,7 @@ pub fn triangulate_points(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nalgebra::{Matrix3, Vector3, Rotation3};
+    use nalgebra::{Matrix3, Rotation3, Vector3};
 
     #[test]
     fn test_triangulation_simple() {
@@ -89,29 +95,25 @@ mod tests {
         let r1 = Rotation3::<f64>::identity();
         let t1 = Vector3::<f64>::zeros();
         let mut p1 = Matrix3x4::<f64>::identity();
-        
+
         // Camera 2 at (1, 0, 0), looking along Z axis
         let r2 = Rotation3::<f64>::identity();
         let t2 = Vector3::new(-1.0, 0.0, 0.0); // T is -R*C
-        let p2 = Matrix3x4::<f64>::new(
-            1.0, 0.0, 0.0, -1.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-        );
+        let p2 = Matrix3x4::<f64>::new(1.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
 
         // A 3D point at (0, 0, 5)
         let world_pt = Point3::new(0.0, 0.0, 5.0);
-        
+
         // Project to view 1
         // x1 = [1 0 0 0; 0 1 0 0; 0 0 1 0] * [0 0 5 1]^T = [0 0 5]^T -> (0, 0)
         let pt1 = Point2::new(0.0, 0.0);
-        
+
         // Project to view 2
         // x2 = [1 0 0 -1; 0 1 0 0; 0 0 1 0] * [0 0 5 1]^T = [-1 0 5]^T -> (-0.2, 0)
         let pt2 = Point2::new(-0.2, 0.0);
 
         let triangulated = triangulate_point_dlt(&pt1, &pt2, &p1, &p2).unwrap();
-        
+
         assert!((triangulated.x - world_pt.x).abs() < 1e-6);
         assert!((triangulated.y - world_pt.y).abs() < 1e-6);
         assert!((triangulated.z - world_pt.z).abs() < 1e-6);

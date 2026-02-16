@@ -1,7 +1,54 @@
-//! Visual SLAM module
+//! Visual SLAM (Simultaneous Localization and Mapping)
 //!
-//! This crate provides algorithms for Simultaneous Localization
-//! and Mapping using visual input.
+//! This crate provides algorithms for Simultaneous Localization and Mapping
+//! using visual input (cameras). It implements key SLAM components:
+//!
+//! ## Core Components
+//!
+//! - [`Slam`]: Main SLAM system integrating tracking, mapping, and loop closure
+//! - [`KeyFrame`]: Keyframe representation with pose, features, and descriptors
+//! - [`SlamConfig`]: Configuration for SLAM system parameters
+//!
+//! ## Submodules
+//!
+//! - [`kalman`]: Kalman filters for state estimation (Linear, Extended)
+//! - [`tracking`]: Visual odometry and feature tracking
+//! - [`mapping`]: 3D map management and optimization
+//!
+//! ## Kalman Filters
+//!
+//! The crate provides robust state estimation via:
+//! - [`KalmanFilter`]: Standard linear Kalman filter
+//! - [`ExtendedKalmanFilter`] (EKF): For non-linear systems
+//!
+//! ## Example: Using Kalman Filter for 2D Tracking
+//!
+//! ```rust
+//! use cv_slam::kalman::{KalmanFilter, KalmanFilterState, utils};
+//! use nalgebra::SVector;
+//!
+//! // Create a constant velocity model for 2D tracking
+//! let kf = utils::constant_velocity_2d(0.1, 0.01, 0.1);
+//! let mut state = KalmanFilterState::zero();
+//!
+//! // Prediction and update steps
+//! let u = SVector::<f64, 4>::zeros();
+//! let z = nalgebra::Vector2::new(1.0, 1.0);
+//!
+//! kf.step(&mut state, &u, &z);
+//! println!("State: {:?}", state.x);
+//! ```
+//!
+//! ## Example: Basic SLAM System
+//!
+//! ```rust
+//! // use cv_slam::{Slam, SlamConfig};
+//! // use cv_core::CameraIntrinsics;
+//! //
+//! // let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+//! // let config = SlamConfig::default();
+//! // let mut slam = Slam::new(intrinsics).with_config(config);
+//! ```
 
 pub mod kalman;
 pub mod mapping;

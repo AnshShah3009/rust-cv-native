@@ -1,3 +1,39 @@
+//! Scientific Computing (scipy equivalents)
+//!
+//! This crate provides scientific computing functions equivalent to Python's scipy:
+//! - [`integrate`]: Numerical integration (quad, simpson, trapezoid)
+//! - [`special`]: Special functions (erf, gamma, bessel)
+//! - [`geometry`]: Geometric operations (Shapely equivalents)
+//! - [`point_cloud`]: Point cloud utilities
+//! - [`jit`]: JIT vectorization helpers
+//!
+//! ## Example: Numerical Integration
+//!
+//! ```rust
+//! use cv_scientific::integrate::quad;
+//!
+//! // Integrate f(x) = x^2 from 0 to 1
+//! let result = quad(|x| x * x, 0.0, 1.0);
+//! println!("Integral: {}", result.0);  // Should be ~0.333
+//! ```
+//!
+//! ## Example: Special Functions
+//!
+//! ```rust
+//! use cv_scientific::special::{erf, gamma, bessel_j0};
+//!
+//! let e = erf(1.0);
+//! let g = gamma(5.0);  // 4! = 24
+//! let j0 = bessel_j0(1.0);
+//! ```
+//!
+//! ## Statistical Functions
+//!
+//! - [`mean`]: Arithmetic mean
+//! - [`std`]: Standard deviation
+//! - [`lerp`]: Linear interpolation
+//! - [`Interp1d`]: 1D linear interpolation
+
 pub mod geometry;
 pub mod integrate;
 pub mod jit;

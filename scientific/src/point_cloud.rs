@@ -1,7 +1,7 @@
 use cv_core::PointCloud;
-use nalgebra::{Point3, Vector3, Matrix3, SymmetricEigen};
-use std::collections::HashMap;
+use nalgebra::{Matrix3, Point3, SymmetricEigen, Vector3};
 use rstar::{RTree, RTreeObject, AABB};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
@@ -12,7 +12,8 @@ pub fn voxel_down_sample(pc: &PointCloud, voxel_size: f32) -> PointCloud {
         return pc.clone();
     }
 
-    let mut grid: HashMap<(i32, i32, i32), (Vector3<f32>, Vector3<f32>, Vector3<f32>, usize)> = HashMap::new();
+    let mut grid: HashMap<(i32, i32, i32), (Vector3<f32>, Vector3<f32>, Vector3<f32>, usize)> =
+        HashMap::new();
     // Key -> (sum_points, sum_colors, sum_normals, count)
 
     let has_colors = pc.colors.is_some();
@@ -25,7 +26,9 @@ pub fn voxel_down_sample(pc: &PointCloud, voxel_size: f32) -> PointCloud {
         let hz = (p.z / voxel_size).floor() as i32;
         let key = (hx, hy, hz);
 
-        let entry = grid.entry(key).or_insert((Vector3::zeros(), Vector3::zeros(), Vector3::zeros(), 0));
+        let entry =
+            grid.entry(key)
+                .or_insert((Vector3::zeros(), Vector3::zeros(), Vector3::zeros(), 0));
         entry.0 += p.coords;
         if has_colors {
             if let Some(colors) = &pc.colors {
@@ -41,8 +44,16 @@ pub fn voxel_down_sample(pc: &PointCloud, voxel_size: f32) -> PointCloud {
     }
 
     let mut new_points = Vec::with_capacity(grid.len());
-    let mut new_colors = if has_colors { Some(Vec::with_capacity(grid.len())) } else { None };
-    let mut new_normals = if has_normals { Some(Vec::with_capacity(grid.len())) } else { None };
+    let mut new_colors = if has_colors {
+        Some(Vec::with_capacity(grid.len()))
+    } else {
+        None
+    };
+    let mut new_normals = if has_normals {
+        Some(Vec::with_capacity(grid.len()))
+    } else {
+        None
+    };
 
     for (_, (sum_p, sum_c, sum_n, count)) in grid {
         let factor = 1.0 / count as f32;
@@ -82,7 +93,7 @@ impl rstar::PointDistance for PointWrapper {
         let dx = self.1.x - point[0];
         let dy = self.1.y - point[1];
         let dz = self.1.z - point[2];
-        dx*dx + dy*dy + dz*dz
+        dx * dx + dy * dy + dz * dz
     }
 }
 
@@ -90,12 +101,17 @@ impl rstar::PointDistance for PointWrapper {
 /// Uses PCA/SVD on the covariance matrix of the neighborhood.
 /// Modifies the point cloud in place to add normals.
 pub fn estimate_normals(pc: &mut PointCloud, k: usize) {
-    if pc.is_empty() { return; }
-    
-    let wrappers: Vec<PointWrapper> = pc.points.iter().enumerate()
+    if pc.is_empty() {
+        return;
+    }
+
+    let wrappers: Vec<PointWrapper> = pc
+        .points
+        .iter()
+        .enumerate()
         .map(|(i, p)| PointWrapper(i, *p))
         .collect();
-    
+
     let tree = RTree::bulk_load(wrappers);
     let mut normals = Vec::with_capacity(pc.len());
 
@@ -103,8 +119,9 @@ pub fn estimate_normals(pc: &mut PointCloud, k: usize) {
         let query_point = [p.x, p.y, p.z];
         // nearest_neighbor_iter returns neighbors sorted by distance? No, usually not guaranteed sorted.
         // We just need k neighbors.
-        let neighbors: Vec<&PointWrapper> = tree.nearest_neighbor_iter(&query_point).take(k).collect();
-        
+        let neighbors: Vec<&PointWrapper> =
+            tree.nearest_neighbor_iter(&query_point).take(k).collect();
+
         if neighbors.len() < 3 {
             normals.push(Vector3::new(0.0, 0.0, 1.0)); // Default up
             continue;
@@ -128,7 +145,7 @@ pub fn estimate_normals(pc: &mut PointCloud, k: usize) {
         // SVD / Eigen decomposition
         // We want the eigenvector corresponding to the smallest eigenvalue.
         let eigen = SymmetricEigen::new(cov);
-        
+
         // Find index of smallest eigenvalue explicitly to be robust
         let mut min_val = f32::MAX;
         let mut min_idx = 0;
@@ -139,11 +156,11 @@ pub fn estimate_normals(pc: &mut PointCloud, k: usize) {
                 min_idx = i;
             }
         }
-        
+
         let normal = eigen.eigenvectors.column(min_idx).into_owned();
         normals.push(normal);
     }
-    
+
     pc.normals = Some(normals);
 }
 
@@ -155,32 +172,32 @@ pub fn estimate_normals(pc: &mut PointCloud, k: usize) {
 
 pub fn write_ply(pc: &PointCloud, path: &str) -> std::io::Result<()> {
     let mut file = BufWriter::new(File::create(path)?);
-    
+
     writeln!(file, "ply")?;
     writeln!(file, "format ascii 1.0")?;
     writeln!(file, "element vertex {}", pc.len())?;
     writeln!(file, "property float x")?;
     writeln!(file, "property float y")?;
     writeln!(file, "property float z")?;
-    
+
     if pc.colors.is_some() {
         writeln!(file, "property uchar red")?;
         writeln!(file, "property uchar green")?;
         writeln!(file, "property uchar blue")?;
     }
-    
+
     if pc.normals.is_some() {
         writeln!(file, "property float nx")?;
         writeln!(file, "property float ny")?;
         writeln!(file, "property float nz")?;
     }
-    
+
     writeln!(file, "end_header")?;
-    
+
     for i in 0..pc.len() {
         let p = pc.points[i];
         write!(file, "{} {} {}", p.x, p.y, p.z)?;
-        
+
         if let Some(colors) = &pc.colors {
             let c = colors[i];
             // Colors in Point3<f32> assumed 0..1 or 0..255? Open3D uses 0..1 usually in float.
@@ -190,15 +207,15 @@ pub fn write_ply(pc: &PointCloud, path: &str) -> std::io::Result<()> {
             let b = (c.z * 255.0).clamp(0.0, 255.0) as u8;
             write!(file, " {} {} {}", r, g, b)?;
         }
-        
+
         if let Some(normals) = &pc.normals {
             let n = normals[i];
             write!(file, " {} {} {}", n.x, n.y, n.z)?;
         }
-        
+
         writeln!(file)?;
     }
-    
+
     Ok(())
 }
 
@@ -207,7 +224,7 @@ pub fn read_ply(path: &str) -> std::io::Result<PointCloud> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
-    
+
     let mut vertex_count = 0;
     let mut has_colors = false;
     let mut has_normals = false;
@@ -232,32 +249,68 @@ pub fn read_ply(path: &str) -> std::io::Result<PointCloud> {
     }
 
     if !header_ended {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "PLY header not found"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "PLY header not found",
+        ));
     }
 
     let mut points = Vec::with_capacity(vertex_count);
-    let mut colors = if has_colors { Some(Vec::with_capacity(vertex_count)) } else { None };
-    let mut normals = if has_normals { Some(Vec::with_capacity(vertex_count)) } else { None };
+    let mut colors = if has_colors {
+        Some(Vec::with_capacity(vertex_count))
+    } else {
+        None
+    };
+    let mut normals = if has_normals {
+        Some(Vec::with_capacity(vertex_count))
+    } else {
+        None
+    };
 
     for _ in 0..vertex_count {
         if let Some(line) = lines.next() {
             let line = line?;
             let mut parts = line.split_whitespace();
-            
+
             // XYZ
-            let x: f32 = parts.next().ok_or(std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing X"))?.parse().unwrap_or(0.0);
-            let y: f32 = parts.next().ok_or(std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing Y"))?.parse().unwrap_or(0.0);
-            let z: f32 = parts.next().ok_or(std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing Z"))?.parse().unwrap_or(0.0);
+            let x: f32 = parts
+                .next()
+                .ok_or(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Missing X",
+                ))?
+                .parse()
+                .unwrap_or(0.0);
+            let y: f32 = parts
+                .next()
+                .ok_or(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Missing Y",
+                ))?
+                .parse()
+                .unwrap_or(0.0);
+            let z: f32 = parts
+                .next()
+                .ok_or(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Missing Z",
+                ))?
+                .parse()
+                .unwrap_or(0.0);
             points.push(Point3::new(x, y, z));
-            
+
             // Optional Color
             if let Some(c_vec) = &mut colors {
                 let r: u8 = parts.next().unwrap_or("0").parse().unwrap_or(0);
                 let g: u8 = parts.next().unwrap_or("0").parse().unwrap_or(0);
                 let b: u8 = parts.next().unwrap_or("0").parse().unwrap_or(0);
-                c_vec.push(Point3::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0));
+                c_vec.push(Point3::new(
+                    r as f32 / 255.0,
+                    g as f32 / 255.0,
+                    b as f32 / 255.0,
+                ));
             }
-            
+
             // Optional Normal
             if let Some(n_vec) = &mut normals {
                 let nx: f32 = parts.next().unwrap_or("0").parse().unwrap_or(0.0);
@@ -282,33 +335,45 @@ use rstar::PointDistance;
 /// Remove statistical outliers.
 /// Compute mean distance to `k` neighbors for each point.
 /// Points with mean distance > global_mean + std_ratio * std_dev are removed.
-pub fn remove_statistical_outliers(pc: &PointCloud, k: usize, std_ratio: f64) -> (PointCloud, Vec<usize>) {
+pub fn remove_statistical_outliers(
+    pc: &PointCloud,
+    k: usize,
+    std_ratio: f64,
+) -> (PointCloud, Vec<usize>) {
     if pc.is_empty() || k == 0 {
         return (pc.clone(), (0..pc.len()).collect());
     }
 
-    let wrappers: Vec<PointWrapper> = pc.points.iter().enumerate()
+    let wrappers: Vec<PointWrapper> = pc
+        .points
+        .iter()
+        .enumerate()
         .map(|(i, p)| PointWrapper(i, *p))
         .collect();
     let tree = RTree::bulk_load(wrappers);
 
     let mut distances = Vec::with_capacity(pc.len());
-    
+
     for p in &pc.points {
         let query_point = [p.x, p.y, p.z];
         // nearest_neighbor_iter returns k+1 including itself (dist 0).
         // take(k+1) gives nearest neighbors.
-        let neighbors: Vec<&PointWrapper> = tree.nearest_neighbor_iter(&query_point).take(k + 1).collect();
-        
+        let neighbors: Vec<&PointWrapper> = tree
+            .nearest_neighbor_iter(&query_point)
+            .take(k + 1)
+            .collect();
+
         // Sum distances to k neighbors (skip itself)
         let mut sum_dist = 0.0;
         let mut count = 0;
         for (idx, n) in neighbors.iter().enumerate() {
-             if idx == 0 { continue; } // skip self
-             sum_dist += n.distance_2(&query_point).sqrt();
-             count += 1;
+            if idx == 0 {
+                continue;
+            } // skip self
+            sum_dist += n.distance_2(&query_point).sqrt();
+            count += 1;
         }
-        
+
         if count > 0 {
             distances.push(sum_dist / count as f32);
         } else {
@@ -316,88 +381,135 @@ pub fn remove_statistical_outliers(pc: &PointCloud, k: usize, std_ratio: f64) ->
         }
     }
 
-    let mean_dist = crate::mean(&distances.iter().map(|&d| d as f64).collect::<Vec<_>>()).unwrap_or(0.0) as f32;
+    let mean_dist =
+        crate::mean(&distances.iter().map(|&d| d as f64).collect::<Vec<_>>()).unwrap_or(0.0) as f32;
     // std dev
-    let variance = distances.iter().map(|d| {
-        let diff = d - mean_dist;
-        diff * diff
-    }).sum::<f32>() / distances.len() as f32;
+    let variance = distances
+        .iter()
+        .map(|d| {
+            let diff = d - mean_dist;
+            diff * diff
+        })
+        .sum::<f32>()
+        / distances.len() as f32;
     let std_dev = variance.sqrt();
-    
+
     let threshold = mean_dist + std_ratio as f32 * std_dev;
-    
+
     let mut inliers = Vec::new();
     let mut new_points = Vec::new();
-    let mut new_colors = if pc.colors.is_some() { Some(Vec::new()) } else { None };
-    let mut new_normals = if pc.normals.is_some() { Some(Vec::new()) } else { None };
+    let mut new_colors = if pc.colors.is_some() {
+        Some(Vec::new())
+    } else {
+        None
+    };
+    let mut new_normals = if pc.normals.is_some() {
+        Some(Vec::new())
+    } else {
+        None
+    };
 
     for (i, &dist) in distances.iter().enumerate() {
         if dist <= threshold {
             inliers.push(i);
             new_points.push(pc.points[i]);
             if let Some(c) = &pc.colors {
-                if let Some(nc) = &mut new_colors { nc.push(c[i]); }
+                if let Some(nc) = &mut new_colors {
+                    nc.push(c[i]);
+                }
             }
             if let Some(n) = &pc.normals {
-                if let Some(nn) = &mut new_normals { nn.push(n[i]); }
+                if let Some(nn) = &mut new_normals {
+                    nn.push(n[i]);
+                }
             }
         }
     }
 
-    (PointCloud {
-        points: new_points,
-        colors: new_colors,
-        normals: new_normals,
-    }, inliers)
+    (
+        PointCloud {
+            points: new_points,
+            colors: new_colors,
+            normals: new_normals,
+        },
+        inliers,
+    )
 }
 
 /// Remove radius outliers.
 /// Points with fewer than `min_points` neighbors within `radius` are removed.
-pub fn remove_radius_outliers(pc: &PointCloud, radius: f32, min_points: usize) -> (PointCloud, Vec<usize>) {
+pub fn remove_radius_outliers(
+    pc: &PointCloud,
+    radius: f32,
+    min_points: usize,
+) -> (PointCloud, Vec<usize>) {
     if pc.is_empty() {
         return (pc.clone(), (0..pc.len()).collect());
     }
 
-    let wrappers: Vec<PointWrapper> = pc.points.iter().enumerate()
+    let wrappers: Vec<PointWrapper> = pc
+        .points
+        .iter()
+        .enumerate()
         .map(|(i, p)| PointWrapper(i, *p))
         .collect();
     let tree = RTree::bulk_load(wrappers);
 
     let mut inliers = Vec::new();
     let mut new_points = Vec::new();
-    let mut new_colors = if pc.colors.is_some() { Some(Vec::new()) } else { None };
-    let mut new_normals = if pc.normals.is_some() { Some(Vec::new()) } else { None };
+    let mut new_colors = if pc.colors.is_some() {
+        Some(Vec::new())
+    } else {
+        None
+    };
+    let mut new_normals = if pc.normals.is_some() {
+        Some(Vec::new())
+    } else {
+        None
+    };
     let r2 = radius * radius;
 
     for (i, p) in pc.points.iter().enumerate() {
         let query_point = [p.x, p.y, p.z];
         // locate_within_distance uses squared distance
         let count = tree.locate_within_distance(query_point, r2).count();
-        
+
         // count includes self.
         if count >= min_points {
             inliers.push(i);
             new_points.push(*p);
             if let Some(c) = &pc.colors {
-                if let Some(nc) = &mut new_colors { nc.push(c[i]); }
+                if let Some(nc) = &mut new_colors {
+                    nc.push(c[i]);
+                }
             }
             if let Some(n) = &pc.normals {
-                if let Some(nn) = &mut new_normals { nn.push(n[i]); }
+                if let Some(nn) = &mut new_normals {
+                    nn.push(n[i]);
+                }
             }
         }
     }
 
-    (PointCloud {
-        points: new_points,
-        colors: new_colors,
-        normals: new_normals,
-    }, inliers)
+    (
+        PointCloud {
+            points: new_points,
+            colors: new_colors,
+            normals: new_normals,
+        },
+        inliers,
+    )
 }
 
 /// Segment a plane using RANSAC.
 /// Returns (a, b, c, d) plane model and list of inlier indices.
 /// Plane equation: ax + by + cz + d = 0.
-pub fn segment_plane(pc: &PointCloud, distance_threshold: f32, ransac_n: usize, num_iterations: usize) -> (Option<[f32; 4]>, Vec<usize>) {
+pub fn segment_plane(
+    pc: &PointCloud,
+    distance_threshold: f32,
+    ransac_n: usize,
+    num_iterations: usize,
+) -> (Option<[f32; 4]>, Vec<usize>) {
     if pc.points.len() < ransac_n || ransac_n < 3 {
         return (None, Vec::new());
     }
@@ -413,7 +525,7 @@ pub fn segment_plane(pc: &PointCloud, distance_threshold: f32, ransac_n: usize, 
         // Sample random points
         // Use sample instead of deprecated choose_multiple
         let sample_indices: Vec<usize> = indices.sample(&mut rng, ransac_n).cloned().collect();
-        
+
         // Fit plane to 3 points (or more using least squares if n > 3, but strict RANSAC uses minimal set)
         // Let's use first 3 points for minimal model.
         let p1 = pc.points[sample_indices[0]];
@@ -423,8 +535,10 @@ pub fn segment_plane(pc: &PointCloud, distance_threshold: f32, ransac_n: usize, 
         let v1 = p2 - p1;
         let v2 = p3 - p1;
         let normal = v1.cross(&v2).normalize();
-        
-        if normal.x.is_nan() || normal.y.is_nan() || normal.z.is_nan() { continue; }
+
+        if normal.x.is_nan() || normal.y.is_nan() || normal.z.is_nan() {
+            continue;
+        }
 
         let d = -normal.dot(&p1.coords);
         let a = normal.x;
@@ -434,7 +548,7 @@ pub fn segment_plane(pc: &PointCloud, distance_threshold: f32, ransac_n: usize, 
         // Count inliers
         let mut current_inliers = Vec::new();
         for (i, p) in pc.points.iter().enumerate() {
-            let dist = (a * p.x + b * p.y + c * p.z + d).abs() / (a*a + b*b + c*c).sqrt();
+            let dist = (a * p.x + b * p.y + c * p.z + d).abs() / (a * a + b * b + c * c).sqrt();
             if dist < distance_threshold {
                 current_inliers.push(i);
             }
@@ -456,24 +570,30 @@ pub fn cluster_dbscan(pc: &PointCloud, eps: f32, min_points: usize) -> Vec<i32> 
     let n = pc.len();
     let mut labels = vec![-1; n]; // -1 = noise/unvisited
     let mut cluster_idx = 0;
-    
+
     // Build tree
-    let wrappers: Vec<PointWrapper> = pc.points.iter().enumerate()
+    let wrappers: Vec<PointWrapper> = pc
+        .points
+        .iter()
+        .enumerate()
         .map(|(i, p)| PointWrapper(i, *p))
         .collect();
     let tree = RTree::bulk_load(wrappers);
-    
+
     let eps2 = eps * eps;
     let mut visited = vec![false; n];
 
     for i in 0..n {
-        if visited[i] { continue; }
+        if visited[i] {
+            continue;
+        }
         visited[i] = true;
 
         let p = pc.points[i];
         let query_point = [p.x, p.y, p.z];
         // Neighbors include self
-        let neighbors: Vec<&PointWrapper> = tree.locate_within_distance(query_point, eps2).collect();
+        let neighbors: Vec<&PointWrapper> =
+            tree.locate_within_distance(query_point, eps2).collect();
 
         if neighbors.len() < min_points {
             labels[i] = -1; // Noise
@@ -483,31 +603,32 @@ pub fn cluster_dbscan(pc: &PointCloud, eps: f32, min_points: usize) -> Vec<i32> 
             let mut seeds = neighbors.clone();
             let mut head = 0;
             while head < seeds.len() {
-                 let current_idx = seeds[head].0;
-                 head += 1;
-                 
-                 if labels[current_idx] == -1 {
-                     labels[current_idx] = cluster_idx; // Change noise to border
-                 }
-                 if !visited[current_idx] {
-                     visited[current_idx] = true;
-                     labels[current_idx] = cluster_idx;
-                     
-                     let p_curr = pc.points[current_idx];
-                     let q_curr = [p_curr.x, p_curr.y, p_curr.z];
-                     let n_curr: Vec<&PointWrapper> = tree.locate_within_distance(q_curr, eps2).collect();
-                     if n_curr.len() >= min_points {
-                         for n in n_curr {
-                             // Avoid adding duplicates?
-                             // seeds is a simple vec, might grow definedly.
-                             // Actually better to use a Set or just push and check visited.
-                             // But we check visited when popping/processing?
-                             // The standard DBSCAN expands seeds.
-                             // Simple list append approach:
-                             seeds.push(n);
-                         }
-                     }
-                 }
+                let current_idx = seeds[head].0;
+                head += 1;
+
+                if labels[current_idx] == -1 {
+                    labels[current_idx] = cluster_idx; // Change noise to border
+                }
+                if !visited[current_idx] {
+                    visited[current_idx] = true;
+                    labels[current_idx] = cluster_idx;
+
+                    let p_curr = pc.points[current_idx];
+                    let q_curr = [p_curr.x, p_curr.y, p_curr.z];
+                    let n_curr: Vec<&PointWrapper> =
+                        tree.locate_within_distance(q_curr, eps2).collect();
+                    if n_curr.len() >= min_points {
+                        for n in n_curr {
+                            // Avoid adding duplicates?
+                            // seeds is a simple vec, might grow definedly.
+                            // Actually better to use a Set or just push and check visited.
+                            // But we check visited when popping/processing?
+                            // The standard DBSCAN expands seeds.
+                            // Simple list append approach:
+                            seeds.push(n);
+                        }
+                    }
+                }
             }
             cluster_idx += 1;
         }
@@ -529,8 +650,6 @@ pub fn compute_fpfh_feature(pc: &PointCloud, _search_radius: f32) -> Option<Vec<
     Some(vec![[0.0; 33]; pc.len()])
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,12 +666,12 @@ mod tests {
             }
         }
         let pc = PointCloud::new(points);
-        
+
         // Voxel size 0.2 should collapse everything to 1 point (or very few).
         // 0.0 -> 0.09 range. 0.2 covers all.
         let down = voxel_down_sample(&pc, 0.2);
         assert_eq!(down.len(), 1);
-        
+
         // Voxel size 0.05. Should have 2x2 = 4 voxels approx?
         // 0.00..0.04 -> 0
         // 0.05..0.09 -> 1
@@ -578,7 +697,7 @@ mod tests {
 
         assert!(pc.normals.is_some());
         let normals = pc.normals.as_ref().unwrap();
-        
+
         // Normals should be (0,0,1) or (0,0,-1).
         for n in normals.iter() {
             assert!(n.z.abs() > 0.9, "Normal {:?} is not vertical", n);
@@ -587,23 +706,17 @@ mod tests {
 
     #[test]
     fn test_io() {
-        let points = vec![
-            Point3::new(0.0, 0.0, 0.0),
-            Point3::new(1.0, 1.0, 1.0),
-        ];
-        let colors = vec![
-            Point3::new(1.0, 0.0, 0.0),
-            Point3::new(0.0, 1.0, 0.0),
-        ];
+        let points = vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 1.0)];
+        let colors = vec![Point3::new(1.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)];
         let pc = PointCloud::new(points).with_colors(colors);
-        
+
         let path = "/tmp/test_pc.ply";
         write_ply(&pc, path).unwrap();
-        
+
         let loaded = read_ply(path).unwrap();
         assert_eq!(loaded.len(), 2);
         assert!(loaded.colors.is_some());
-        
+
         // Cleanup (optional, but good)
         let _ = fs::remove_file(path);
     }
@@ -646,16 +759,16 @@ mod tests {
         // Outliers
         points.push(Point3::new(0.0, 0.0, 10.0));
         points.push(Point3::new(1.0, 1.0, 10.0));
-        
+
         // Also add some random jitter to plane points to make it realistic?
         // But perfect plane is easier to test.
 
         let pc = PointCloud::new(points);
         let (model, inliers) = segment_plane(&pc, 0.1, 3, 100);
-        
+
         assert!(model.is_some());
         let [a, b, c, d] = model.unwrap();
-        
+
         // Should be z=0, so a=0, b=0, c=1 (or -1), d=0
         // Normal could be (0,0,-1) too.
         println!("Plane: {}x + {}y + {}z + {} = 0", a, b, c, d);
@@ -669,36 +782,44 @@ mod tests {
         // Create two clusters far apart
         let mut points = Vec::new();
         // Cluster 1: 5 points at (0,0,0)
-        for _ in 0..5 { points.push(Point3::new(0.0, 0.0, 0.0)); }
+        for _ in 0..5 {
+            points.push(Point3::new(0.0, 0.0, 0.0));
+        }
         // Cluster 2: 5 points at (10,10,10)
-        for _ in 0..5 { points.push(Point3::new(10.0, 10.0, 10.0)); }
+        for _ in 0..5 {
+            points.push(Point3::new(10.0, 10.0, 10.0));
+        }
         // Noise: 1 point at (5,5,5)
         points.push(Point3::new(5.0, 5.0, 5.0));
-        
+
         let pc = PointCloud::new(points);
-        
+
         // eps=1.0, min_points=3
         let labels = cluster_dbscan(&pc, 1.0, 3);
-        
+
         // First 5 should be cluster 0
-        for i in 0..5 { assert_eq!(labels[i], 0); }
+        for i in 0..5 {
+            assert_eq!(labels[i], 0);
+        }
         // Next 5 should be cluster 1
-        for i in 5..10 { assert_eq!(labels[i], 1); }
+        for i in 5..10 {
+            assert_eq!(labels[i], 1);
+        }
         // Last one should be noise (-1)
         assert_eq!(labels[10], -1);
     }
 
     #[test]
     fn test_fpfh() {
-        let points = vec![Point3::new(0.0,0.0,0.0)];
-        let normals = vec![nalgebra::Vector3::new(0.0,0.0,1.0)];
+        let points = vec![Point3::new(0.0, 0.0, 0.0)];
+        let normals = vec![nalgebra::Vector3::new(0.0, 0.0, 1.0)];
         let pc = PointCloud::new(points).with_normals(normals);
-        
+
         let features = compute_fpfh_feature(&pc, 0.1);
         assert!(features.is_some());
         assert_eq!(features.unwrap()[0].len(), 33);
-        
-        let pc_no_norm = PointCloud::new(vec![Point3::new(0.0,0.0,0.0)]);
+
+        let pc_no_norm = PointCloud::new(vec![Point3::new(0.0, 0.0, 0.0)]);
         assert!(compute_fpfh_feature(&pc_no_norm, 0.1).is_none());
     }
 }

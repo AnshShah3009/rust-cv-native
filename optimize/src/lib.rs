@@ -1,8 +1,32 @@
-use nalgebra::{DVector, DMatrix};
-// use std::sync::Arc;
+//! Optimization Algorithms
+//!
+//! This crate provides optimization algorithms for computer vision and robotics:
+//! - Factor graphs for SLAM and bundle adjustment
+//! - Sparse linear solvers (Cholesky, QR, LU, SVD)
+//! - GPU-accelerated solvers
+//! - Ceres-style non-linear least squares
+//!
+//! ## Key Components
+//!
+//! - [`Factor`]: Trait for factor graph edges
+//! - [`FactorGraph`]: Factor graph data structure
+//! - [`sparse`]: Sparse linear solvers
+//! - [`gpu_solver`]: GPU-accelerated solvers
+//!
+//! ## Example: Building a Factor Graph
+//!
+//! ```rust
+//! use cv_optimize::{Factor, FactorGraph};
+//! use nalgebra::DVector;
+//!
+//! // struct MyFactor { ... }
+//! // impl Factor for MyFactor { ... }
+//! ```
 
-pub mod sparse;
+use nalgebra::{DMatrix, DVector};
+
 pub mod gpu_solver;
+pub mod sparse;
 
 pub trait Factor: Send + Sync {
     fn residual(&self, variables: &[DVector<f64>]) -> DVector<f64>;
