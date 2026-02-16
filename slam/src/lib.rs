@@ -3,8 +3,11 @@
 //! This crate provides algorithms for Simultaneous Localization
 //! and Mapping using visual input.
 
+pub mod kalman;
 pub mod mapping;
 pub mod tracking;
+
+pub use kalman::{ExtendedKalmanFilter, KalmanFilter, KalmanFilterState};
 
 use mapping::Map;
 use nalgebra::{Point2, Point3, Vector3};
@@ -54,7 +57,7 @@ pub struct Slam {
 }
 
 impl Slam {
-    pub fn new(intrinsics: cv_core::CameraExtrinsics) -> Self {
+    pub fn new(intrinsics: cv_core::CameraIntrinsics) -> Self {
         Self {
             tracker: Tracker::new(intrinsics),
             map: Map::new(),
@@ -185,18 +188,26 @@ impl Slam {
         }
 
         // Select local keyframes for BA (last N keyframes)
-        let local_kfs: Vec<_> = self.keyframes.iter().rev().take(10).cloned().collect();
+        let local_kf_ids: Vec<usize> = self
+            .keyframes
+            .iter()
+            .rev()
+            .take(10)
+            .map(|kf| kf.id)
+            .collect();
 
         // This would use the SFM bundle adjustment
         // For now, simple pose refinement
         let mut updated_poses: Vec<(usize, cv_core::CameraExtrinsics)> = Vec::new();
 
-        for kf in &local_kfs {
-            // Refine pose based on reprojection error
-            // Simplified: small gradient descent update
-            let mut refined_pose = kf.pose;
-            // ... refinement logic would go here
-            updated_poses.push((kf.id, refined_pose));
+        for &kf_id in &local_kf_ids {
+            if let Some(kf) = self.keyframes.get(kf_id) {
+                // Refine pose based on reprojection error
+                // Simplified: small gradient descent update
+                let refined_pose = kf.pose;
+                // ... refinement logic would go here
+                updated_poses.push((kf_id, refined_pose));
+            }
         }
 
         // Apply updated poses

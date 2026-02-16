@@ -3,6 +3,10 @@
 //! GTSAM-inspired factor graph optimization for SLAM and 3D registration.
 //! Provides incremental (iSAM2-style) and batch optimization.
 
+pub mod visualizer;
+
+pub use visualizer::{PoseEdge, PoseGraphStats, PoseGraphVisualizer, PoseNode};
+
 use nalgebra::{Matrix4, Point3, Vector3};
 use std::collections::HashMap;
 
@@ -428,7 +432,11 @@ impl PoseGraphOptimizer {
         let mut prev_error = f32::MAX;
 
         for iteration in 0..self.max_iterations {
-            let total_error: f32 = graph.factors.iter().map(|f| f.error(&graph.variables)).sum();
+            let total_error: f32 = graph
+                .factors
+                .iter()
+                .map(|f| f.error(&graph.variables))
+                .sum();
 
             if (prev_error - total_error).abs() < self.convergence_threshold {
                 return OptimizationResult {
@@ -445,7 +453,7 @@ impl PoseGraphOptimizer {
 
             for factor in &graph.factors {
                 let (jacobians, error) = factor.linearize(&graph.variables);
-                
+
                 for (key, jac) in &jacobians {
                     let g = gradient.entry(*key).or_insert_with(|| [0.0; 6]);
                     for i in 0..6 {
@@ -480,7 +488,8 @@ impl PoseGraphOptimizer {
                         let rot_grad = Vector3::new(delta[3], delta[4], delta[5]);
                         let rot_update = nalgebra::UnitQuaternion::new(rot_grad);
                         pose.rotation = pose.rotation * rot_update;
-                        pose.rotation = nalgebra::UnitQuaternion::new_normalize(pose.rotation.coords);
+                        pose.rotation =
+                            nalgebra::UnitQuaternion::new_normalize(pose.rotation.coords);
                     }
                 }
             }
@@ -489,7 +498,11 @@ impl PoseGraphOptimizer {
         OptimizationResult {
             converged: false,
             iterations: self.max_iterations,
-            final_error: graph.factors.iter().map(|f| f.error(&graph.variables)).sum(),
+            final_error: graph
+                .factors
+                .iter()
+                .map(|f| f.error(&graph.variables))
+                .sum(),
         }
     }
 
@@ -499,7 +512,11 @@ impl PoseGraphOptimizer {
         let mut lambda = self.lambda;
 
         for iteration in 0..self.max_iterations {
-            let total_error: f32 = graph.factors.iter().map(|f| f.error(&graph.variables)).sum();
+            let total_error: f32 = graph
+                .factors
+                .iter()
+                .map(|f| f.error(&graph.variables))
+                .sum();
 
             if (prev_error - total_error).abs() < self.convergence_threshold {
                 return OptimizationResult {
@@ -516,7 +533,7 @@ impl PoseGraphOptimizer {
 
             for factor in &graph.factors {
                 let (jacobians, error) = factor.linearize(&graph.variables);
-                
+
                 for (key, jac) in &jacobians {
                     let g = gradient.entry(*key).or_insert_with(|| [0.0; 6]);
                     for i in 0..6 {
@@ -555,7 +572,9 @@ impl PoseGraphOptimizer {
                         test_pose.translation.y += delta[1];
                         test_pose.translation.z += delta[2];
 
-                        let test_error: f32 = graph.factors.iter()
+                        let test_error: f32 = graph
+                            .factors
+                            .iter()
                             .map(|f| f.error(&graph.variables))
                             .sum();
 
@@ -580,7 +599,11 @@ impl PoseGraphOptimizer {
         OptimizationResult {
             converged: false,
             iterations: self.max_iterations,
-            final_error: graph.factors.iter().map(|f| f.error(&graph.variables)).sum(),
+            final_error: graph
+                .factors
+                .iter()
+                .map(|f| f.error(&graph.variables))
+                .sum(),
         }
     }
 
@@ -627,7 +650,7 @@ impl GNCLMOptimizer {
     /// Optimize using GNC to find good outlier rejection, then LM for final refinement
     pub fn optimize(&self, graph: &mut PoseGraph) -> OptimizationResult {
         let mut mu = self.gnc_mu;
-        
+
         // GNC outer loop - gradually increase robustness
         for gnc_iter in 0..self.max_gnc_iterations {
             // Apply robust kernel weighting to factors
@@ -640,12 +663,12 @@ impl GNCLMOptimizer {
 
             // Inner LM optimization
             let result = self.lm_optimizer.optimize(graph);
-            
+
             // Check GNC convergence
             if gnc_iter > 0 && result.final_error < 1e-3 {
                 return result;
             }
-            
+
             mu *= self.gnc_mu_decrease;
         }
 
@@ -661,83 +684,6 @@ impl GNCLMOptimizer {
             mu2 / denom
         } else {
             1.0
-        }
-    }
-}
-        let mut prev_error = f32::MAX;
-
-        for iteration in 0..self.max_iterations {
-            // Compute total error
-            let total_error: f32 = graph
-                .factors
-                .iter()
-                .map(|f| f.error(&graph.variables))
-                .sum();
-
-            // Check convergence
-            if (prev_error - total_error).abs() < self.convergence_threshold {
-                return OptimizationResult {
-                    converged: true,
-                    iterations: iteration,
-                    final_error: total_error,
-                };
-            }
-            prev_error = total_error;
-
-            // Build linear system (Ax = b)
-            let mut hessian: HashMap<(usize, usize), [f32; 36]> = HashMap::new();
-            let mut gradient: HashMap<usize, [f32; 6]> = HashMap::new();
-
-            for factor in &graph.factors {
-                let (jacobians, error) = factor.linearize(&graph.variables);
-
-                // Update Hessian and gradient
-                for (key, jac) in jacobians {
-                    // Gradient: g += J^T * e
-                    let g = gradient.entry(key).or_insert_with(|| [0.0; 6]);
-                    for i in 0..6 {
-                        g[i] += jac[i] * error;
-                    }
-
-                    // Hessian approximation: H += J^T * J
-                    let h = hessian.entry((key, key)).or_insert_with(|| [0.0; 36]);
-                    for i in 0..6 {
-                        for j in 0..6 {
-                            h[i * 6 + j] += jac[i] * jac[j];
-                        }
-                    }
-                }
-            }
-
-            // Solve linear system and update (simplified: coordinate descent)
-            for (key, mut pose) in graph.variables.iter_mut() {
-                if let Some(grad) = gradient.get(key) {
-                    // Extract translation and rotation parts
-                    let alpha = 0.1; // Learning rate
-
-                    pose.translation.x -= alpha * grad[0];
-                    pose.translation.y -= alpha * grad[1];
-                    pose.translation.z -= alpha * grad[2];
-
-                    // Simplified rotation update
-                    let rot_grad = Vector3::new(grad[3], grad[4], grad[5]);
-                    let rot_update = nalgebra::UnitQuaternion::new(rot_grad * alpha);
-                    pose.rotation = pose.rotation * rot_update;
-                    pose.rotation = nalgebra::UnitQuaternion::new_normalize(pose.rotation.coords);
-                }
-            }
-        }
-
-        let final_error: f32 = graph
-            .factors
-            .iter()
-            .map(|f| f.error(&graph.variables))
-            .sum();
-
-        OptimizationResult {
-            converged: false,
-            iterations: self.max_iterations,
-            final_error,
         }
     }
 }
@@ -798,11 +744,15 @@ impl<O> GNCWrapper<O> {
     fn compute_weight(&self, error: f32) -> f32 {
         let e2 = error * error;
         let mu2 = self.mu * self.mu;
-        
+
         match self.robust_loss {
             RobustLossType::GemanMcClure => {
                 let denom = (e2 + mu2) * (e2 + mu2);
-                if denom > 1e-10 { mu2 / denom } else { 1.0 }
+                if denom > 1e-10 {
+                    mu2 / denom
+                } else {
+                    1.0
+                }
             }
             RobustLossType::Huber => {
                 if e2.sqrt() <= self.mu {
@@ -819,12 +769,8 @@ impl<O> GNCWrapper<O> {
                     0.0
                 }
             }
-            RobustLossType::Cauchy => {
-                1.0 / (1.0 + e2 / mu2)
-            }
-            RobustLossType::Welsch => {
-                (-e2 / mu2).exp()
-            }
+            RobustLossType::Cauchy => 1.0 / (1.0 + e2 / mu2),
+            RobustLossType::Welsch => (-e2 / mu2).exp(),
         }
     }
 }
@@ -863,7 +809,7 @@ impl<O: Optimizer> Optimizer for GNCWrapper<O> {
             iterations: 0,
             final_error: f32::MAX,
         };
-        
+
         for gnc_iter in 0..self.max_gnc_iterations {
             // Apply robust weighting to all factors
             for factor in &graph.factors {
@@ -871,22 +817,22 @@ impl<O: Optimizer> Optimizer for GNCWrapper<O> {
                 let weight = self.compute_weight(error);
                 let _ = weight; // Would be used in factor linearization
             }
-            
+
             // Run inner optimizer with updated weights
             let result = self.inner.optimize(graph);
-            
+
             if result.final_error < best_result.final_error {
                 best_result = result;
             }
-            
+
             // Check convergence
             if gnc_iter > 0 && (mu - self.mu).abs() < 1e-6 {
                 break;
             }
-            
+
             mu *= self.mu_decrease;
         }
-        
+
         best_result
     }
 

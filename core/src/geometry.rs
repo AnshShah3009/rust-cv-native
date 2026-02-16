@@ -158,6 +158,13 @@ impl CameraExtrinsics {
             translation: t_inv,
         }
     }
+
+    pub fn compose(&self, other: &Self) -> Self {
+        Self {
+            rotation: self.rotation * other.rotation,
+            translation: self.rotation * other.translation + self.translation,
+        }
+    }
 }
 
 impl Default for CameraExtrinsics {

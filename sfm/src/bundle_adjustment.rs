@@ -139,12 +139,15 @@ impl SfMState {
     pub fn residuals(&self) -> DVector<f64> {
         let mut residuals = Vec::new();
         for landmark in &self.landmarks {
-            if !landmark.is_valid {
-                continue;
-            }
-
             for (cam_idx, obs) in &landmark.observations {
                 if *cam_idx >= self.cameras.len() {
+                    continue;
+                }
+
+                if !landmark.is_valid {
+                    // Push zeros for invalid landmarks to maintain consistent dimensions
+                    residuals.push(0.0);
+                    residuals.push(0.0);
                     continue;
                 }
 
@@ -278,6 +281,22 @@ impl SfMState {
             0.0
         }
     }
+
+    pub fn remove_outliers(&mut self, threshold: f64) {
+        // Collect indices of outliers first to avoid borrow issues
+        let outlier_indices: Vec<usize> = self
+            .landmarks
+            .iter()
+            .enumerate()
+            .filter(|(_, lm)| self.compute_point_reprojection_error_index(lm) > threshold)
+            .map(|(i, _)| i)
+            .collect();
+
+        // Mark outliers as invalid
+        for idx in outlier_indices {
+            self.landmarks[idx].is_valid = false;
+        }
+    }
 }
 
 pub struct BundleAdjustmentConfig {
@@ -328,12 +347,14 @@ pub fn bundle_adjust(state: &mut SfMState, config: &BundleAdjustmentConfig) {
         }
 
         // Solve using Cholesky or fallback
-        let delta = match lhs.cholesky() {
-            Some(ch) => ch.solve(&-jtr).unwrap_or(DVector::zeros(jtr.len())),
-            None => {
-                // Fallback to QR or SVD
-                lhs.lu().solve(&-jtr).unwrap_or(DVector::zeros(jtr.len()))
-            }
+        let neg_jtr = -&jtr;
+        let delta = if let Some(ch) = lhs.clone().cholesky() {
+            ch.solve(&neg_jtr)
+        } else {
+            // Fallback to QR or SVD
+            lhs.lu()
+                .solve(&neg_jtr)
+                .unwrap_or_else(|| DVector::zeros(jtr.len()))
         };
 
         // Compute expected error reduction
@@ -412,7 +433,8 @@ pub fn pose_graph_bundle_adjust(
             }
 
             // Compute relative pose from current estimates
-            let est_rel = cameras[*i].inverse() * cameras[*j];
+            let inv_i = cameras[*i].inverse();
+            let est_rel = inv_i.compose(&cameras[*j]);
             let diff = est_rel.rotation - rel_pose.rotation;
             let trans_diff = est_rel.translation - rel_pose.translation;
 
@@ -425,24 +447,6 @@ pub fn pose_graph_bundle_adjust(
 
         if total_error < 1e-6 {
             break;
-        }
-    }
-}
-
-impl CameraExtrinsics {
-    pub fn inverse(&self) -> Self {
-        let r_inv = self.rotation.transpose();
-        let t_inv = -r_inv * self.translation;
-        Self {
-            rotation: r_inv,
-            translation: t_inv,
-        }
-    }
-
-    pub fn compose(&self, other: &Self) -> Self {
-        Self {
-            rotation: self.rotation * other.rotation,
-            translation: self.rotation * other.translation + self.translation,
         }
     }
 }
