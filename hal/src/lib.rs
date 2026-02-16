@@ -5,6 +5,7 @@ pub mod gpu;
 pub mod gpu_utils;
 pub mod gpu_sparse;
 pub mod gpu_kernels;
+pub mod image;
 
 pub use gpu::*;
 pub use gpu_kernels::*;

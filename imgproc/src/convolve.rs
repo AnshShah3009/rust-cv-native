@@ -1,4 +1,7 @@
 use image::GrayImage;
+use rayon::prelude::*;
+use rayon::ThreadPool;
+use wide::*;
 
 #[derive(Debug, Clone)]
 pub struct Kernel {
@@ -182,6 +185,16 @@ pub fn convolve_with_border_into(
     kernel: &Kernel,
     border: BorderMode,
 ) {
+    convolve_with_border_into_in_pool(image, output, kernel, border, None)
+}
+
+pub fn convolve_with_border_into_in_pool(
+    image: &GrayImage,
+    output: &mut GrayImage,
+    kernel: &Kernel,
+    border: BorderMode,
+    pool: Option<&ThreadPool>,
+) {
     let (kx_center, ky_center) = kernel.center();
     if output.width() != image.width() || output.height() != image.height() {
         *output = GrayImage::new(image.width(), image.height());
@@ -190,37 +203,47 @@ pub fn convolve_with_border_into(
     let height = image.height() as usize;
     let input_data = image.as_raw();
 
-    for y in 0..height {
-        for x in 0..width {
-            let mut sum = 0.0f32;
+    let mut run = || {
+        output
+            .as_mut()
+            .par_chunks_mut(width)
+            .enumerate()
+            .for_each(|(y, row)| {
+                for x in 0..width {
+                    let mut sum = 0.0f32;
 
-            for ky in 0..kernel.height {
-                for kx in 0..kernel.width {
-                    let src_x = x as isize + kx as isize - kx_center;
-                    let src_y = y as isize + ky as isize - ky_center;
+                    for ky in 0..kernel.height {
+                        for kx in 0..kernel.width {
+                            let src_x = x as isize + kx as isize - kx_center;
+                            let src_y = y as isize + ky as isize - ky_center;
 
-                    let pixel_val = match (
-                        map_coord(src_x, width, border),
-                        map_coord(src_y, height, border),
-                    ) {
-                        (Some(ix), Some(iy)) => input_data[iy * width + ix] as f32,
-                        _ => match border {
-                            BorderMode::Constant(v) => v as f32,
-                            _ => 0.0,
-                        },
-                    };
+                            let pixel_val = match (
+                                map_coord(src_x, width, border),
+                                map_coord(src_y, height, border),
+                            ) {
+                                (Some(ix), Some(iy)) => input_data[iy * width + ix] as f32,
+                                _ => match border {
+                                    BorderMode::Constant(v) => v as f32,
+                                    _ => 0.0,
+                                },
+                            };
 
-                    let kernel_val = kernel.get(kx, ky);
-                    sum += pixel_val * kernel_val;
+                            let kernel_val = kernel.get(kx, ky);
+                            sum += pixel_val * kernel_val;
+                        }
+                    }
+
+                    row[x] = sum.clamp(0.0, 255.0) as u8;
                 }
-            }
+            });
+    };
 
-            output.as_mut()[y * width + x] = sum.clamp(0.0, 255.0) as u8;
-        }
+    if let Some(p) = pool {
+        p.install(run)
+    } else {
+        run()
     }
 }
-
-use wide::*;
 
 pub fn separable_convolve(image: &GrayImage, kernel_1d: &[f32], border: BorderMode) -> GrayImage {
     let mut out = GrayImage::new(image.width(), image.height());
@@ -234,6 +257,16 @@ pub fn separable_convolve_into(
     kernel_1d: &[f32],
     border: BorderMode,
 ) {
+    separable_convolve_into_in_pool(image, out, kernel_1d, border, None)
+}
+
+pub fn separable_convolve_into_in_pool(
+    image: &GrayImage,
+    out: &mut GrayImage,
+    kernel_1d: &[f32],
+    border: BorderMode,
+    pool: Option<&ThreadPool>,
+) {
     assert!(kernel_1d.len() % 2 == 1, "1D kernel size must be odd");
     if out.width() != image.width() || out.height() != image.height() {
         *out = GrayImage::new(image.width(), image.height());
@@ -245,112 +278,131 @@ pub fn separable_convolve_into(
     let src = image.as_raw();
 
     // Use BufferPool for temporary storage
-    let pool = cv_core::BufferPool::global();
-    let mut tmp_vec = pool.get(width * height * 4); // 4 bytes per f32
-    let tmp: &mut [f32] =
-        unsafe { std::slice::from_raw_parts_mut(tmp_vec.as_mut_ptr() as *mut f32, width * height) };
+    let buffer_pool = cv_core::BufferPool::global();
+    // 4 bytes per f32
+    let mut tmp_vec = buffer_pool.get(width * height * 4); 
+    
+    // Convert pointer to usize to allow sharing across threads safely (as simple integer)
+    let tmp_addr = tmp_vec.as_mut_ptr() as usize;
 
-    // Horizontal Pass (SIMD optimized)
-    for y in 0..height {
-        let row_offset = y * width;
-        for x in (0..width).step_by(8) {
-            let mut sum_v = f32x8::ZERO;
-            let end = (x + 8).min(width);
+    let mut run = || {
+        // Horizontal Pass (SIMD optimized + Parallel)
+        let tmp_slice = unsafe { std::slice::from_raw_parts_mut(tmp_addr as *mut f32, width * height) };
+        
+        tmp_slice.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
+            let row_offset = y * width; 
+            
+            for x in (0..width).step_by(8) {
+                let mut sum_v = f32x8::ZERO;
+                
+                if x + 8 <= width {
+                    for (k, &w) in kernel_1d.iter().enumerate() {
+                        let w_v = f32x8::splat(w);
+                        let mut px_v = [0.0f32; 8];
+                        for i in 0..8 {
+                            let sx = (x + i) as isize + k as isize - radius;
+                            px_v[i] = match map_coord(sx, width, border) {
+                                Some(ix) => src[row_offset + ix] as f32,
+                                None => match border {
+                                    BorderMode::Constant(v) => v as f32,
+                                    _ => 0.0,
+                                },
+                            };
+                        }
+                        sum_v += f32x8::from(px_v) * w_v;
+                    }
+                    let results: [f32; 8] = sum_v.into();
+                    row[x..x + 8].copy_from_slice(&results);
+                } else {
+                    // Scalar fallback
+                    for cur_x in x..width {
+                        let mut sum = 0.0f32;
+                        for (k, &w) in kernel_1d.iter().enumerate() {
+                            let sx = cur_x as isize + k as isize - radius;
+                            let px = match map_coord(sx, width, border) {
+                                Some(ix) => src[row_offset + ix] as f32,
+                                None => match border {
+                                    BorderMode::Constant(v) => v as f32,
+                                    _ => 0.0,
+                                },
+                            };
+                            sum += px * w;
+                        }
+                        row[cur_x] = sum;
+                    }
+                }
+            }
+        });
 
-            if x + 8 <= width {
-                for (k, &w) in kernel_1d.iter().enumerate() {
-                    let w_v = f32x8::splat(w);
-                    let mut px_v = [0.0f32; 8];
+        // Vertical Pass (SIMD optimized + Parallel)
+        out.as_mut().par_chunks_mut(width).enumerate().for_each(|(y, out_row)| {
+            let tmp_read = unsafe { std::slice::from_raw_parts(tmp_addr as *const f32, width * height) };
+            
+            for x in (0..width).step_by(8) {
+                let mut sum_v = f32x8::ZERO;
+
+                if x + 8 <= width {
+                    for (k, &w) in kernel_1d.iter().enumerate() {
+                        let w_v = f32x8::splat(w);
+                        let mut py_v = [0.0f32; 8];
+                        let sy_base = y as isize + k as isize - radius;
+                        let target_y = map_coord(sy_base, height, border);
+
+                        if let Some(iy) = target_y {
+                            let src_offset = iy * width + x;
+                            py_v.copy_from_slice(&tmp_read[src_offset..src_offset + 8]);
+                        } else if let BorderMode::Constant(v) = border {
+                            py_v = [v as f32; 8];
+                        }
+
+                        sum_v += f32x8::from(py_v) * w_v;
+                    }
+                    let results: [f32; 8] = sum_v.into();
                     for i in 0..8 {
-                        let sx = (x + i) as isize + k as isize - radius;
-                        px_v[i] = match map_coord(sx, width, border) {
-                            Some(ix) => src[row_offset + ix] as f32,
-                            None => match border {
-                                BorderMode::Constant(v) => v as f32,
-                                _ => 0.0,
-                            },
-                        };
+                        out_row[x + i] = results[i].clamp(0.0, 255.0) as u8;
                     }
-                    sum_v += f32x8::from(px_v) * w_v;
-                }
-                let results: [f32; 8] = sum_v.into();
-                tmp[row_offset + x..row_offset + x + 8].copy_from_slice(&results);
-            } else {
-                // Scalar fallback for row tail
-                for cur_x in x..end {
-                    let mut sum = 0.0f32;
-                    for (k, &w) in kernel_1d.iter().enumerate() {
-                        let sx = cur_x as isize + k as isize - radius;
-                        let px = match map_coord(sx, width, border) {
-                            Some(ix) => src[row_offset + ix] as f32,
-                            None => match border {
-                                BorderMode::Constant(v) => v as f32,
-                                _ => 0.0,
-                            },
-                        };
-                        sum += px * w;
+                } else {
+                    for cur_x in x..width {
+                        let mut sum = 0.0f32;
+                        for (k, &w) in kernel_1d.iter().enumerate() {
+                            let sy = y as isize + k as isize - radius;
+                            let py = match map_coord(sy, height, border) {
+                                Some(iy) => tmp_read[iy * width + cur_x],
+                                None => match border {
+                                    BorderMode::Constant(v) => v as f32,
+                                    _ => 0.0,
+                                },
+                            };
+                            sum += py * w;
+                        }
+                        out_row[cur_x] = sum.clamp(0.0, 255.0) as u8;
                     }
-                    tmp[row_offset + cur_x] = sum;
                 }
             }
-        }
+        });
+    };
+
+    if let Some(p) = pool {
+        p.install(run)
+    } else {
+        run()
     }
 
-    // Vertical Pass (SIMD optimized)
-    for y in 0..height {
-        let row_offset = y * width;
-        for x in (0..width).step_by(8) {
-            let mut sum_v = f32x8::ZERO;
-            let end = (x + 8).min(width);
-
-            if x + 8 <= width {
-                for (k, &w) in kernel_1d.iter().enumerate() {
-                    let w_v = f32x8::splat(w);
-                    let mut py_v = [0.0f32; 8];
-                    let sy_base = y as isize + k as isize - radius;
-                    let target_y = map_coord(sy_base, height, border);
-
-                    if let Some(iy) = target_y {
-                        let src_offset = iy * width + x;
-                        py_v.copy_from_slice(&tmp[src_offset..src_offset + 8]);
-                    } else if let BorderMode::Constant(v) = border {
-                        py_v = [v as f32; 8];
-                    }
-
-                    sum_v += f32x8::from(py_v) * w_v;
-                }
-                let results: [f32; 8] = sum_v.into();
-                let out_row = out.as_mut();
-                for i in 0..8 {
-                    out_row[row_offset + x + i] = results[i].clamp(0.0, 255.0) as u8;
-                }
-            } else {
-                // Scalar fallback for row tail
-                for cur_x in x..end {
-                    let mut sum = 0.0f32;
-                    for (k, &w) in kernel_1d.iter().enumerate() {
-                        let sy = y as isize + k as isize - radius;
-                        let py = match map_coord(sy, height, border) {
-                            Some(iy) => tmp[iy * width + cur_x],
-                            None => match border {
-                                BorderMode::Constant(v) => v as f32,
-                                _ => 0.0,
-                            },
-                        };
-                        sum += py * w;
-                    }
-                    out.as_mut()[row_offset + cur_x] = sum.clamp(0.0, 255.0) as u8;
-                }
-            }
-        }
-    }
-
-    pool.return_buffer(tmp_vec);
+    buffer_pool.return_buffer(tmp_vec);
 }
 
 pub fn gaussian_blur_with_border(image: &GrayImage, sigma: f32, border: BorderMode) -> GrayImage {
+    gaussian_blur_with_border_in_pool(image, sigma, border, None)
+}
+
+pub fn gaussian_blur_with_border_in_pool(
+    image: &GrayImage,
+    sigma: f32,
+    border: BorderMode,
+    pool: Option<&ThreadPool>,
+) -> GrayImage {
     let mut out = GrayImage::new(image.width(), image.height());
-    gaussian_blur_with_border_into(image, &mut out, sigma, border);
+    gaussian_blur_with_border_into_in_pool(image, &mut out, sigma, border, pool);
     out
 }
 
@@ -360,9 +412,19 @@ pub fn gaussian_blur_with_border_into(
     sigma: f32,
     border: BorderMode,
 ) {
+    gaussian_blur_with_border_into_in_pool(image, out, sigma, border, None)
+}
+
+pub fn gaussian_blur_with_border_into_in_pool(
+    image: &GrayImage,
+    out: &mut GrayImage,
+    sigma: f32,
+    border: BorderMode,
+    pool: Option<&ThreadPool>,
+) {
     let size = ((sigma * 6.0).ceil() as usize) | 1;
     let kernel_1d = gaussian_kernel_1d(sigma, size);
-    separable_convolve_into(image, out, &kernel_1d, border);
+    separable_convolve_into_in_pool(image, out, &kernel_1d, border, pool);
 }
 
 pub fn gaussian_blur(image: &GrayImage, sigma: f32) -> GrayImage {

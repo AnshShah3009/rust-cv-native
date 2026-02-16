@@ -1,5 +1,8 @@
 use image::GrayImage;
 use rayon::prelude::*;
+use rayon::ThreadPool;
+
+use crate::convolve::{convolve_with_border_into_in_pool, gaussian_blur_with_border_in_pool, BorderMode, Kernel};
 
 fn sobel_kernels_1d(ksize: usize) -> Option<(Vec<f32>, Vec<f32>)> {
     match ksize {
@@ -47,24 +50,40 @@ pub fn sobel_ex(
     delta: f32,
     border: BorderMode,
 ) -> GrayImage {
-    let (deriv, smooth) = sobel_kernels_1d(ksize).unwrap_or_else(|| {
-        // Fallback to 3x3 Sobel for unsupported sizes to preserve behavior.
-        (vec![-1.0, 0.0, 1.0], vec![1.0, 2.0, 1.0])
-    });
+    sobel_ex_in_pool(src, dx, dy, ksize, scale, delta, border, None)
+}
 
-    let kx = if dx > 0 {
-        deriv.as_slice()
-    } else {
-        smooth.as_slice()
+pub fn sobel_ex_in_pool(
+    src: &GrayImage,
+    dx: i32,
+    dy: i32,
+    ksize: usize,
+    scale: f32,
+    delta: f32,
+    border: BorderMode,
+    pool: Option<&ThreadPool>,
+) -> GrayImage {
+    let run = || {
+        let (deriv, smooth) = sobel_kernels_1d(ksize).unwrap_or_else(|| {
+            (vec![-1.0, 0.0, 1.0], vec![1.0, 2.0, 1.0])
+        });
+
+        let kx = if dx > 0 { deriv.as_slice() } else { smooth.as_slice() };
+        let ky = if dy > 0 { deriv.as_slice() } else { smooth.as_slice() };
+        let kernel = kernel_from_1d(kx, ky);
+        
+        let mut out = GrayImage::new(src.width(), src.height());
+        // We pass None for pool here because we are already running inside the pool (if provided)
+        // thanks to p.install(run) below.
+        convolve_with_border_into_in_pool(src, &mut out, &kernel, border, None);
+        apply_linear_transform(out, scale, delta)
     };
-    let ky = if dy > 0 {
-        deriv.as_slice()
+
+    if let Some(p) = pool {
+        p.install(run)
     } else {
-        smooth.as_slice()
-    };
-    let kernel = kernel_from_1d(kx, ky);
-    let out = convolve_with_border(src, &kernel, border);
-    apply_linear_transform(out, scale, delta)
+        run()
+    }
 }
 
 pub fn scharr_ex(
@@ -75,26 +94,51 @@ pub fn scharr_ex(
     delta: f32,
     border: BorderMode,
 ) -> GrayImage {
-    let (deriv, smooth) = scharr_kernels_1d();
-    let kx = if dx > 0 {
-        deriv.as_slice()
-    } else {
-        smooth.as_slice()
+    scharr_ex_in_pool(src, dx, dy, scale, delta, border, None)
+}
+
+pub fn scharr_ex_in_pool(
+    src: &GrayImage,
+    dx: i32,
+    dy: i32,
+    scale: f32,
+    delta: f32,
+    border: BorderMode,
+    pool: Option<&ThreadPool>,
+) -> GrayImage {
+    let run = || {
+        let (deriv, smooth) = scharr_kernels_1d();
+        let kx = if dx > 0 { deriv.as_slice() } else { smooth.as_slice() };
+        let ky = if dy > 0 { deriv.as_slice() } else { smooth.as_slice() };
+        let kernel = kernel_from_1d(kx, ky);
+        
+        let mut out = GrayImage::new(src.width(), src.height());
+        convolve_with_border_into_in_pool(src, &mut out, &kernel, border, None);
+        apply_linear_transform(out, scale, delta)
     };
-    let ky = if dy > 0 {
-        deriv.as_slice()
+
+    if let Some(p) = pool {
+        p.install(run)
     } else {
-        smooth.as_slice()
-    };
-    let kernel = kernel_from_1d(kx, ky);
-    let out = convolve_with_border(src, &kernel, border);
-    apply_linear_transform(out, scale, delta)
+        run()
+    }
 }
 
 pub fn sobel_with_border(src: &GrayImage, border: BorderMode) -> (GrayImage, GrayImage) {
-    let gx = sobel_ex(src, 1, 0, 3, 1.0, 0.0, border);
-    let gy = sobel_ex(src, 0, 1, 3, 1.0, 0.0, border);
-    (gx, gy)
+    sobel_with_border_in_pool(src, border, None)
+}
+
+pub fn sobel_with_border_in_pool(src: &GrayImage, border: BorderMode, pool: Option<&ThreadPool>) -> (GrayImage, GrayImage) {
+    let run = || {
+        let gx = sobel_ex_in_pool(src, 1, 0, 3, 1.0, 0.0, border, None);
+        let gy = sobel_ex_in_pool(src, 0, 1, 3, 1.0, 0.0, border, None);
+        (gx, gy)
+    };
+    if let Some(p) = pool {
+        p.install(run)
+    } else {
+        run()
+    }
 }
 
 pub fn sobel(src: &GrayImage) -> (GrayImage, GrayImage) {
@@ -102,9 +146,20 @@ pub fn sobel(src: &GrayImage) -> (GrayImage, GrayImage) {
 }
 
 pub fn scharr_with_border(src: &GrayImage, border: BorderMode) -> (GrayImage, GrayImage) {
-    let gx = scharr_ex(src, 1, 0, 1.0, 0.0, border);
-    let gy = scharr_ex(src, 0, 1, 1.0, 0.0, border);
-    (gx, gy)
+    scharr_with_border_in_pool(src, border, None)
+}
+
+pub fn scharr_with_border_in_pool(src: &GrayImage, border: BorderMode, pool: Option<&ThreadPool>) -> (GrayImage, GrayImage) {
+    let run = || {
+        let gx = scharr_ex_in_pool(src, 1, 0, 1.0, 0.0, border, None);
+        let gy = scharr_ex_in_pool(src, 0, 1, 1.0, 0.0, border, None);
+        (gx, gy)
+    };
+    if let Some(p) = pool {
+        p.install(run)
+    } else {
+        run()
+    }
 }
 
 pub fn scharr(src: &GrayImage) -> (GrayImage, GrayImage) {
@@ -112,28 +167,52 @@ pub fn scharr(src: &GrayImage) -> (GrayImage, GrayImage) {
 }
 
 pub fn sobel_magnitude(gx: &GrayImage, gy: &GrayImage) -> GrayImage {
-    let width = gx.width();
-    let height = gx.height();
-    let count = (width * height) as usize;
-    let mut output = vec![0u8; count];
+    sobel_magnitude_in_pool(gx, gy, None)
+}
 
-    output
-        .par_iter_mut()
-        .zip(gx.as_raw().par_iter())
-        .zip(gy.as_raw().par_iter())
-        .for_each(|((out, &gx_val), &gy_val)| {
-            let gx_f = gx_val as f32;
-            let gy_f = gy_val as f32;
-            let mag = (gx_f * gx_f + gy_f * gy_f).sqrt();
-            *out = mag.min(255.0) as u8;
-        });
+pub fn sobel_magnitude_in_pool(gx: &GrayImage, gy: &GrayImage, pool: Option<&ThreadPool>) -> GrayImage {
+    let run = || {
+        let width = gx.width();
+        let height = gx.height();
+        let count = (width * height) as usize;
+        let mut output = vec![0u8; count];
 
-    GrayImage::from_raw(width, height, output).unwrap()
+        output
+            .par_iter_mut()
+            .zip(gx.as_raw().par_iter())
+            .zip(gy.as_raw().par_iter())
+            .for_each(|((out, &gx_val), &gy_val)| {
+                let gx_f = gx_val as f32;
+                let gy_f = gy_val as f32;
+                let mag = (gx_f * gx_f + gy_f * gy_f).sqrt();
+                *out = mag.min(255.0) as u8;
+            });
+
+        GrayImage::from_raw(width, height, output).unwrap()
+    };
+    if let Some(p) = pool {
+        p.install(run)
+    } else {
+        run()
+    }
 }
 
 pub fn laplacian(src: &GrayImage) -> GrayImage {
-    let kernel = Kernel::from_slice(&[0.0, 1.0, 0.0, 1.0, -4.0, 1.0, 0.0, 1.0, 0.0], 3, 3);
-    convolve_with_border(src, &kernel, BorderMode::Replicate)
+    laplacian_in_pool(src, None)
+}
+
+pub fn laplacian_in_pool(src: &GrayImage, pool: Option<&ThreadPool>) -> GrayImage {
+    let run = || {
+        let kernel = Kernel::from_slice(&[0.0, 1.0, 0.0, 1.0, -4.0, 1.0, 0.0, 1.0, 0.0], 3, 3);
+        let mut out = GrayImage::new(src.width(), src.height());
+        convolve_with_border_into_in_pool(src, &mut out, &kernel, BorderMode::Replicate, None);
+        out
+    };
+    if let Some(p) = pool {
+        p.install(run)
+    } else {
+        run()
+    }
 }
 
 fn gradients_and_directions(src: &GrayImage) -> (Vec<f32>, Vec<u8>) {
@@ -151,23 +230,14 @@ fn gradients_and_directions(src: &GrayImage) -> (Vec<f32>, Vec<u8>) {
             if y == 0 || y >= height - 1 {
                 return;
             }
-            // Helper to safe-access data slice without bounds checks inside loop
-            // Since we iterate y from 1 to h-1, rows y-1, y, y+1 are valid.
             let r0_idx = (y - 1) * width;
             let r1_idx = y * width;
             let r2_idx = (y + 1) * width;
-            // Pre-calculate row starts
             let r0 = &data[r0_idx..r0_idx + width];
             let r1 = &data[r1_idx..r1_idx + width];
             let r2 = &data[r2_idx..r2_idx + width];
 
             for x in 1..width - 1 {
-                // p(x, y) accessed via r1[x]
-                // 3x3 window:
-                // r0[x-1] r0[x] r0[x+1]
-                // r1[x-1] r1[x] r1[x+1]
-                // r2[x-1] r2[x] r2[x+1]
-
                 let p00 = r0[x - 1] as f32;
                 let p02 = r0[x + 1] as f32;
                 let p10 = r1[x - 1] as f32;
@@ -207,7 +277,6 @@ fn non_max_suppression(width: usize, height: usize, mag: &[f32], dir: &[u8]) -> 
             if y == 0 || y >= height - 1 {
                 return;
             }
-            // Pre-calculate indices to avoid multiplication in loop
             let r0_idx = (y - 1) * width;
             let r1_idx = y * width;
             let r2_idx = (y + 1) * width;
@@ -267,7 +336,6 @@ fn hysteresis(width: usize, height: usize, nms: &[f32], low: f32, high: f32) -> 
     }
 
     let mut out = GrayImage::new(width as u32, height as u32);
-    // Parallelize final output generation
     out.as_mut().par_iter_mut().enumerate().for_each(|(i, px)| {
         *px = if state[i] == STRONG { 255 } else { 0 };
     });
@@ -275,17 +343,34 @@ fn hysteresis(width: usize, height: usize, nms: &[f32], low: f32, high: f32) -> 
 }
 
 pub fn canny(src: &GrayImage, low_threshold: u8, high_threshold: u8) -> GrayImage {
-    let blurred = gaussian_blur_with_border(src, 1.0, BorderMode::Reflect101);
-    let width = blurred.width() as usize;
-    let height = blurred.height() as usize;
-    let (mag, dir) = gradients_and_directions(&blurred);
-    let nms = non_max_suppression(width, height, &mag, &dir);
-    let low = low_threshold as f32;
-    let high = high_threshold.max(low_threshold) as f32;
-    hysteresis(width, height, &nms, low, high)
+    canny_in_pool(src, low_threshold, high_threshold, None)
 }
 
-use crate::convolve::{convolve_with_border, gaussian_blur_with_border, BorderMode, Kernel};
+pub fn canny_in_pool(
+    src: &GrayImage, 
+    low_threshold: u8, 
+    high_threshold: u8, 
+    pool: Option<&ThreadPool>
+) -> GrayImage {
+    let run = || {
+        // Calls gaussian_blur which calls separable_convolve_into.
+        // We pass None because we are already in the pool.
+        let blurred = gaussian_blur_with_border_in_pool(src, 1.0, BorderMode::Reflect101, None);
+        let width = blurred.width() as usize;
+        let height = blurred.height() as usize;
+        let (mag, dir) = gradients_and_directions(&blurred);
+        let nms = non_max_suppression(width, height, &mag, &dir);
+        let low = low_threshold as f32;
+        let high = high_threshold.max(low_threshold) as f32;
+        hysteresis(width, height, &nms, low, high)
+    };
+
+    if let Some(p) = pool {
+        p.install(run)
+    } else {
+        run()
+    }
+}
 
 #[cfg(test)]
 mod tests {
