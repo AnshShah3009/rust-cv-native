@@ -229,3 +229,92 @@ pub fn gaussian_cloud_to_ply_string(cloud: &GaussianCloud) -> String {
 
     output
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_test_cloud() -> GaussianCloud {
+        let mut cloud = GaussianCloud::new();
+
+        let g1 = Gaussian::new(
+            Point3::new(1.0, 2.0, 3.0),
+            Vector3::new(0.1, 0.2, 0.3),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.8, 0.5, 0.3),
+        )
+        .with_opacity(0.7);
+
+        let g2 = Gaussian::new(
+            Point3::new(4.0, 5.0, 6.0),
+            Vector3::new(0.4, 0.5, 0.6),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.2, 0.6, 0.9),
+        )
+        .with_opacity(0.3);
+
+        cloud.push(g1);
+        cloud.push(g2);
+        cloud
+    }
+
+    #[test]
+    fn test_gaussian_cloud_to_ply_string() {
+        let cloud = create_test_cloud();
+        let ply_string = gaussian_cloud_to_ply_string(&cloud);
+
+        // Check header
+        assert!(ply_string.contains("ply"));
+        assert!(ply_string.contains("format ascii 1.0"));
+        assert!(ply_string.contains("element vertex 2"));
+        assert!(ply_string.contains("property float x"));
+        assert!(ply_string.contains("end_header"));
+
+        // Check that we have data lines
+        let lines: Vec<&str> = ply_string.lines().collect();
+        assert!(lines.len() > 10); // Header + data
+    }
+
+    #[test]
+    fn test_write_and_read_ply_roundtrip() {
+        let cloud = create_test_cloud();
+
+        // Create a temporary file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_path_buf();
+
+        // Write to file
+        write_ply_gaussian_cloud(&cloud, &path).unwrap();
+
+        // Read back
+        let cloud_read = read_ply_gaussian_cloud(&path).unwrap();
+
+        // Verify
+        assert_eq!(cloud_read.num_gaussians(), cloud.num_gaussians());
+
+        // Check first Gaussian (with some tolerance due to log conversions)
+        let g1_orig = &cloud.gaussians[0];
+        let g1_read = &cloud_read.gaussians[0];
+
+        assert!((g1_read.position.x - g1_orig.position.x).abs() < 1e-5);
+        assert!((g1_read.position.y - g1_orig.position.y).abs() < 1e-5);
+        assert!((g1_read.position.z - g1_orig.position.z).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_read_ply_invalid_file() {
+        let result = read_ply_gaussian_cloud("/nonexistent/path.ply");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_ply_not_ply_file() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "This is not a PLY file").unwrap();
+
+        let result = read_ply_gaussian_cloud(temp_file.path());
+        assert!(result.is_err());
+    }
+}

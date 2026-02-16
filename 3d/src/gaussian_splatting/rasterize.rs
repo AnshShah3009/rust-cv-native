@@ -392,3 +392,125 @@ pub fn create_dummy_gaussian_cloud(num_gaussians: usize) -> GaussianCloud {
     }
     cloud
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_camera_new() {
+        let camera = Camera::new(
+            Point3::new(0.0, 0.0, 5.0),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            1000.0,
+            800,
+            600,
+        );
+
+        assert_eq!(camera.width, 800);
+        assert_eq!(camera.height, 600);
+        assert_eq!(camera.focal_length, 1000.0);
+    }
+
+    #[test]
+    fn test_gaussian_rasterizer_new() {
+        let camera = Camera::new(
+            Point3::new(0.0, 0.0, 5.0),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            1000.0,
+            800,
+            600,
+        );
+
+        let rasterizer = GaussianRasterizer::new(camera, 16, 16);
+        assert_eq!(rasterizer.tile_width, 16);
+        assert_eq!(rasterizer.tile_height, 16);
+    }
+
+    #[test]
+    fn test_gaussian_rasterizer_num_tiles() {
+        let camera = Camera::new(
+            Point3::new(0.0, 0.0, 5.0),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            1000.0,
+            800,
+            600,
+        );
+
+        let rasterizer = GaussianRasterizer::new(camera, 16, 16);
+        let (tiles_x, tiles_y) = rasterizer.num_tiles();
+        assert_eq!(tiles_x, 50); // 800/16 = 50
+        assert_eq!(tiles_y, 38); // 600/16 = 37.5, rounded up
+    }
+
+    #[test]
+    fn test_project_gaussians() {
+        let camera = Camera::new(
+            Point3::new(0.0, 0.0, 5.0),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            1000.0,
+            800,
+            600,
+        );
+
+        let mut cloud = GaussianCloud::new();
+        let gaussian = Gaussian::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vector3::new(0.1, 0.1, 0.1),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.8, 0.5, 0.3),
+        );
+        cloud.push(gaussian);
+
+        let rasterizer = GaussianRasterizer::new(camera, 16, 16);
+        let projected = rasterizer.project_gaussians(&cloud);
+
+        assert_eq!(projected.len(), 1);
+        assert!(projected[0].is_valid());
+    }
+
+    #[test]
+    fn test_rasterization_result_to_image() {
+        let result = RasterizationResult {
+            color: vec![Vector3::new(1.0, 0.5, 0.0), Vector3::new(0.0, 1.0, 0.5)],
+            alpha: vec![1.0, 1.0],
+            depth: vec![1.0, 2.0],
+            width: 2,
+            height: 1,
+        };
+
+        let image = result.to_image();
+        assert_eq!(image.len(), 6); // 2 pixels * 3 channels
+        assert_eq!(image[0], 255); // Red channel of first pixel
+        assert_eq!(image[1], 127); // Green channel of first pixel (0.5 * 255 = 127.5 -> 127)
+        assert_eq!(image[2], 0); // Blue channel of first pixel
+    }
+
+    #[test]
+    fn test_differentiable_rasterizer_new() {
+        let camera = Camera::new(
+            Point3::new(0.0, 0.0, 5.0),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            1000.0,
+            800,
+            600,
+        );
+
+        let background = Vector3::new(0.0, 0.0, 0.0);
+        let rasterizer = DifferentiableRasterizer::new(camera, background);
+
+        assert_eq!(rasterizer.background, background);
+    }
+
+    #[test]
+    fn test_create_dummy_gaussian_cloud() {
+        let cloud = create_dummy_gaussian_cloud(10);
+        assert_eq!(cloud.num_gaussians(), 10);
+
+        // Check that all gaussians are valid
+        for gaussian in &cloud.gaussians {
+            assert!(gaussian.opacity > 0.0);
+            assert!(gaussian.scale.x > 0.0);
+        }
+    }
+}

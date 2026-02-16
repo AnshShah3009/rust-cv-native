@@ -71,11 +71,13 @@ impl SphericalHarmonics {
     }
 
     pub fn from_dc(dc: Vector3<f32>) -> Self {
-        let mut sh = Self::new(0);
-        sh.coeffs[0] = dc.x;
-        sh.coeffs[1] = dc.y;
-        sh.coeffs[2] = dc.z;
-        sh
+        // For RGB DC coefficients, we need at least 3 values
+        // Using degree 0 gives us (0+1)^2 = 1 coefficient which is not enough
+        // So we store DC as first 3 coefficients manually
+        Self {
+            coeffs: vec![dc.x, dc.y, dc.z],
+            degree: 0,
+        }
     }
 
     pub fn dc(&self) -> Vector3<f32> {
@@ -96,7 +98,6 @@ impl SphericalHarmonics {
         result.x += self.coeffs[0];
         result.y += self.coeffs[1];
         result.z += self.coeffs[2];
-        }
 
         if self.degree >= 1 {
             result.x += self.coeffs[3] * y;
@@ -358,5 +359,190 @@ impl GaussianCloud {
 impl Default for GaussianCloud {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_spherical_harmonics_new() {
+        let sh = SphericalHarmonics::new(0);
+        assert_eq!(sh.degree, 0);
+        assert_eq!(sh.coeffs.len(), 1);
+        assert_eq!(sh.coeffs[0], 0.0);
+
+        let sh = SphericalHarmonics::new(1);
+        assert_eq!(sh.degree, 1);
+        assert_eq!(sh.coeffs.len(), 4);
+    }
+
+    #[test]
+    fn test_spherical_harmonics_from_dc() {
+        let dc = Vector3::new(0.5, 0.6, 0.7);
+        let sh = SphericalHarmonics::from_dc(dc);
+        assert_eq!(sh.degree, 0);
+        assert_eq!(sh.dc(), dc);
+    }
+
+    #[test]
+    fn test_gaussian_new() {
+        let position = Point3::new(1.0, 2.0, 3.0);
+        let scale = Vector3::new(0.1, 0.2, 0.3);
+        let rotation = Vector4::new(0.0, 0.0, 0.0, 1.0);
+        let color = Vector3::new(0.8, 0.5, 0.3);
+
+        let gaussian = Gaussian::new(position, scale, rotation, color);
+
+        assert_eq!(gaussian.position, position);
+        assert_eq!(gaussian.scale, scale);
+        assert!((gaussian.rotation.norm() - 1.0).abs() < 1e-6);
+        assert_eq!(gaussian.opacity, 0.5);
+        assert_eq!(gaussian.spherical_harmonics.dc(), color);
+    }
+
+    #[test]
+    fn test_gaussian_with_opacity() {
+        let gaussian = Gaussian::new(
+            Point3::origin(),
+            Vector3::new(0.1, 0.1, 0.1),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.5, 0.5, 0.5),
+        )
+        .with_opacity(0.8);
+
+        assert!((gaussian.opacity - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_gaussian_scale_matrix() {
+        let scale = Vector3::new(1.0, 2.0, 3.0);
+        let gaussian = Gaussian::new(
+            Point3::origin(),
+            scale,
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.5, 0.5, 0.5),
+        );
+
+        let scale_matrix = gaussian.scale_matrix();
+        assert_eq!(scale_matrix[(0, 0)], 1.0);
+        assert_eq!(scale_matrix[(1, 1)], 2.0);
+        assert_eq!(scale_matrix[(2, 2)], 3.0);
+    }
+
+    #[test]
+    fn test_gaussian_rotation_matrix() {
+        let gaussian = Gaussian::new(
+            Point3::origin(),
+            Vector3::new(1.0, 1.0, 1.0),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.5, 0.5, 0.5),
+        );
+
+        let rot_mat = gaussian.rotation_matrix();
+        // Identity rotation should give identity matrix
+        assert!((rot_mat[(0, 0)] - 1.0).abs() < 1e-6);
+        assert!((rot_mat[(1, 1)] - 1.0).abs() < 1e-6);
+        assert!((rot_mat[(2, 2)] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_gaussian_covariance() {
+        let gaussian = Gaussian::new(
+            Point3::origin(),
+            Vector3::new(1.0, 2.0, 3.0),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.5, 0.5, 0.5),
+        );
+
+        let cov = gaussian.covariance();
+        // For identity rotation, covariance should be scale^2 on diagonal
+        assert!((cov[(0, 0)] - 1.0).abs() < 1e-5);
+        assert!((cov[(1, 1)] - 4.0).abs() < 1e-5);
+        assert!((cov[(2, 2)] - 9.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_projected_gaussian_invalid() {
+        let pg = ProjectedGaussian::invalid();
+        assert!(!pg.is_valid());
+        assert_eq!(pg.depth, f32::MAX);
+        assert_eq!(pg.opacity, 0.0);
+    }
+
+    #[test]
+    fn test_gaussian_cloud_new() {
+        let cloud = GaussianCloud::new();
+        assert_eq!(cloud.num_gaussians(), 0);
+        assert_eq!(cloud.num_active(), 0);
+    }
+
+    #[test]
+    fn test_gaussian_cloud_push() {
+        let mut cloud = GaussianCloud::new();
+        let gaussian = Gaussian::new(
+            Point3::new(1.0, 2.0, 3.0),
+            Vector3::new(0.1, 0.1, 0.1),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.5, 0.5, 0.5),
+        );
+
+        let idx = cloud.push(gaussian);
+        assert_eq!(idx, 0);
+        assert_eq!(cloud.num_gaussians(), 1);
+        assert_eq!(cloud.num_active(), 1);
+    }
+
+    #[test]
+    fn test_gaussian_cloud_remove() {
+        let mut cloud = GaussianCloud::new();
+
+        let g1 = Gaussian::new(
+            Point3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.1, 0.1, 0.1),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.5, 0.5, 0.5),
+        );
+        let g2 = Gaussian::new(
+            Point3::new(2.0, 0.0, 0.0),
+            Vector3::new(0.1, 0.1, 0.1),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.5, 0.5, 0.5),
+        );
+
+        cloud.push(g1);
+        cloud.push(g2);
+        assert_eq!(cloud.num_gaussians(), 2);
+
+        cloud.remove(0);
+        assert_eq!(cloud.num_gaussians(), 1);
+    }
+
+    #[test]
+    fn test_gaussian_cloud_filter_by_opacity() {
+        let mut cloud = GaussianCloud::new();
+
+        let g1 = Gaussian::new(
+            Point3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.1, 0.1, 0.1),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.5, 0.5, 0.5),
+        )
+        .with_opacity(0.1);
+
+        let g2 = Gaussian::new(
+            Point3::new(2.0, 0.0, 0.0),
+            Vector3::new(0.1, 0.1, 0.1),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.5, 0.5, 0.5),
+        )
+        .with_opacity(0.9);
+
+        cloud.push(g1);
+        cloud.push(g2);
+
+        cloud.filter_by_opacity(0.5);
+        assert_eq!(cloud.num_gaussians(), 1);
     }
 }

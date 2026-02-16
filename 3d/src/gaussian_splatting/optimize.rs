@@ -292,3 +292,96 @@ impl GaussianTrainer {
         losses
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_densification_config_default() {
+        let config = DensificationConfig::default();
+        assert!(config.enabled);
+        assert!(config.grad_threshold > 0.0);
+        assert!(config.size_threshold > 0.0);
+        assert!(config.min_opacity > 0.0);
+        assert!(config.densification_interval > 0);
+    }
+
+    #[test]
+    fn test_pruning_config_default() {
+        let config = PruningConfig::default();
+        assert!(config.enabled);
+        assert!(config.min_opacity > 0.0);
+    }
+
+    #[test]
+    fn test_training_config_default() {
+        let config = TrainingConfig::default();
+        assert!(config.learning_rate_position > 0.0);
+        assert!(config.learning_rate_scale > 0.0);
+        assert!(config.learning_rate_rotation > 0.0);
+        assert!(config.learning_rate_opacity > 0.0);
+        assert!(config.iterations > 0);
+    }
+
+    #[test]
+    fn test_gaussian_optimizer_new() {
+        let config = TrainingConfig::default();
+        let optimizer = GaussianOptimizer::new(config);
+        assert_eq!(optimizer.get_iteration(), 0);
+    }
+
+    #[test]
+    fn test_gaussian_optimizer_prune() {
+        let mut cloud = GaussianCloud::new();
+
+        let g1 = Gaussian::new(
+            Point3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.1, 0.1, 0.1),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.5, 0.5, 0.5),
+        )
+        .with_opacity(0.9);
+
+        let g2 = Gaussian::new(
+            Point3::new(2.0, 0.0, 0.0),
+            Vector3::new(0.1, 0.1, 0.1),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.5, 0.5, 0.5),
+        )
+        .with_opacity(0.001);
+
+        cloud.push(g1);
+        cloud.push(g2);
+
+        let config = TrainingConfig::default();
+        let optimizer = GaussianOptimizer::new(config);
+        optimizer.prune(&mut cloud);
+
+        assert_eq!(cloud.num_gaussians(), 1);
+    }
+
+    #[test]
+    fn test_gaussian_optimizer_reset_opacity() {
+        let mut cloud = GaussianCloud::new();
+
+        let g1 = Gaussian::new(
+            Point3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.1, 0.1, 0.1),
+            Vector4::new(0.0, 0.0, 0.0, 1.0),
+            Vector3::new(0.5, 0.5, 0.5),
+        )
+        .with_opacity(0.001);
+
+        cloud.push(g1);
+
+        let config = TrainingConfig::default();
+        let optimizer = GaussianOptimizer::new(config);
+        optimizer.reset_opacity(&mut cloud);
+
+        assert!(
+            cloud.gaussians[0].opacity >= optimizer.config.opacity_reset.target,
+            "Opacity should be reset to at least the target value"
+        );
+    }
+}
