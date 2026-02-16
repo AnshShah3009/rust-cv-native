@@ -9,3 +9,11 @@ Cargo.lock
 
 # Rerun
 *.rrd
+
+# Python build artifacts
+python/cv_native/__pycache__/
+python/cv_native/*.so
+python/cv_native/*.egg-info/
+
+# Examples build artifacts
+examples/target/
