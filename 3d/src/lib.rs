@@ -1,9 +1,10 @@
 pub mod async_ops;
 pub mod batch;
+pub mod gaussian_splatting;
 pub mod gpu;
 pub mod mesh;
 pub mod odometry;
-pub mod pose_graph;
+// pub mod pose_graph;
 pub mod raycasting;
 pub mod registration;
 pub mod spatial;
@@ -52,3 +53,8 @@ pub use registration::{
 };
 pub use spatial::{KDTree, Octree, VoxelGrid};
 pub use tsdf::{CameraIntrinsics, TSDFVolume, Triangle, VoxelBlock};
+pub use gaussian_splatting::{
+    Gaussian, GaussianCloud, SphericalHarmonics, GaussianRasterizer, DifferentiableRasterizer,
+    GaussianOptimizer, DensificationConfig, TrainingConfig, Camera, RasterizationResult,
+    read_ply_gaussian_cloud, write_ply_gaussian_cloud,
+};
