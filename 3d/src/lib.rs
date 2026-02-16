@@ -82,10 +82,8 @@ pub mod spatial;
 pub mod tsdf;
 
 pub use async_ops::{
-    AsyncConfig,
     point_cloud as async_point_cloud,
-    registration as async_registration,
-    mesh as async_mesh,
+    registration as async_registration,    mesh as async_mesh,
     raycasting as async_raycasting,
     tsdf as async_tsdf,
     pipeline as async_pipeline,
@@ -117,3 +115,17 @@ pub use raycasting::{
 };
 pub use spatial::{KDTree, Octree, VoxelGrid};
 pub use tsdf::{CameraIntrinsics, TSDFVolume, Triangle, VoxelBlock};
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Async task join error: {0}")]
+    JoinError(#[from] tokio::task::JoinError),
+
+    #[error("Runtime error: {0}")]
+    RuntimeError(String),
+
+    #[error("Internal error: {0}")]
+    InternalError(String),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;

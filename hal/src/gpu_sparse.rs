@@ -1,6 +1,7 @@
 use wgpu::{Device, Queue, Buffer, BufferUsages};
 use wgpu::util::DeviceExt;
 use std::sync::Arc;
+use crate::{Result, Error};
 
 /// GPU-resident sparse matrix in CSR (Compressed Sparse Row) format.
 /// 
@@ -31,9 +32,9 @@ impl GpuSparseMatrix {
         rows: usize,
         cols: usize,
         triplets: &[(usize, usize, f64)], // (row, col, value)
-    ) -> Self {
+    ) -> Result<Self> {
         // Convert triplets to CSR format
-        let (row_ptr, col_indices, values) = Self::triplets_to_csr(rows, triplets);
+        let (row_ptr, col_indices, values) = Self::triplets_to_csr(rows, cols, triplets)?;
         let nnz = col_indices.len();
         
         // Create GPU buffers
@@ -57,7 +58,7 @@ impl GpuSparseMatrix {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
         
-        Self {
+        Ok(Self {
             rows,
             cols,
             nnz,
@@ -66,14 +67,22 @@ impl GpuSparseMatrix {
             values_buffer,
             device,
             queue,
-        }
+        })
     }
     
     /// Convert triplets to CSR format (CPU-side).
     fn triplets_to_csr(
         rows: usize,
+        cols: usize,
         triplets: &[(usize, usize, f64)],
-    ) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+    ) -> Result<(Vec<u32>, Vec<u32>, Vec<f64>)> {
+        if rows > u32::MAX as usize {
+            return Err(Error::MemoryError(format!("Row count {} exceeds u32::MAX", rows)));
+        }
+        if triplets.len() > u32::MAX as usize {
+            return Err(Error::MemoryError(format!("Triplet count {} exceeds u32::MAX", triplets.len())));
+        }
+
         // Sort triplets by row, then column
         let mut sorted_triplets = triplets.to_vec();
         sorted_triplets.sort_by_key(|(r, c, _)| (*r, *c));
@@ -85,6 +94,16 @@ impl GpuSparseMatrix {
         
         let mut current_row = 0;
         for (row, col, val) in sorted_triplets {
+            if row >= rows {
+                return Err(Error::MemoryError(format!("Row index {} out of bounds (rows: {})", row, rows)));
+            }
+            if col >= cols {
+                return Err(Error::MemoryError(format!("Col index {} out of bounds (cols: {})", col, cols)));
+            }
+            if col > u32::MAX as usize {
+                 return Err(Error::MemoryError(format!("Col index {} exceeds u32::MAX", col)));
+            }
+
             // Fill row_ptr for empty rows
             while current_row < row {
                 current_row += 1;
@@ -101,7 +120,7 @@ impl GpuSparseMatrix {
             row_ptr[current_row] = col_indices.len() as u32;
         }
         
-        (row_ptr, col_indices, values)
+        Ok((row_ptr, col_indices, values))
     }
 }
 
@@ -123,7 +142,7 @@ mod tests {
             (2, 2, 5.0),
         ];
         
-        let (row_ptr, col_indices, values) = GpuSparseMatrix::triplets_to_csr(3, &triplets);
+        let (row_ptr, col_indices, values) = GpuSparseMatrix::triplets_to_csr(3, 3, &triplets).unwrap();
         
         assert_eq!(row_ptr, vec![0, 2, 3, 5]);
         assert_eq!(col_indices, vec![0, 2, 1, 0, 2]);

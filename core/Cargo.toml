@@ -10,6 +10,7 @@ nalgebra = { workspace = true }
 image = { workspace = true }
 rayon = { workspace = true }
 wide = { workspace = true }
+thiserror = { workspace = true }
 
 [features]
 default = []

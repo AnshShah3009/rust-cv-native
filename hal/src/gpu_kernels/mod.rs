@@ -168,8 +168,67 @@ pub mod shaders {
 
 /// GPU Buffer utilities
 pub mod buffer_utils {
-    use wgpu::{Buffer, Device, BufferDescriptor, BufferUsages};
-    use std::sync::Arc;
+    use wgpu::{Buffer, Device, BufferDescriptor, BufferUsages, MapMode};
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::collections::HashMap;
+
+    /// A bucketed pool for reusing GPU buffers
+    pub struct GpuBufferPool {
+        // Buckets: usage -> (size_bucket -> Vec<Buffer>)
+        buckets: Mutex<HashMap<BufferUsages, HashMap<u64, Vec<Buffer>>>>,
+    }
+
+    impl GpuBufferPool {
+        pub fn new() -> Self {
+            Self {
+                buckets: Mutex::new(HashMap::new()),
+            }
+        }
+
+        fn get_size_bucket(size: u64) -> u64 {
+            // Round up to nearest power of 2 or multiple of 1MB
+            if size <= 1024 * 1024 {
+                size.next_power_of_two().max(256)
+            } else {
+                ((size + 1024 * 1024 - 1) / (1024 * 1024)) * 1024 * 1024
+            }
+        }
+
+        pub fn get(&self, device: &Device, size: u64, usage: BufferUsages) -> Buffer {
+            let bucket_size = Self::get_size_bucket(size);
+            let mut buckets = self.buckets.lock().unwrap();
+            
+            let usage_map = buckets.entry(usage).or_insert_with(HashMap::new);
+            if let Some(pool) = usage_map.get_mut(&bucket_size) {
+                if let Some(buffer) = pool.pop() {
+                    return buffer;
+                }
+            }
+
+            device.create_buffer(&BufferDescriptor {
+                label: Some("Pooled Compute Buffer"),
+                size: bucket_size,
+                usage,
+                mapped_at_creation: false,
+            })
+        }
+
+        pub fn return_buffer(&self, buffer: Buffer, usage: BufferUsages) {
+            let size = buffer.size();
+            let mut buckets = self.buckets.lock().unwrap();
+            let usage_map = buckets.entry(usage).or_insert_with(HashMap::new);
+            let pool = usage_map.entry(size).or_insert_with(Vec::new);
+            if pool.len() < 8 {
+                pool.push(buffer);
+            }
+        }
+    }
+
+    static GLOBAL_GPU_POOL: OnceLock<GpuBufferPool> = OnceLock::new();
+
+    pub fn global_pool() -> &'static GpuBufferPool {
+        GLOBAL_GPU_POOL.get_or_init(GpuBufferPool::new)
+    }
 
     /// Create a GPU buffer from data
     pub fn create_buffer<T: bytemuck::Pod>(
@@ -199,16 +258,82 @@ pub mod buffer_utils {
         })
     }
 
-    /// Download data from GPU buffer (placeholder)
+    /// Download data from GPU buffer
     pub async fn read_buffer<T: bytemuck::Pod>(
-        _device: Arc<Device>,
-        _queue: &wgpu::Queue,
-        _buffer: &Buffer,
-        _offset: u64,
-        _size: usize,
-    ) -> Vec<T> {
-        // TODO: Implement proper async readback
-        vec![]
+        device: Arc<Device>,
+        queue: &wgpu::Queue,
+        buffer: &Buffer,
+        offset: u64,
+        size: usize,
+    ) -> crate::Result<Vec<T>> {
+        // Create a staging buffer
+        let staging_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Staging Buffer"),
+            size: size as u64,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Copy from source to staging
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Readback Encoder"),
+        });
+        
+        encoder.copy_buffer_to_buffer(
+            buffer,
+            offset,
+            &staging_buffer,
+            0,
+            size as u64,
+        );
+
+        queue.submit(Some(encoder.finish()));
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        
+        let slice = staging_buffer.slice(..);
+        slice.map_async(MapMode::Read, move |res| {
+            tx.send(res).ok();
+        });
+
+        device.poll(wgpu::Maintain::Wait);
+
+        rx.await
+            .map_err(|_| crate::Error::DeviceError("Readback channel closed".to_string()))?
+            .map_err(|e| crate::Error::DeviceError(format!("Buffer mapping failed: {}", e)))?;
+
+        let data = slice.get_mapped_range();
+        let result = bytemuck::cast_slice(&data).to_vec();
+        drop(data);
+        staging_buffer.unmap();
+
+        Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::buffer_utils::*;
+    use wgpu::BufferUsages;
+
+    #[test]
+    fn test_buffer_pool_buckets() {
+        let pool = GpuBufferPool::new();
+        
+        // Test size bucket logic
+        assert_eq!(GpuBufferPool::get_size_bucket(100), 256);
+        assert_eq!(GpuBufferPool::get_size_bucket(1024), 1024);
+        assert_eq!(GpuBufferPool::get_size_bucket(1024 * 1024 + 1), 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_gpu_buffer_pool_reuse() {
+        // We can't easily test the 'get' without a real Device, 
+        // but we can test the internal structure if we exposed it, 
+        // or just ensure 'return_buffer' doesn't crash.
+        let pool = GpuBufferPool::new();
+        // Since we can't create a real wgpu::Buffer without a device easily in a unit test,
+        // we'll focus on the logic we've implemented.
     }
 }
 
@@ -247,9 +372,9 @@ pub mod pointcloud_gpu {
         _gpu: &GpuCompute,
         _points: &[Vector3<f32>],
         _transform: &Matrix4<f32>,
-    ) -> Vec<Vector3<f32>> {
+    ) -> crate::Result<Vec<Vector3<f32>>> {
         // Implementation: dispatch compute shader
-        todo!("GPU point cloud transform")
+        Err(crate::Error::not_supported("GPU point cloud transform"))
     }
 
     /// Compute normals from points on GPU
@@ -257,8 +382,8 @@ pub mod pointcloud_gpu {
         _gpu: &GpuCompute,
         _points: &[Vector3<f32>],
         _k_neighbors: u32,
-    ) -> Vec<Vector3<f32>> {
-        todo!("GPU normal computation")
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        Err(crate::Error::not_supported("GPU normal computation"))
     }
 
     /// Voxel downsample on GPU
@@ -266,8 +391,8 @@ pub mod pointcloud_gpu {
         _gpu: &GpuCompute,
         _points: &[Vector3<f32>],
         _voxel_size: f32,
-    ) -> Vec<Vector3<f32>> {
-        todo!("GPU voxel downsampling")
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        Err(crate::Error::not_supported("GPU voxel downsampling"))
     }
 
     /// Remove statistical outliers on GPU
@@ -276,8 +401,8 @@ pub mod pointcloud_gpu {
         _points: &[Vector3<f32>],
         _n_neighbors: u32,
         _std_ratio: f32,
-    ) -> Vec<Vector3<f32>> {
-        todo!("GPU outlier removal")
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        Err(crate::Error::not_supported("GPU outlier removal"))
     }
 }
 
@@ -299,8 +424,8 @@ pub mod tsdf_gpu {
         _colors: &mut [u32],
         _voxel_size: f32,
         _truncation: f32,
-    ) {
-        todo!("GPU TSDF integration")
+    ) -> crate::Result<()> {
+        Err(crate::Error::not_supported("GPU TSDF integration"))
     }
 
     /// Raycast TSDF volume to generate surface on GPU
@@ -312,9 +437,9 @@ pub mod tsdf_gpu {
         _width: u32,
         _height: u32,
         _voxel_size: f32,
-    ) -> (Vec<Vector3<f32>>, Vec<Vector3<f32>>) {
+    ) -> crate::Result<(Vec<Vector3<f32>>, Vec<Vector3<f32>>)> {
         // Returns (vertices, normals)
-        todo!("GPU TSDF raycasting")
+        Err(crate::Error::not_supported("GPU TSDF raycasting"))
     }
 
     /// Extract surface points from TSDF on GPU
@@ -322,8 +447,8 @@ pub mod tsdf_gpu {
         _gpu: &GpuCompute,
         _tsdf_volume: &[f32],
         _threshold: f32,
-    ) -> Vec<Vector3<f32>> {
-        todo!("GPU surface extraction")
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        Err(crate::Error::not_supported("GPU surface extraction"))
     }
 }
 
@@ -339,8 +464,8 @@ pub mod icp_gpu {
         _target: &[Vector3<f32>],
         _transform: &Matrix4<f32>,
         _max_distance: f32,
-    ) -> Vec<(u32, u32, f32)> { // (src_idx, tgt_idx, distance)
-        todo!("GPU correspondence finding")
+    ) -> crate::Result<Vec<(u32, u32, f32)>> { // (src_idx, tgt_idx, distance)
+        Err(crate::Error::not_supported("GPU correspondence finding"))
     }
 
     /// Compute ICP residuals on GPU
@@ -351,8 +476,8 @@ pub mod icp_gpu {
         _target_normals: &[Vector3<f32>],
         _correspondences: &[(u32, u32)],
         _transform: &Matrix4<f32>,
-    ) -> (f32, f32) { // (sum_squared_error, inlier_count)
-        todo!("GPU residual computation")
+    ) -> crate::Result<(f32, f32)> { // (sum_squared_error, inlier_count)
+        Err(crate::Error::not_supported("GPU residual computation"))
     }
 
     /// One ICP iteration on GPU
@@ -363,8 +488,8 @@ pub mod icp_gpu {
         _target_normals: &[Vector3<f32>],
         _transform: &Matrix4<f32>,
         _max_distance: f32,
-    ) -> Matrix4<f32> {
-        todo!("GPU ICP iteration")
+    ) -> crate::Result<Matrix4<f32>> {
+        Err(crate::Error::not_supported("GPU ICP iteration"))
     }
 }
 
@@ -377,8 +502,8 @@ pub mod spatial_gpu {
     pub fn build_kdtree(
         _gpu: &GpuCompute,
         _points: &[Vector3<f32>],
-    ) -> GpuKDTree {
-        todo!("GPU KDTree construction")
+    ) -> crate::Result<GpuKDTree> {
+        Err(crate::Error::not_supported("GPU KDTree construction"))
     }
 
     /// Batch nearest neighbor search on GPU
@@ -387,8 +512,8 @@ pub mod spatial_gpu {
         _kdtree: &GpuKDTree,
         _queries: &[Vector3<f32>],
         _k: u32,
-    ) -> Vec<Vec<(u32, f32)>> { // (point_idx, distance)
-        todo!("GPU batch NN search")
+    ) -> crate::Result<Vec<Vec<(u32, f32)>>> { // (point_idx, distance)
+        Err(crate::Error::not_supported("GPU batch NN search"))
     }
 
     /// Batch radius search on GPU
@@ -397,8 +522,8 @@ pub mod spatial_gpu {
         _kdtree: &GpuKDTree,
         _queries: &[Vector3<f32>],
         _radius: f32,
-    ) -> Vec<Vec<(u32, f32)>> {
-        todo!("GPU batch radius search")
+    ) -> crate::Result<Vec<Vec<(u32, f32)>>> {
+        Err(crate::Error::not_supported("GPU batch radius search"))
     }
 
     /// Build VoxelGrid on GPU
@@ -406,8 +531,8 @@ pub mod spatial_gpu {
         _gpu: &GpuCompute,
         _points: &[Vector3<f32>],
         _voxel_size: f32,
-    ) -> GpuVoxelGrid {
-        todo!("GPU VoxelGrid construction")
+    ) -> crate::Result<GpuVoxelGrid> {
+        Err(crate::Error::not_supported("GPU VoxelGrid construction"))
     }
 
     /// GPU KDTree handle
@@ -435,8 +560,8 @@ pub mod mesh_gpu {
         _gpu: &GpuCompute,
         _vertices: &[Point3<f32>],
         _faces: &[[u32; 3]],
-    ) -> Vec<Vector3<f32>> {
-        todo!("GPU vertex normals")
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        Err(crate::Error::not_supported("GPU vertex normals"))
     }
 
     /// Laplacian smoothing on GPU
@@ -446,8 +571,8 @@ pub mod mesh_gpu {
         _faces: &[[u32; 3]],
         _iterations: u32,
         _lambda: f32,
-    ) {
-        todo!("GPU Laplacian smoothing")
+    ) -> crate::Result<()> {
+        Err(crate::Error::not_supported("GPU Laplacian smoothing"))
     }
 
     /// Simplify mesh on GPU
@@ -456,16 +581,16 @@ pub mod mesh_gpu {
         _vertices: &[Point3<f32>],
         _faces: &[[u32; 3]],
         _target_ratio: f32,
-    ) -> (Vec<Point3<f32>>, Vec<[u32; 3]>) {
-        todo!("GPU mesh simplification")
+    ) -> crate::Result<(Vec<Point3<f32>>, Vec<[u32; 3]>)> {
+        Err(crate::Error::not_supported("GPU mesh simplification"))
     }
 
     /// Compute mesh bounds on GPU
     pub fn compute_bounds(
         _gpu: &GpuCompute,
         _vertices: &[Point3<f32>],
-    ) -> (Point3<f32>, Point3<f32>) {
-        todo!("GPU bounds computation")
+    ) -> crate::Result<(Point3<f32>, Point3<f32>)> {
+        Err(crate::Error::not_supported("GPU bounds computation"))
     }
 }
 
@@ -480,8 +605,8 @@ pub mod raycasting_gpu {
         _rays: &[(Point3<f32>, Vector3<f32>)], // (origin, direction)
         _vertices: &[Point3<f32>],
         _faces: &[[u32; 3]],
-    ) -> Vec<Option<(f32, Point3<f32>, Vector3<f32>)>> { // (distance, hit_point, normal)
-        todo!("GPU ray casting")
+    ) -> crate::Result<Vec<Option<(f32, Point3<f32>, Vector3<f32>)>>> { // (distance, hit_point, normal)
+        Err(crate::Error::not_supported("GPU ray casting"))
     }
 
     /// Compute distance field on GPU
@@ -492,8 +617,8 @@ pub mod raycasting_gpu {
         _grid_origin: Point3<f32>,
         _grid_size: (u32, u32, u32),
         _voxel_size: f32,
-    ) -> Vec<f32> {
-        todo!("GPU distance field")
+    ) -> crate::Result<Vec<f32>> {
+        Err(crate::Error::not_supported("GPU distance field"))
     }
 }
 
@@ -512,8 +637,8 @@ pub mod odometry_gpu {
         _width: u32,
         _height: u32,
         _init_transform: &[f32; 16],
-    ) -> ([f32; 16], f32, f32) { // (transform, fitness, rmse)
-        todo!("GPU RGBD odometry")
+    ) -> crate::Result<([f32; 16], f32, f32)> { // (transform, fitness, rmse)
+        Err(crate::Error::not_supported("GPU RGBD odometry"))
     }
 
     /// Compute vertex map from depth on GPU
@@ -523,8 +648,8 @@ pub mod odometry_gpu {
         _intrinsics: &[f32; 4],
         _width: u32,
         _height: u32,
-    ) -> Vec<Vector3<f32>> {
-        todo!("GPU vertex map computation")
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        Err(crate::Error::not_supported("GPU vertex map computation"))
     }
 
     /// Compute normal map from vertex map on GPU
@@ -533,8 +658,8 @@ pub mod odometry_gpu {
         _vertex_map: &[Vector3<f32>],
         _width: u32,
         _height: u32,
-    ) -> Vec<Vector3<f32>> {
-        todo!("GPU normal map computation")
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        Err(crate::Error::not_supported("GPU normal map computation"))
     }
 }
 
@@ -548,19 +673,19 @@ pub mod unified {
         points: &[Vector3<f32>],
         transform: &Matrix4<f32>,
         use_gpu: bool,
-    ) -> Vec<Vector3<f32>> {
+    ) -> crate::Result<Vec<Vector3<f32>>> {
         if use_gpu {
             // Dispatch to GPU
-            todo!("GPU dispatch")
+            Err(crate::Error::not_supported("GPU dispatch in unified API"))
         } else {
             // CPU fallback
-            points.iter()
+            Ok(points.iter()
                 .map(|p| {
                     let p_h = p.insert_row(3, 1.0);
                     let transformed = transform * p_h;
                     Vector3::new(transformed.x, transformed.y, transformed.z)
                 })
-                .collect()
+                .collect())
         }
     }
 

@@ -35,7 +35,7 @@ impl ComputeMode {
                 }
             }
             ComputeMode::Adaptive => {
-                if GpuContext::new().is_some() && should_use_gpu(config, data_size) {
+                if GpuContext::new().is_ok() && should_use_gpu(config, data_size) {
                     ComputeMode::GPU
                 } else {
                     ComputeMode::CPU
@@ -1467,11 +1467,11 @@ pub mod clustering {
 }
 
 pub fn is_gpu_available() -> bool {
-    GpuContext::new().is_some()
+    GpuContext::new().is_ok()
 }
 
 pub fn gpu_info() -> Option<String> {
-    GpuContext::new().map(|ctx| format!("{:?}", ctx.device))
+    GpuContext::new().ok().map(|ctx| format!("{:?}", ctx.device))
 }
 
 pub fn force_cpu_mode() -> ComputeConfig {

@@ -11,10 +11,11 @@ rayon = { workspace = true }
 nalgebra = { workspace = true }
 
 thiserror = "2.0"
-wgpu.workspace = true
+wgpu = { version = "24.0.0" }
 pollster = "0.4.0"
 futures.workspace = true
 bytemuck = { version = "1.25.0", features = ["derive"] }
+tokio = { workspace = true, features = ["sync"] }
 
 [features]
 default = []

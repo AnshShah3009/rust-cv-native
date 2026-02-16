@@ -10,9 +10,13 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    /// Initialize a new GPU context.
-    /// Selects the best available adapter (HighPerformance).
-    pub fn new() -> Option<Self> {
+    /// Initialize a new GPU context (synchronous wrapper).
+    pub fn new() -> crate::Result<Self> {
+        block_on(Self::new_async())
+    }
+
+    /// Initialize a new GPU context asynchronously.
+    pub async fn new_async() -> crate::Result<Self> {
         // Create instance
         let instance = Instance::new(&wgpu::InstanceDescriptor {
             backends: Backends::all(),
@@ -20,23 +24,24 @@ impl GpuContext {
         });
 
         // Request adapter
-        let adapter = block_on(instance.request_adapter(&RequestAdapterOptions {
+        let adapter = instance.request_adapter(&RequestAdapterOptions {
             power_preference: PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
-        })).ok()?;
+        }).await.ok_or_else(|| crate::Error::InitError("Failed to find a suitable GPU adapter".to_string()))?;
 
-        // Request device (wgpu 28: no trace param)
-        let (device, queue) = block_on(adapter.request_device(
+        // Request device
+        let (device, queue) = adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("CV-HAL Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::downlevel_defaults(),
                 ..Default::default()
             },
-        )).ok()?;
+            None,
+        ).await.map_err(|e| crate::Error::InitError(format!("Failed to create GPU device: {}", e)))?;
 
-        Some(Self {
+        Ok(Self {
             device: Arc::new(device),
             queue: Arc::new(queue),
         })
@@ -68,8 +73,8 @@ mod tests {
     fn test_gpu_context_creation() {
         let ctx = GpuContext::new();
         match ctx {
-            Some(c) => println!("GPU Context created: {:?}", c.device),
-            None => println!("No suitable GPU adapter found, skipping test."),
+            Ok(c) => println!("GPU Context created: {:?}", c.device),
+            Err(e) => println!("GPU initialization failed (expected on some CI): {}", e),
         }
     }
 }

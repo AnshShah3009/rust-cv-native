@@ -899,24 +899,31 @@ fn compute_disparity_validity(disparity: &PyDisparityMap, threshold: f32) -> Vec
 
 #[pyfunction]
 fn get_resource_group(name: &str) -> PyResult<PyResourceGroup> {
-    if let Some(group) = cv_runtime::scheduler().get_group(name) {
-        Ok(PyResourceGroup { inner: group })
-    } else {
-        Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+    match cv_runtime::scheduler().get_group(name) {
+        Ok(Some(group)) => Ok(PyResourceGroup { inner: group }),
+        Ok(None) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
             "Resource group '{}' not found",
             name
-        )))
+        ))),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
     }
 }
 
 #[pyfunction]
+#[pyo3(signature = (name, num_threads, cores=None, allow_work_stealing=true, allow_dynamic_scaling=true))]
 fn create_resource_group(
     name: &str,
     num_threads: usize,
     cores: Option<Vec<usize>>,
+    allow_work_stealing: bool,
+    allow_dynamic_scaling: bool,
 ) -> PyResult<PyResourceGroup> {
+    let policy = cv_runtime::orchestrator::GroupPolicy {
+        allow_work_stealing,
+        allow_dynamic_scaling,
+    };
     let group = cv_runtime::scheduler()
-        .create_group(name, num_threads, cores)
+        .create_group(name, num_threads, cores, policy)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyResourceGroup { inner: group })
 }

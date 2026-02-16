@@ -55,11 +55,13 @@ gpu/
 
 ### Key Features
 
-1. **Automatic Dispatch**: Automatically chooses CPU or GPU based on problem size
-2. **Unified API**: Same interface whether using CPU or GPU
-3. **Fallback Support**: Gracefully falls back to CPU if GPU unavailable
-4. **Parallel Reduction**: Tree-based GPU reduction for sum/min/max operations
-5. **Workgroup Optimization**: Configured for 256 threads (1D), 16x16 (2D), 8x8x8 (3D)
+1. **Automatic Dispatch**: Automatically chooses CPU or GPU based on problem size.
+2. **Unified API**: Same interface whether using CPU or GPU.
+3. **Graceful Error Handling**: Replaced all `todo!()` panics in the HAL with `Result`-based errors. Unimplemented GPU features now return `Err(Error::NotSupported)` instead of crashing.
+4. **Robust Initialization**: `GpuContext::new` now returns `Result<Self, Error>` with detailed diagnostics.
+5. **Async-Ready**: Added `GpuContext::new_async()` to prevent blocking async runtimes during GPU discovery.
+6. **Parallel Reduction**: Tree-based GPU reduction for sum/min/max operations.
+7. **Workgroup Optimization**: Configured for 256 threads (1D), 16x16 (2D), 8x8x8 (3D).
 
 ## Usage Examples
 
@@ -68,9 +70,21 @@ gpu/
 use cv_3d::gpu;
 
 if gpu::is_gpu_available() {
-    println!("GPU ready: {}", gpu::gpu_info().unwrap());
+    println!("GPU ready: {}", gpu::gpu_info().unwrap_or_default());
 } else {
     println!("Using CPU fallback");
+}
+```
+
+### Async GPU Initialization
+```rust
+use cv_hal::gpu::GpuContext;
+
+async fn setup() {
+    match GpuContext::new_async().await {
+        Ok(ctx) => println!("GPU initialized: {:?}", ctx.device),
+        Err(e) => eprintln!("GPU init failed: {}", e),
+    }
 }
 ```
 

@@ -13,3 +13,17 @@ pub use keypoint::*;
 pub use point_cloud::*;
 pub use runtime::*;
 pub use tensor::*;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Runtime error: {0}")]
+    RuntimeError(String),
+    
+    #[error("Concurrency error: {0}")]
+    ConcurrencyError(String),
+    
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;

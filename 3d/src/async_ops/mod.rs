@@ -8,52 +8,6 @@ use nalgebra::{Matrix4, Point3, Vector3};
 use std::future::Future;
 use tokio::task;
 
-/// Async configuration
-#[derive(Debug, Clone, Copy)]
-pub struct AsyncConfig {
-    /// Number of worker threads in pool
-    pub worker_threads: usize,
-    /// Max concurrent operations
-    pub max_concurrent: usize,
-    /// Whether to use spawn_blocking for CPU-heavy tasks
-    pub use_blocking_pool: bool,
-    /// Chunk size for parallel iteration
-    pub chunk_size: usize,
-}
-
-impl Default for AsyncConfig {
-    fn default() -> Self {
-        Self {
-            worker_threads: num_cpus::get(),
-            max_concurrent: 100,
-            use_blocking_pool: true,
-            chunk_size: 1000,
-        }
-    }
-}
-
-impl AsyncConfig {
-    /// I/O bound configuration
-    pub fn io_bound() -> Self {
-        Self {
-            worker_threads: num_cpus::get() * 2,
-            max_concurrent: 1000,
-            use_blocking_pool: false,
-            chunk_size: 100,
-        }
-    }
-
-    /// CPU bound configuration
-    pub fn cpu_bound() -> Self {
-        Self {
-            worker_threads: num_cpus::get(),
-            max_concurrent: num_cpus::get() * 2,
-            use_blocking_pool: true,
-            chunk_size: 10000,
-        }
-    }
-}
-
 /// Async point cloud operations
 pub mod point_cloud {
     use super::*;
@@ -62,27 +16,28 @@ pub mod point_cloud {
     pub async fn transform_async(
         points: Vec<Point3<f32>>,
         transform: Matrix4<f32>,
-    ) -> Vec<Point3<f32>> {
-        if std::mem::size_of::<Vec<Point3<f32>>>() > 0 {
-            task::spawn_blocking(move || {
-                points
-                    .iter()
-                    .map(|p| transform.transform_point(p))
-                    .collect()
-            })
-            .await
-            .unwrap()
-        } else {
+    ) -> crate::Result<Vec<Point3<f32>>> {
+        Ok(task::spawn_blocking(move || {
             points
-        }
+                .iter()
+                .map(|p| transform.transform_point(p))
+                .collect()
+        })
+        .await?)
     }
 
     /// Async batch transform
     pub async fn batch_transform_async(
         point_clouds: Vec<Vec<Point3<f32>>>,
         transforms: Vec<Matrix4<f32>>,
-    ) -> Vec<Vec<Point3<f32>>> {
-        assert_eq!(point_clouds.len(), transforms.len());
+    ) -> crate::Result<Vec<Vec<Point3<f32>>>> {
+        if point_clouds.len() != transforms.len() {
+            return Err(crate::Error::RuntimeError(format!(
+                "Point cloud count ({}) does not match transform count ({})",
+                point_clouds.len(),
+                transforms.len()
+            )));
+        }
 
         let futures: Vec<_> = point_clouds
             .into_iter()
@@ -90,43 +45,40 @@ pub mod point_cloud {
             .map(|(points, transform)| transform_async(points, transform))
             .collect();
 
-        futures::future::join_all(futures).await
+        futures::future::try_join_all(futures).await
     }
 
     /// Async voxel downsampling
     pub async fn voxel_downsample_async(
         points: Vec<Point3<f32>>,
         voxel_size: f32,
-    ) -> Vec<Point3<f32>> {
-        task::spawn_blocking(move || {
+    ) -> crate::Result<Vec<Point3<f32>>> {
+        Ok(task::spawn_blocking(move || {
             gpu::point_cloud::voxel_downsample(&points, voxel_size)
         })
-        .await
-        .unwrap()
+        .await?)
     }
 
     /// Async normal computation
     pub async fn compute_normals_async(
         points: Vec<Point3<f32>>,
         k: usize,
-    ) -> Vec<Vector3<f32>> {
-        task::spawn_blocking(move || {
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        Ok(task::spawn_blocking(move || {
             gpu::point_cloud::compute_normals_simple(&points, k)
         })
-        .await
-        .unwrap()
+        .await?)
     }
 
     /// Async voxel-based normal computation
     pub async fn voxel_based_normals_async(
         points: Vec<Point3<f32>>,
         voxel_size: f32,
-    ) -> Vec<Vector3<f32>> {
-        task::spawn_blocking(move || {
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        Ok(task::spawn_blocking(move || {
             gpu::point_cloud::voxel_based_normals_simple(&points, voxel_size)
         })
-        .await
-        .unwrap()
+        .await?)
     }
 
     /// Async voxel to point normal transfer
@@ -134,12 +86,11 @@ pub mod point_cloud {
         points: Vec<Point3<f32>>,
         voxel_normals: Vec<Vector3<f32>>,
         voxel_size: f32,
-    ) -> Vec<Vector3<f32>> {
-        task::spawn_blocking(move || {
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        Ok(task::spawn_blocking(move || {
             gpu::point_cloud::voxel_to_point_normal_transfer(&points, &voxel_normals, voxel_size)
         })
-        .await
-        .unwrap()
+        .await?)
     }
 
     /// Async approximate normal computation
@@ -147,24 +98,23 @@ pub mod point_cloud {
         points: Vec<Point3<f32>>,
         k: usize,
         epsilon: f32,
-    ) -> Vec<Vector3<f32>> {
-        task::spawn_blocking(move || {
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        Ok(task::spawn_blocking(move || {
             gpu::point_cloud::approximate_normals_simple(&points, k, epsilon)
         })
-        .await
-        .unwrap()
+        .await?)
     }
 
     /// Async batch voxel-based normal computation
     pub async fn batch_voxel_based_normals_async(
         point_clouds: Vec<Vec<Point3<f32>>>,
         voxel_size: f32,
-    ) -> Vec<Vec<Vector3<f32>>> {
+    ) -> crate::Result<Vec<Vec<Vector3<f32>>>> {
         let futures: Vec<_> = point_clouds
             .into_iter()
             .map(|points| voxel_based_normals_async(points, voxel_size))
             .collect();
-        futures::future::join_all(futures).await
+        futures::future::try_join_all(futures).await
     }
 
     /// Async batch approximate normal computation
@@ -172,12 +122,12 @@ pub mod point_cloud {
         point_clouds: Vec<Vec<Point3<f32>>>,
         k: usize,
         epsilon: f32,
-    ) -> Vec<Vec<Vector3<f32>>> {
+    ) -> crate::Result<Vec<Vec<Vector3<f32>>>> {
         let futures: Vec<_> = point_clouds
             .into_iter()
             .map(|points| approximate_normals_async(points, k, epsilon))
             .collect();
-        futures::future::join_all(futures).await
+        futures::future::try_join_all(futures).await
     }
 }
 
@@ -192,8 +142,8 @@ pub mod registration {
         target_normals: Vec<Vector3<f32>>,
         max_distance: f32,
         max_iterations: usize,
-    ) -> Option<Matrix4<f32>> {
-        task::spawn_blocking(move || {
+    ) -> crate::Result<Option<Matrix4<f32>>> {
+        Ok(task::spawn_blocking(move || {
             gpu::registration::icp_point_to_plane(
                 &source,
                 &target,
@@ -202,8 +152,7 @@ pub mod registration {
                 max_iterations,
             )
         })
-        .await
-        .unwrap()
+        .await?)
     }
 
     /// Async batch ICP
@@ -213,7 +162,7 @@ pub mod registration {
         target_normals: Vec<Vec<Vector3<f32>>>,
         max_distance: f32,
         max_iterations: usize,
-    ) -> Vec<Option<Matrix4<f32>>> {
+    ) -> crate::Result<Vec<Option<Matrix4<f32>>>> {
         let futures: Vec<_> = sources
             .into_iter()
             .zip(targets.into_iter())
@@ -223,7 +172,7 @@ pub mod registration {
             })
             .collect();
 
-        futures::future::join_all(futures).await
+        futures::future::try_join_all(futures).await
     }
 }
 
@@ -237,26 +186,24 @@ pub mod mesh {
         faces: Vec<[usize; 3]>,
         iterations: usize,
         lambda: f32,
-    ) -> Vec<Point3<f32>> {
-        task::spawn_blocking(move || {
+    ) -> crate::Result<Vec<Point3<f32>>> {
+        Ok(task::spawn_blocking(move || {
             let mut verts = vertices;
             gpu::mesh::laplacian_smooth(&mut verts, &faces, iterations, lambda);
             verts
         })
-        .await
-        .unwrap()
+        .await?)
     }
 
     /// Async vertex normal computation
     pub async fn compute_normals_async(
         vertices: Vec<Point3<f32>>,
         faces: Vec<[usize; 3]>,
-    ) -> Vec<Vector3<f32>> {
-        task::spawn_blocking(move || {
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        Ok(task::spawn_blocking(move || {
             gpu::mesh::compute_vertex_normals(&vertices, &faces)
         })
-        .await
-        .unwrap()
+        .await?)
     }
 }
 
@@ -270,12 +217,11 @@ pub mod raycasting {
         ray_directions: Vec<Vector3<f32>>,
         mesh_vertices: Vec<Point3<f32>>,
         mesh_faces: Vec<[usize; 3]>,
-    ) -> Vec<Option<(f32, Point3<f32>, Vector3<f32>)>> {
-        task::spawn_blocking(move || {
+    ) -> crate::Result<Vec<Option<(f32, Point3<f32>, Vector3<f32>)>>> {
+        Ok(task::spawn_blocking(move || {
             gpu::raycasting::cast_rays(&ray_origins, &ray_directions, &mesh_vertices, &mesh_faces)
         })
-        .await
-        .unwrap()
+        .await?)
     }
 }
 
@@ -294,8 +240,8 @@ pub mod tsdf {
         mut weights: Vec<f32>,
         voxel_size: f32,
         truncation: f32,
-    ) -> (Vec<f32>, Vec<f32>) {
-        task::spawn_blocking(move || {
+    ) -> crate::Result<(Vec<f32>, Vec<f32>)> {
+        Ok(task::spawn_blocking(move || {
             gpu::tsdf::integrate_depth(
                 &depth_image,
                 width,
@@ -309,8 +255,7 @@ pub mod tsdf {
             );
             (tsdf_volume, weights)
         })
-        .await
-        .unwrap()
+        .await?)
     }
 }
 

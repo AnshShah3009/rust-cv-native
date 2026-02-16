@@ -50,9 +50,10 @@ fn read_cpu_threads_from_env() -> Result<Option<usize>, String> {
     Ok(Some(parsed))
 }
 
-/// A simple global buffer pool for reusing memory allocations.
+/// A size-bucketed global buffer pool for reusing memory allocations.
 pub struct BufferPool {
-    pool: Mutex<Vec<Vec<u8>>>,
+    // Buckets: 0: <64KB, 1: <1MB, 2: <16MB, 3: >=16MB
+    buckets: [Mutex<Vec<Vec<u8>>>; 4],
 }
 
 static GLOBAL_BUFFER_POOL: OnceLock<BufferPool> = OnceLock::new();
@@ -60,29 +61,59 @@ static GLOBAL_BUFFER_POOL: OnceLock<BufferPool> = OnceLock::new();
 impl BufferPool {
     pub fn global() -> &'static self::BufferPool {
         GLOBAL_BUFFER_POOL.get_or_init(|| BufferPool {
-            pool: Mutex::new(Vec::new()),
+            buckets: [
+                Mutex::new(Vec::new()),
+                Mutex::new(Vec::new()),
+                Mutex::new(Vec::new()),
+                Mutex::new(Vec::new()),
+            ],
         })
+    }
+
+    fn get_bucket_index(size: usize) -> usize {
+        if size <= 64 * 1024 {
+            0
+        } else if size <= 1024 * 1024 {
+            1
+        } else if size <= 16 * 1024 * 1024 {
+            2
+        } else {
+            3
+        }
     }
 
     /// Get a buffer of at least `min_size` bytes.
     pub fn get(&self, min_size: usize) -> Vec<u8> {
-        let mut pool = self.pool.lock().unwrap();
-        if let Some(mut buf) = pool.pop() {
-            if buf.capacity() >= min_size {
-                buf.clear();
-                return buf;
+        let idx = Self::get_bucket_index(min_size);
+        
+        // Try requested bucket and then larger buckets
+        for i in idx..4 {
+            if let Ok(mut bucket) = self.buckets[i].lock() {
+                if let Some(mut buf) = bucket.pop() {
+                    if buf.capacity() >= min_size {
+                        buf.clear();
+                        return buf;
+                    }
+                    // If we popped one that's too small for some reason (shouldn't happen in high buckets),
+                    // we'll just fall through and allocate or try next bucket.
+                }
             }
         }
+        
         Vec::with_capacity(min_size)
     }
 
     /// Return a buffer to the pool for later reuse.
     pub fn return_buffer(&self, mut buf: Vec<u8>) {
-        let mut pool = self.pool.lock().unwrap();
-        if pool.len() < 32 {
-            // Limit pool size
-            buf.clear();
-            pool.push(buf);
+        let cap = buf.capacity();
+        if cap == 0 { return; }
+        
+        let idx = Self::get_bucket_index(cap);
+        if let Ok(mut bucket) = self.buckets[idx].lock() {
+            if bucket.len() < 16 { // Limit per-bucket size
+                buf.clear();
+                bucket.push(buf);
+            }
         }
     }
 }
