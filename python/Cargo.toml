@@ -17,6 +17,7 @@ cv-3d = { path = "../3d" }
 cv-runtime = { path = "../runtime" }
 cv-slam = { path = "../slam" }
 cv-scientific = { path = "../scientific" }
+cv-registration = { path = "../registration" }
 nalgebra = { workspace = true }
 image = { workspace = true }
 thiserror = { workspace = true }

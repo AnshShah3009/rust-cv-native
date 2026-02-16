@@ -79,7 +79,8 @@ impl BufferPool {
     /// Return a buffer to the pool for later reuse.
     pub fn return_buffer(&self, mut buf: Vec<u8>) {
         let mut pool = self.pool.lock().unwrap();
-        if pool.len() < 32 { // Limit pool size
+        if pool.len() < 32 {
+            // Limit pool size
             buf.clear();
             pool.push(buf);
         }

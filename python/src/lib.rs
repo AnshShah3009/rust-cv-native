@@ -1,9 +1,11 @@
 use cv_3d::PointCloud;
 use cv_core::CameraIntrinsics;
 use cv_core::Rect as RustRect;
+use cv_registration::{registration_icp_point_to_plane, GlobalRegistrationResult, ICPResult};
 use cv_scientific::geometry::vectorized_iou as rust_vectorized_iou;
 use cv_slam::SlamSystem;
 use geo::Area;
+use nalgebra::{Matrix4, Point3, Vector3};
 #[allow(deprecated)]
 use numpy::{IntoPyArray, PyArray2, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::prelude::*;
@@ -171,6 +173,208 @@ impl PyPointCloud {
     pub fn num_points(&self) -> usize {
         self.inner.points.len()
     }
+}
+
+#[pyclass]
+#[derive(Clone)]
+pub struct PyPoint3D {
+    #[pyo3(get, set)]
+    pub x: f32,
+    #[pyo3(get, set)]
+    pub y: f32,
+    #[pyo3(get, set)]
+    pub z: f32,
+}
+
+#[pymethods]
+impl PyPoint3D {
+    #[new]
+    pub fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+}
+
+impl From<PyPoint3D> for Point3<f32> {
+    fn from(p: PyPoint3D) -> Self {
+        Point3::new(p.x, p.y, p.z)
+    }
+}
+
+#[pyclass]
+pub struct PyPointCloud3D {
+    pub inner: PointCloud<f32>,
+}
+
+#[pymethods]
+impl PyPointCloud3D {
+    #[new]
+    pub fn new(points: Vec<PyPoint3D>) -> Self {
+        let pts: Vec<Point3<f32>> = points.into_iter().map(|p| p.into()).collect();
+        Self {
+            inner: PointCloud::new(pts),
+        }
+    }
+
+    #[staticmethod]
+    pub fn from_arrays(xs: Vec<f32>, ys: Vec<f32>, zs: Vec<f32>) -> PyResult<Self> {
+        if xs.len() != ys.len() || xs.len() != zs.len() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Arrays must have same length",
+            ));
+        }
+        let points: Vec<Point3<f32>> = xs
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| Point3::new(x, ys[i], zs[i]))
+            .collect();
+        Ok(Self {
+            inner: PointCloud::new(points),
+        })
+    }
+
+    pub fn with_colors_rgb(&mut self, r: Vec<f32>, g: Vec<f32>, b: Vec<f32>) -> PyResult<()> {
+        if r.len() != g.len() || r.len() != b.len() || r.len() != self.inner.points.len() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Color arrays must match point count",
+            ));
+        }
+        let colors: Vec<Point3<f32>> = r
+            .iter()
+            .enumerate()
+            .map(|(i, &r)| Point3::new(r, g[i], b[i]))
+            .collect();
+        self.inner.colors = Some(colors);
+        Ok(())
+    }
+
+    pub fn with_normals(&mut self, nx: Vec<f32>, ny: Vec<f32>, nz: Vec<f32>) -> PyResult<()> {
+        if nx.len() != ny.len() || nx.len() != nz.len() || nx.len() != self.inner.points.len() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Normal arrays must match point count",
+            ));
+        }
+        let normals: Vec<Vector3<f32>> = nx
+            .iter()
+            .enumerate()
+            .map(|(i, &nx)| Vector3::new(nx, ny[i], nz[i]))
+            .collect();
+        self.inner.normals = Some(normals);
+        Ok(())
+    }
+
+    pub fn num_points(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+#[pyclass]
+#[derive(Clone)]
+pub struct PyICPResult {
+    #[pyo3(get, set)]
+    pub fitness: f32,
+    #[pyo3(get, set)]
+    pub inlier_rmse: f32,
+    #[pyo3(get, set)]
+    pub num_iterations: u32,
+    pub transformation: Vec<f32>,
+}
+
+#[pymethods]
+impl PyICPResult {
+    #[new]
+    pub fn new() -> Self {
+        Self {
+            fitness: 0.0,
+            inlier_rmse: 0.0,
+            num_iterations: 0,
+            transformation: vec![
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+        }
+    }
+
+    pub fn get_transform(&self) -> Vec<f32> {
+        self.transformation.clone()
+    }
+}
+
+impl From<ICPResult> for PyICPResult {
+    fn from(r: ICPResult) -> Self {
+        let mut t = vec![0.0f32; 16];
+        for i in 0..4 {
+            for j in 0..4 {
+                t[i * 4 + j] = r.transformation[(i, j)];
+            }
+        }
+        Self {
+            fitness: r.fitness,
+            inlier_rmse: r.inlier_rmse,
+            num_iterations: r.num_iterations as u32,
+            transformation: t,
+        }
+    }
+}
+
+#[pyclass]
+#[derive(Clone)]
+pub struct PyGlobalRegistrationResult {
+    #[pyo3(get, set)]
+    pub fitness: f32,
+    #[pyo3(get, set)]
+    pub inlier_rmse: f32,
+    pub transformation: Vec<f32>,
+}
+
+#[pymethods]
+impl PyGlobalRegistrationResult {
+    #[new]
+    pub fn new() -> Self {
+        Self {
+            fitness: 0.0,
+            inlier_rmse: 0.0,
+            transformation: vec![
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+        }
+    }
+
+    pub fn get_transform(&self) -> Vec<f32> {
+        self.transformation.clone()
+    }
+}
+
+impl From<GlobalRegistrationResult> for PyGlobalRegistrationResult {
+    fn from(r: GlobalRegistrationResult) -> Self {
+        let mut t = vec![0.0f32; 16];
+        for i in 0..4 {
+            for j in 0..4 {
+                t[i * 4 + j] = r.transformation[(i, j)];
+            }
+        }
+        Self {
+            fitness: r.fitness,
+            inlier_rmse: r.inlier_rmse,
+            transformation: t,
+        }
+    }
+}
+
+#[pyfunction]
+fn registration_icp(
+    source: &PyPointCloud3D,
+    target: &PyPointCloud3D,
+    max_distance: f32,
+    max_iterations: u32,
+) -> PyResult<Option<PyICPResult>> {
+    let transform = Matrix4::identity();
+    let result = registration_icp_point_to_plane(
+        &source.inner,
+        &target.inner,
+        max_distance,
+        &transform,
+        max_iterations as usize,
+    );
+    Ok(result.map(|r| r.into()))
 }
 
 #[pyclass]
@@ -423,6 +627,8 @@ fn create_resource_group(
 #[pymodule]
 fn cv_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPointCloud>()?;
+    m.add_class::<PyPointCloud3D>()?;
+    m.add_class::<PyPoint3D>()?;
     m.add_class::<PyKeyPoint>()?;
     m.add_class::<PyFeatureMatch>()?;
     m.add_class::<PyResourceGroup>()?;
@@ -430,6 +636,8 @@ fn cv_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRect>()?;
     m.add_class::<PyPolygon>()?;
     m.add_class::<PySpatialIndex>()?;
+    m.add_class::<PyICPResult>()?;
+    m.add_class::<PyGlobalRegistrationResult>()?;
 
     m.add_function(wrap_pyfunction!(gaussian_blur, m)?)?;
     m.add_function(wrap_pyfunction!(detect_orb, m)?)?;
@@ -439,6 +647,7 @@ fn cv_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(iou, m)?)?;
     m.add_function(wrap_pyfunction!(py_vectorized_iou, m)?)?;
     m.add_function(wrap_pyfunction!(py_polygon_iou, m)?)?;
+    m.add_function(wrap_pyfunction!(registration_icp, m)?)?;
 
     Ok(())
 }

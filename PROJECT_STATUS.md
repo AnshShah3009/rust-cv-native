@@ -1,6 +1,6 @@
 # Rust Computer Vision Library - Project Status
 
-**Last Updated:** February 14, 2026
+**Last Updated:** February 16, 2026
 
 ## Project Overview
 
@@ -26,7 +26,97 @@ Building a **native Rust computer vision library** as a complete replacement for
 
 ---
 
-## Current Status: Phase 10 Python Bindings (Completed)
+## Current Status: Phase 11 - Visualization & Python Ecosystem (February 16, 2026)
+
+### ✅ Completed: cv-plot - Visualization Library
+
+**Location:** `plot/`
+
+- **2D Plotting:** Line plots, scatter plots, bar charts
+- **3D Visualization:** Point clouds with normals and colors
+- **Export Formats:** SVG, HTML (Three.js interactive)
+- **Example Usage:**
+```rust
+use cv_plot::{Plot, Plot3D, PointCloud3D};
+
+let mut plot = Plot::new("My Plot");
+plot.add_series(&x, &y, "data");
+plot.save("output.svg").unwrap();
+
+let pc = PointCloud3D::new("cloud");
+pc.add_points(&xs, &ys, &zs);
+let plot3d = Plot3D::new().add_point_cloud(pc);
+plot3d.save_html("cloud.html").unwrap();
+```
+
+### ✅ Completed: Python Bindings Expansion
+
+**Location:** `python/src/lib.rs`
+
+- **Point Cloud Registration:**
+  - `registration_icp()` - ICP point-to-plane
+  - `PointCloud3D` - 3D point cloud with colors/normals
+  - `PyICPResult` - Registration results with transformation matrix
+
+- **Core Types:**
+  - `PointCloud3D.from_arrays(xs, ys, zs)` - Create from numpy arrays
+  - `PointCloud3D.with_colors_rgb(r, g, b)` - Add RGB colors
+  - `PointCloud3D.with_normals(nx, ny, nz)` - Add normals
+
+- **Thread Control:**
+  - `create_resource_group(name, num_threads, cores)` - Create thread pools
+  - `get_resource_group(name)` - Get existing group
+
+### ✅ Completed: Frame Conventions (cv-core)
+
+**Location:** `core/src/frames.rs`
+
+- **Supported Conventions:**
+  - **OpenCV:** RH, +Z backward, +Y down
+  - **OpenGL:** LH, +Z backward, +Y up
+  - **COLMAP:** RH, +Z forward, +Y down
+  - **WebGPU:** LH, +Z forward, +Y up
+
+- **API:**
+```rust
+use cv_core::frames::{FrameConvention, CameraConvention};
+
+let opencv = FrameConvention::opencv();
+let converted = pose.convert_to(&FrameConvention::colmap());
+```
+
+### ✅ Completed: Rust Examples
+
+**Location:** `examples/src/`
+
+- `core_types` - Frame conventions, camera intrinsics, point clouds
+- `imgproc_demo` - Image processing overview
+- `features_demo` - Feature detection API
+- `kalman_filter` - Kalman filter API
+- `bundle_adjustment` - Bundle adjustment API
+- `registration_icp` - Point cloud registration
+- `gaussian_splatting_basic` - Gaussian splatting
+- `raycasting` - 3D ray casting
+- `plot_demo` - Plotting/visualization
+- `scientific` - Scientific computing
+
+### ✅ Completed: Python Examples
+
+**Location:** `python_examples/`
+
+- `core_demo.py` - Core types, registration, thread groups
+- `imgproc_demo.py` - Image processing overview
+- `jit_demo.py` - JIT compilation demo
+- `cv_native/jit.py` - Caching decorator (for expensive computations)
+
+### Workspace Crates (22 total)
+
+```
+cv-core, cv-hal, cv-imgproc, cv-features, cv-stereo, cv-video,
+cv-videoio, cv-calib3d, cv-photo, cv-dnn, cv-sfm, cv-slam,
+cv-runtime, cv-optimize, cv-scientific, cv-python, cv-viewer,
+cv-io, cv-3d, cv-rendering, cv-registration, cv-plot
+```
 
 ### ✅ Completed Modules (9 Crates)
 

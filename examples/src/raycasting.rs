@@ -45,7 +45,7 @@ fn main() {
                 "    Normal: ({}, {}, {})",
                 hit.normal.x, hit.normal.y, hit.normal.z
             );
-            println!("    Face index: {}", hit.face_index);
+            println!("    Triangle index: {}", hit.triangle_index);
         }
         None => println!("  No hit"),
     }

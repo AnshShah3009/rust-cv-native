@@ -1,0 +1,9 @@
+# Python dependencies for rust-cv-native examples
+numpy>=1.20.0
+
+# For building the native module
+maturin>=1.0.0
+
+# Optional: for visualization
+matplotlib>=3.5.0
+opencv-python>=4.5.0  # For comparison/testing

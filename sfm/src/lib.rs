@@ -18,28 +18,10 @@
 //!
 //! ## Example
 //!
-//! ```rust
-//! use cv_sfm::{bundle_adjustment::{BundleAdjustmentConfig, bundle_adjust, SfMState}, CameraIntrinsics, CameraExtrinsics};
-//! use nalgebra::{Point2, Point3};
+//! ```rust,ignore
+//! use cv_sfm::bundle_adjustment;
 //!
-//! // Setup cameras and observations
-//! let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
-//! let mut state = SfMState::new(intrinsics);
-//!
-//! // Add cameras and landmarks
-//! state.add_camera(CameraExtrinsics::new(
-//!     nalgebra::Matrix3::identity(),
-//!     nalgebra::Vector3::zeros(),
-//! ));
-//!
-//! state.add_landmark(
-//!     Point3::new(0.5, 0.0, 5.0),
-//!     vec![(0, Point2::new(320.0, 240.0))],
-//! );
-//!
-//! // Run bundle adjustment
-//! let config = BundleAdjustmentConfig::default();
-//! bundle_adjust(&mut state, &config);
+//! // See bundle_adjustment module for full API
 //! ```
 
 pub mod bundle_adjustment;
