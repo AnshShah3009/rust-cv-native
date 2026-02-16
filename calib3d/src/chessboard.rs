@@ -2,6 +2,7 @@ use image::GrayImage;
 use cv_imgproc::{adaptive_threshold, AdaptiveMethod, ThresholdType, find_external_contours, approx_poly_dp, contour_area};
 use cv_core::Point2;
 use crate::{Result, CalibError};
+use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 struct Quad {
@@ -24,24 +25,27 @@ pub fn find_chessboard_corners_robust(
         let contours = find_external_contours(&binary);
         
         // 3. Filter Quads
-        let mut quads = Vec::new();
-        for c in contours {
-            let area = contour_area(&c);
-            if area < 25.0 { continue; } // Too small
-            
-            let approx = approx_poly_dp(&c, 0.03 * cv_imgproc::contour_perimeter(&c), true);
-            if approx.points.len() == 4 {
-                // Check convexity (simplified)
-                let pts = approx.points;
-                let corners = [
-                    Point2::new(pts[0].0 as f64, pts[0].1 as f64),
-                    Point2::new(pts[1].0 as f64, pts[1].1 as f64),
-                    Point2::new(pts[2].0 as f64, pts[2].1 as f64),
-                    Point2::new(pts[3].0 as f64, pts[3].1 as f64),
-                ];
-                quads.push(Quad { corners, area });
-            }
-        }
+        let mut quads: Vec<Quad> = contours.par_iter()
+            .filter_map(|c| {
+                let area = contour_area(c);
+                if area < 25.0 { return None; } // Too small
+                
+                let approx = approx_poly_dp(c, 0.03 * cv_imgproc::contour_perimeter(c), true);
+                if approx.points.len() == 4 {
+                    // Check convexity (simplified)
+                    let pts = &approx.points;
+                    let corners = [
+                        Point2::new(pts[0].0 as f64, pts[0].1 as f64),
+                        Point2::new(pts[1].0 as f64, pts[1].1 as f64),
+                        Point2::new(pts[2].0 as f64, pts[2].1 as f64),
+                        Point2::new(pts[3].0 as f64, pts[3].1 as f64),
+                    ];
+                    Some(Quad { corners, area })
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         // 4. Grid assembly (This is a complex graph problem, implementing a simplified version first)
         // For now, if we found enough quads, we can try to cluster their corners

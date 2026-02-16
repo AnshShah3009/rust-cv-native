@@ -1246,6 +1246,7 @@ dependencies = [
  "log",
  "nalgebra",
  "rand 0.8.5",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

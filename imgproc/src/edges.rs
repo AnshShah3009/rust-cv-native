@@ -1,4 +1,5 @@
 use image::GrayImage;
+use rayon::prelude::*;
 
 fn sobel_kernels_1d(ksize: usize) -> Option<(Vec<f32>, Vec<f32>)> {
     match ksize {
@@ -30,10 +31,10 @@ fn kernel_from_1d(kx: &[f32], ky: &[f32]) -> Kernel {
 }
 
 fn apply_linear_transform(mut img: GrayImage, scale: f32, delta: f32) -> GrayImage {
-    for px in img.as_mut().iter_mut() {
+    img.as_mut().par_iter_mut().for_each(|px| {
         let v = (*px as f32) * scale + delta;
         *px = v.clamp(0.0, 255.0) as u8;
-    }
+    });
     img
 }
 
@@ -113,18 +114,21 @@ pub fn scharr(src: &GrayImage) -> (GrayImage, GrayImage) {
 pub fn sobel_magnitude(gx: &GrayImage, gy: &GrayImage) -> GrayImage {
     let width = gx.width();
     let height = gx.height();
-    let mut output = GrayImage::new(width, height);
-
-    for y in 0..height {
-        for x in 0..width {
-            let gx_val = gx.get_pixel(x, y)[0] as f32;
-            let gy_val = gy.get_pixel(x, y)[0] as f32;
-            let mag = (gx_val * gx_val + gy_val * gy_val).sqrt();
-            output.put_pixel(x, y, image::Luma([mag.min(255.0) as u8]));
-        }
-    }
+    let count = (width * height) as usize;
+    let mut output = vec![0u8; count];
 
     output
+        .par_iter_mut()
+        .zip(gx.as_raw().par_iter())
+        .zip(gy.as_raw().par_iter())
+        .for_each(|((out, &gx_val), &gy_val)| {
+            let gx_f = gx_val as f32;
+            let gy_f = gy_val as f32;
+            let mag = (gx_f * gx_f + gy_f * gy_f).sqrt();
+            *out = mag.min(255.0) as u8;
+        });
+
+    GrayImage::from_raw(width, height, output).unwrap()
 }
 
 pub fn laplacian(src: &GrayImage) -> GrayImage {
@@ -139,33 +143,57 @@ fn gradients_and_directions(src: &GrayImage) -> (Vec<f32>, Vec<u8>) {
     let mut magnitude = vec![0.0f32; width * height];
     let mut direction = vec![0u8; width * height];
 
-    for y in 1..height.saturating_sub(1) {
-        for x in 1..width.saturating_sub(1) {
-            let p = |xx: usize, yy: usize| data[yy * width + xx] as f32;
+    magnitude
+        .par_chunks_mut(width)
+        .zip(direction.par_chunks_mut(width))
+        .enumerate()
+        .for_each(|(y, (mag_row, dir_row))| {
+            if y == 0 || y >= height - 1 {
+                return;
+            }
+            // Helper to safe-access data slice without bounds checks inside loop
+            // Since we iterate y from 1 to h-1, rows y-1, y, y+1 are valid.
+            let r0_idx = (y - 1) * width;
+            let r1_idx = y * width;
+            let r2_idx = (y + 1) * width;
+            // Pre-calculate row starts
+            let r0 = &data[r0_idx..r0_idx + width];
+            let r1 = &data[r1_idx..r1_idx + width];
+            let r2 = &data[r2_idx..r2_idx + width];
 
-            let gx = -p(x - 1, y - 1) + p(x + 1, y - 1) - 2.0 * p(x - 1, y) + 2.0 * p(x + 1, y)
-                - p(x - 1, y + 1)
-                + p(x + 1, y + 1);
-            let gy = -p(x - 1, y - 1) - 2.0 * p(x, y - 1) - p(x + 1, y - 1)
-                + p(x - 1, y + 1)
-                + 2.0 * p(x, y + 1)
-                + p(x + 1, y + 1);
+            for x in 1..width - 1 {
+                // p(x, y) accessed via r1[x]
+                // 3x3 window:
+                // r0[x-1] r0[x] r0[x+1]
+                // r1[x-1] r1[x] r1[x+1]
+                // r2[x-1] r2[x] r2[x+1]
 
-            let idx = y * width + x;
-            magnitude[idx] = (gx * gx + gy * gy).sqrt();
+                let p00 = r0[x - 1] as f32;
+                let p02 = r0[x + 1] as f32;
+                let p10 = r1[x - 1] as f32;
+                let p12 = r1[x + 1] as f32;
+                let p20 = r2[x - 1] as f32;
+                let p22 = r2[x + 1] as f32;
+                let p01 = r0[x] as f32;
+                let p21 = r2[x] as f32;
 
-            let angle = gy.atan2(gx).to_degrees().rem_euclid(180.0);
-            direction[idx] = if !(22.5..157.5).contains(&angle) {
-                0
-            } else if angle < 67.5 {
-                1
-            } else if angle < 112.5 {
-                2
-            } else {
-                3
-            };
-        }
-    }
+                let gx = -p00 + p02 - 2.0 * p10 + 2.0 * p12 - p20 + p22;
+                let gy = -p00 - 2.0 * p01 - p02 + p20 + 2.0 * p21 + p22;
+
+                mag_row[x] = (gx * gx + gy * gy).sqrt();
+
+                let angle = gy.atan2(gx).to_degrees().rem_euclid(180.0);
+                dir_row[x] = if !(22.5..157.5).contains(&angle) {
+                    0
+                } else if angle < 67.5 {
+                    1
+                } else if angle < 112.5 {
+                    2
+                } else {
+                    3
+                };
+            }
+        });
 
     (magnitude, direction)
 }
@@ -173,28 +201,31 @@ fn gradients_and_directions(src: &GrayImage) -> (Vec<f32>, Vec<u8>) {
 fn non_max_suppression(width: usize, height: usize, mag: &[f32], dir: &[u8]) -> Vec<f32> {
     let mut out = vec![0.0f32; width * height];
 
-    for y in 1..height.saturating_sub(1) {
-        for x in 1..width.saturating_sub(1) {
-            let idx = y * width + x;
-            let m = mag[idx];
-            let (m1, m2) = match dir[idx] {
-                0 => (mag[idx - 1], mag[idx + 1]),
-                1 => (
-                    mag[(y - 1) * width + (x + 1)],
-                    mag[(y + 1) * width + (x - 1)],
-                ),
-                2 => (mag[(y - 1) * width + x], mag[(y + 1) * width + x]),
-                _ => (
-                    mag[(y - 1) * width + (x - 1)],
-                    mag[(y + 1) * width + (x + 1)],
-                ),
-            };
-
-            if m >= m1 && m >= m2 {
-                out[idx] = m;
+    out.par_chunks_mut(width)
+        .enumerate()
+        .for_each(|(y, out_row)| {
+            if y == 0 || y >= height - 1 {
+                return;
             }
-        }
-    }
+            // Pre-calculate indices to avoid multiplication in loop
+            let r0_idx = (y - 1) * width;
+            let r1_idx = y * width;
+            let r2_idx = (y + 1) * width;
+
+            for x in 1..width - 1 {
+                let m = mag[r1_idx + x];
+                let (m1, m2) = match dir[r1_idx + x] {
+                    0 => (mag[r1_idx + x - 1], mag[r1_idx + x + 1]),
+                    1 => (mag[r0_idx + x + 1], mag[r2_idx + x - 1]),
+                    2 => (mag[r0_idx + x], mag[r2_idx + x]),
+                    _ => (mag[r0_idx + x - 1], mag[r2_idx + x + 1]),
+                };
+
+                if m >= m1 && m >= m2 {
+                    out_row[x] = m;
+                }
+            }
+        });
 
     out
 }
@@ -236,9 +267,10 @@ fn hysteresis(width: usize, height: usize, nms: &[f32], low: f32, high: f32) -> 
     }
 
     let mut out = GrayImage::new(width as u32, height as u32);
-    for (i, px) in out.as_mut().iter_mut().enumerate() {
+    // Parallelize final output generation
+    out.as_mut().par_iter_mut().enumerate().for_each(|(i, px)| {
         *px = if state[i] == STRONG { 255 } else { 0 };
-    }
+    });
     out
 }
 

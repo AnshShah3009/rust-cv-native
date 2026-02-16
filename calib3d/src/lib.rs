@@ -20,6 +20,7 @@ pub enum CalibError {
 use cv_core::{skew_symmetric, CameraExtrinsics, CameraIntrinsics, Distortion};
 use cv_imgproc::{remap, BorderMode, Interpolation};
 use image::GrayImage;
+use rayon::prelude::*;
 use nalgebra::{
     DMatrix, Matrix2, Matrix3, Matrix3x4, Matrix4, Point2, Point3, Rotation3, SymmetricEigen,
     Vector2, Vector3,
@@ -859,20 +860,21 @@ pub fn project_points(
     intrinsics: &CameraIntrinsics,
     extrinsics: &CameraExtrinsics,
 ) -> Result<Vec<Point2<f64>>> {
-    let mut out = Vec::with_capacity(object_points.len());
-    for p in object_points {
-        let pc = extrinsics.rotation * p.coords + extrinsics.translation;
-        if !pc.iter().all(|v| v.is_finite()) || pc[2].abs() <= 1e-12 {
-            return Err(CalibError::InvalidParameters(
-                "project_points encountered non-finite or near-zero depth point".to_string(),
-            ));
-        }
-        out.push(Point2::new(
-            intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx,
-            intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy,
-        ));
-    }
-    Ok(out)
+    object_points
+        .par_iter()
+        .map(|p| {
+            let pc = extrinsics.rotation * p.coords + extrinsics.translation;
+            if !pc.iter().all(|v| v.is_finite()) || pc[2].abs() <= 1e-12 {
+                return Err(CalibError::InvalidParameters(
+                    "project_points encountered non-finite or near-zero depth point".to_string(),
+                ));
+            }
+            Ok(Point2::new(
+                intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx,
+                intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy,
+            ))
+        })
+        .collect()
 }
 
 pub fn project_points_with_distortion(
@@ -881,24 +883,25 @@ pub fn project_points_with_distortion(
     extrinsics: &CameraExtrinsics,
     distortion: &Distortion,
 ) -> Result<Vec<Point2<f64>>> {
-    let mut out = Vec::with_capacity(object_points.len());
-    for p in object_points {
-        let pc = extrinsics.rotation * p.coords + extrinsics.translation;
-        if !pc.iter().all(|v| v.is_finite()) || pc[2].abs() <= 1e-12 {
-            return Err(CalibError::InvalidParameters(
-                "project_points_with_distortion encountered non-finite or near-zero depth point"
-                    .to_string(),
-            ));
-        }
-        let x = pc[0] / pc[2];
-        let y = pc[1] / pc[2];
-        let (xd, yd) = distortion.apply(x, y);
-        out.push(Point2::new(
-            intrinsics.fx * xd + intrinsics.cx,
-            intrinsics.fy * yd + intrinsics.cy,
-        ));
-    }
-    Ok(out)
+    object_points
+        .par_iter()
+        .map(|p| {
+            let pc = extrinsics.rotation * p.coords + extrinsics.translation;
+            if !pc.iter().all(|v| v.is_finite()) || pc[2].abs() <= 1e-12 {
+                return Err(CalibError::InvalidParameters(
+                    "project_points_with_distortion encountered non-finite or near-zero depth point"
+                        .to_string(),
+                ));
+            }
+            let x = pc[0] / pc[2];
+            let y = pc[1] / pc[2];
+            let (xd, yd) = distortion.apply(x, y);
+            Ok(Point2::new(
+                intrinsics.fx * xd + intrinsics.cx,
+                intrinsics.fy * yd + intrinsics.cy,
+            ))
+        })
+        .collect()
 }
 
 /// Project 3D points to 2D with distortion and optional Jacobian computation
@@ -1892,26 +1895,29 @@ fn compute_rms_reprojection(
         ));
     }
 
-    let mut sq_sum = 0.0f64;
-    let mut count = 0usize;
-    for ((ext, obj), img) in extrinsics
-        .iter()
-        .zip(object_points.iter())
-        .zip(image_points.iter())
-    {
-        for (p3, p2) in obj.iter().zip(img.iter()) {
-            let pc = ext.rotation * p3.coords + ext.translation;
-            if pc[2].abs() <= 1e-18 {
-                continue;
+    let (sq_sum, count) = extrinsics
+        .par_iter()
+        .zip(object_points.par_iter())
+        .zip(image_points.par_iter())
+        .map(|((ext, obj), img)| {
+            let mut local_sq_sum = 0.0f64;
+            let mut local_count = 0usize;
+            for (p3, p2) in obj.iter().zip(img.iter()) {
+                let pc = ext.rotation * p3.coords + ext.translation;
+                if pc[2].abs() <= 1e-18 {
+                    continue;
+                }
+                let u = intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx;
+                let v = intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy;
+                let du = u - p2.x;
+                let dv = v - p2.y;
+                local_sq_sum += du * du + dv * dv;
+                local_count += 1;
             }
-            let u = intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx;
-            let v = intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy;
-            let du = u - p2.x;
-            let dv = v - p2.y;
-            sq_sum += du * du + dv * dv;
-            count += 1;
-        }
-    }
+            (local_sq_sum, local_count)
+        })
+        .reduce(|| (0.0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+
     if count == 0 {
         return Err(CalibError::InvalidParameters(
             "compute_rms_reprojection: no valid points".to_string(),

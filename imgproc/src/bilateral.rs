@@ -2,7 +2,7 @@
 //!
 //! Edge-preserving smoothing filter that uses both spatial and range (intensity) distance.
 
-use std::f32::consts::PI;
+use rayon::prelude::*;
 
 /// Bilateral filter parameters
 #[derive(Debug, Clone)]
@@ -57,54 +57,58 @@ pub fn bilateral_filter_depth(
 
     let mut output = vec![0.0f32; depth.len()];
 
-    for y in 0..height as usize {
-        for x in 0..width as usize {
-            let idx = y * width as usize + x;
-            let center_val = depth[idx];
+    output
+        .par_chunks_mut(width as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let y = y as i32;
+            for x in 0..width as usize {
+                let idx = y as usize * width as usize + x;
+                let center_val = depth[idx];
 
-            if center_val <= 0.0 || center_val.is_nan() {
-                output[idx] = center_val;
-                continue;
-            }
-
-            let mut sum = 0.0f32;
-            let mut weight_sum = 0.0f32;
-
-            for ky in -half_kernel..=half_kernel {
-                for kx in -half_kernel..=half_kernel {
-                    let nx = x as i32 + kx;
-                    let ny = y as i32 + ky;
-
-                    if nx < 0 || nx >= width as i32 || ny < 0 || ny >= height as i32 {
-                        continue;
-                    }
-
-                    let nidx = ny as usize * width as usize + nx as usize;
-                    let neighbor_val = depth[nidx];
-
-                    if neighbor_val <= 0.0 || neighbor_val.is_nan() {
-                        continue;
-                    }
-
-                    let spatial_dist = (kx * kx + ky * ky) as f32;
-                    let spatial_weight = (-spatial_dist / sigma_space_sq).exp();
-
-                    let range_dist = (center_val - neighbor_val).abs();
-                    let range_weight = (-range_dist * range_dist / sigma_range_sq).exp();
-
-                    let weight = spatial_weight * range_weight;
-                    sum += neighbor_val * weight;
-                    weight_sum += weight;
+                if center_val <= 0.0 || center_val.is_nan() {
+                    row[x] = center_val;
+                    continue;
                 }
-            }
 
-            output[idx] = if weight_sum > 0.0 {
-                sum / weight_sum
-            } else {
-                center_val
-            };
-        }
-    }
+                let mut sum = 0.0f32;
+                let mut weight_sum = 0.0f32;
+
+                for ky in -half_kernel..=half_kernel {
+                    for kx in -half_kernel..=half_kernel {
+                        let nx = x as i32 + kx;
+                        let ny = y + ky;
+
+                        if nx < 0 || nx >= width as i32 || ny < 0 || ny >= height as i32 {
+                            continue;
+                        }
+
+                        let nidx = ny as usize * width as usize + nx as usize;
+                        let neighbor_val = depth[nidx];
+
+                        if neighbor_val <= 0.0 || neighbor_val.is_nan() {
+                            continue;
+                        }
+
+                        let spatial_dist = (kx * kx + ky * ky) as f32;
+                        let spatial_weight = (-spatial_dist / sigma_space_sq).exp();
+
+                        let range_dist = (center_val - neighbor_val).abs();
+                        let range_weight = (-range_dist * range_dist / sigma_range_sq).exp();
+
+                        let weight = spatial_weight * range_weight;
+                        sum += neighbor_val * weight;
+                        weight_sum += weight;
+                    }
+                }
+
+                row[x] = if weight_sum > 0.0 {
+                    sum / weight_sum
+                } else {
+                    center_val
+                };
+            }
+        });
 
     output
 }
@@ -123,10 +127,13 @@ pub fn bilateral_filter_rgb(
 
     let mut output = vec![0u8; image.len()];
     let channels = 3;
+    let stride = width as usize * channels;
 
-    for y in 0..height as usize {
+    output.par_chunks_mut(stride).enumerate().for_each(|(y, row)| {
+        let y = y as i32;
         for x in 0..width as usize {
-            let idx = (y * width as usize + x) * channels;
+            let pixel_offset = x * channels;
+            let idx = (y as usize * width as usize + x) * channels;
 
             let center_r = image[idx] as f32;
             let center_g = image[idx + 1] as f32;
@@ -140,7 +147,7 @@ pub fn bilateral_filter_rgb(
             for ky in -half_kernel..=half_kernel {
                 for kx in -half_kernel..=half_kernel {
                     let nx = x as i32 + kx;
-                    let ny = y as i32 + ky;
+                    let ny = y + ky;
 
                     if nx < 0 || nx >= width as i32 || ny < 0 || ny >= height as i32 {
                         continue;
@@ -170,16 +177,16 @@ pub fn bilateral_filter_rgb(
             }
 
             if weight_sum > 0.0 {
-                output[idx] = (sum_r / weight_sum).round() as u8;
-                output[idx + 1] = (sum_g / weight_sum).round() as u8;
-                output[idx + 2] = (sum_b / weight_sum).round() as u8;
+                row[pixel_offset] = (sum_r / weight_sum).round() as u8;
+                row[pixel_offset + 1] = (sum_g / weight_sum).round() as u8;
+                row[pixel_offset + 2] = (sum_b / weight_sum).round() as u8;
             } else {
-                output[idx] = image[idx];
-                output[idx + 1] = image[idx + 1];
-                output[idx + 2] = image[idx + 2];
+                row[pixel_offset] = image[idx];
+                row[pixel_offset + 1] = image[idx + 1];
+                row[pixel_offset + 2] = image[idx + 2];
             }
         }
-    }
+    });
 
     output
 }
@@ -200,71 +207,75 @@ pub fn joint_bilateral_filter(
     let mut output = vec![0.0f32; depth.len()];
     let channels = 3;
 
-    for y in 0..height as usize {
-        for x in 0..width as usize {
-            let idx = y * width as usize + x;
-            let center_depth = depth[idx];
+    output
+        .par_chunks_mut(width as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let y = y as i32;
+            for x in 0..width as usize {
+                let idx = y as usize * width as usize + x;
+                let center_depth = depth[idx];
 
-            let gidx = idx * channels;
-            let center_gi = [
-                guidance[gidx] as f32,
-                guidance[gidx + 1] as f32,
-                guidance[gidx + 2] as f32,
-            ];
+                let gidx = idx * channels;
+                let center_gi = [
+                    guidance[gidx] as f32,
+                    guidance[gidx + 1] as f32,
+                    guidance[gidx + 2] as f32,
+                ];
 
-            if center_depth <= 0.0 || center_depth.is_nan() {
-                output[idx] = center_depth;
-                continue;
-            }
-
-            let mut sum = 0.0f32;
-            let mut weight_sum = 0.0f32;
-
-            for ky in -half_kernel..=half_kernel {
-                for kx in -half_kernel..=half_kernel {
-                    let nx = x as i32 + kx;
-                    let ny = y as i32 + ky;
-
-                    if nx < 0 || nx >= width as i32 || ny < 0 || ny >= height as i32 {
-                        continue;
-                    }
-
-                    let nidx = ny as usize * width as usize + nx as usize;
-                    let neighbor_depth = depth[nidx];
-
-                    if neighbor_depth <= 0.0 || neighbor_depth.is_nan() {
-                        continue;
-                    }
-
-                    let ngidx = nidx * channels;
-                    let neighbor_gi = [
-                        guidance[ngidx] as f32,
-                        guidance[ngidx + 1] as f32,
-                        guidance[ngidx + 2] as f32,
-                    ];
-
-                    let spatial_dist = (kx * kx + ky * ky) as f32;
-                    let spatial_weight = (-spatial_dist / sigma_space_sq).exp();
-
-                    let range_dist = ((center_gi[0] - neighbor_gi[0]).powi(2)
-                        + (center_gi[1] - neighbor_gi[1]).powi(2)
-                        + (center_gi[2] - neighbor_gi[2]).powi(2))
-                    .sqrt();
-                    let range_weight = (-range_dist * range_dist / sigma_range_sq).exp();
-
-                    let weight = spatial_weight * range_weight;
-                    sum += neighbor_depth * weight;
-                    weight_sum += weight;
+                if center_depth <= 0.0 || center_depth.is_nan() {
+                    row[x] = center_depth;
+                    continue;
                 }
-            }
 
-            output[idx] = if weight_sum > 0.0 {
-                sum / weight_sum
-            } else {
-                center_depth
-            };
-        }
-    }
+                let mut sum = 0.0f32;
+                let mut weight_sum = 0.0f32;
+
+                for ky in -half_kernel..=half_kernel {
+                    for kx in -half_kernel..=half_kernel {
+                        let nx = x as i32 + kx;
+                        let ny = y + ky;
+
+                        if nx < 0 || nx >= width as i32 || ny < 0 || ny >= height as i32 {
+                            continue;
+                        }
+
+                        let nidx = ny as usize * width as usize + nx as usize;
+                        let neighbor_depth = depth[nidx];
+
+                        if neighbor_depth <= 0.0 || neighbor_depth.is_nan() {
+                            continue;
+                        }
+
+                        let ngidx = nidx * channels;
+                        let neighbor_gi = [
+                            guidance[ngidx] as f32,
+                            guidance[ngidx + 1] as f32,
+                            guidance[ngidx + 2] as f32,
+                        ];
+
+                        let spatial_dist = (kx * kx + ky * ky) as f32;
+                        let spatial_weight = (-spatial_dist / sigma_space_sq).exp();
+
+                        let range_dist = ((center_gi[0] - neighbor_gi[0]).powi(2)
+                            + (center_gi[1] - neighbor_gi[1]).powi(2)
+                            + (center_gi[2] - neighbor_gi[2]).powi(2))
+                        .sqrt();
+                        let range_weight = (-range_dist * range_dist / sigma_range_sq).exp();
+
+                        let weight = spatial_weight * range_weight;
+                        sum += neighbor_depth * weight;
+                        weight_sum += weight;
+                    }
+                }
+
+                row[x] = if weight_sum > 0.0 {
+                    sum / weight_sum
+                } else {
+                    center_depth
+                };
+            }
+        });
 
     output
 }
