@@ -26,7 +26,43 @@ Building a **native Rust computer vision library** as a complete replacement for
 
 ---
 
-## Current Status: Phase 11 - Visualization & Python Ecosystem (February 16, 2026)
+## Current Status: Phase 12 - Python Bindings Expansion (February 16, 2026)
+
+### ✅ Completed: Python Bindings for calib3d and stereo
+
+**Location:** `python/src/lib.rs`
+
+- **New bindings added:**
+  - `PyCameraIntrinsics` - Camera intrinsic parameters (fx, fy, cx, cy, width, height)
+  - `PyCameraExtrinsics` - Camera extrinsics (rotation, translation)
+  - `PyDistortion` - Lens distortion coefficients (k1, k2, p1, p2, k3)
+  - `PyDisparityMap` - Stereo disparity map
+  - `PyStereoParams` - Stereo camera parameters
+  
+- **New functions:**
+  - `find_chessboard_corners()` - Detect chessboard pattern in images
+  - `project_points()` - Project 3D points to 2D image coordinates
+  - `solve_pnp_ransac()` - PnP pose estimation with RANSAC
+  - `py_stereo_block_match()` - Stereo block matching for disparity
+  - `compute_disparity_validity()` - Filter invalid disparity values
+
+**Example usage:**
+```python
+import cv_native
+import numpy as np
+
+# Camera intrinsics
+intrinsics = cv_native.PyCameraIntrinsics(500.0, 500.0, 320.0, 240.0, 640, 480)
+
+# Find chessboard corners
+corners = cv_native.find_chessboard_corners(image, (9, 6))
+
+# PnP pose estimation
+rvec, inliers = cv_native.solve_pnp_ransac(obj_pts, img_pts, intrinsics, 3.0, 100)
+
+# Stereo block matching
+disparity = cv_native.py_stereo_block_match(left_img, right_img, 5, 64)
+```
 
 ### ✅ Completed: cv-plot - Visualization Library
 

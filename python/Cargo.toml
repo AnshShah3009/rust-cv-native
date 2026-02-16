@@ -18,6 +18,8 @@ cv-runtime = { path = "../runtime" }
 cv-slam = { path = "../slam" }
 cv-scientific = { path = "../scientific" }
 cv-registration = { path = "../registration" }
+cv-calib3d = { path = "../calib3d" }
+cv-stereo = { path = "../stereo" }
 nalgebra = { workspace = true }
 image = { workspace = true }
 thiserror = { workspace = true }

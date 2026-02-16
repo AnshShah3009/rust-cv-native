@@ -1346,6 +1346,7 @@ name = "cv-python"
 version = "0.1.0"
 dependencies = [
  "cv-3d",
+ "cv-calib3d",
  "cv-core",
  "cv-features",
  "cv-imgproc",
@@ -1353,6 +1354,7 @@ dependencies = [
  "cv-runtime",
  "cv-scientific",
  "cv-slam",
+ "cv-stereo",
  "geo 0.28.0",
  "image 0.25.9",
  "nalgebra",
