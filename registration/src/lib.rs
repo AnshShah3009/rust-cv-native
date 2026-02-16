@@ -23,7 +23,7 @@
 //!
 //! ```rust
 //! use cv_registration::{registration_icp_point_to_plane, ICPResult};
-//! use cv_core::{PointCloud, point_cloud::PointCloud};
+//! use cv_core::PointCloud;
 //! use nalgebra::{Matrix4, Point3};
 //!
 //! // Create source and target point clouds
