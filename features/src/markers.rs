@@ -233,10 +233,6 @@ fn detect_aruco_markers_cpu(
     border_bits: usize,
 ) -> Result<Vec<ArucoDetection>> {
     use rayon::prelude::*;
-    use cv_core::init_global_thread_pool;
-
-    // Initialize global thread pool (respects RUSTCV_CPU_THREADS environment variable)
-    let _ = init_global_thread_pool(None);
 
     // Process all candidates in parallel
     let detections = candidates
@@ -381,10 +377,6 @@ fn detect_apriltags_cpu(
     border_bits: usize,
 ) -> Result<Vec<AprilTagDetection>> {
     use rayon::prelude::*;
-    use cv_core::init_global_thread_pool;
-
-    // Initialize global thread pool (respects RUSTCV_CPU_THREADS environment variable)
-    let _ = init_global_thread_pool(None);
 
     // Process all candidates in parallel
     let detections = candidates
