@@ -99,3 +99,47 @@ fn stress_test_heavy_load_mixing() {
     
     assert_eq!(total, heavy_count + light_count);
 }
+
+#[test]
+fn stress_test_concurrent_par_iter() {
+    // This test verifies that par_iter correctly utilizes the allocated
+    // ResourceGroup threads and does not deadlock or panic.
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use cv_runtime::scheduler;
+    use cv_runtime::GroupPolicy;
+
+    let s = scheduler();
+    
+    // Create an isolated group with 4 threads
+    let iso_policy = GroupPolicy {
+        allow_work_stealing: false,
+        allow_dynamic_scaling: true,
+    };
+    
+    let group_name = "par-iter-test-group";
+    // Clean up if it exists from previous run (best effort)
+    let _ = s.remove_group(group_name);
+    
+    // We use .ok() because scheduler singleton persists across tests
+    if let Ok(group) = s.create_group(group_name, 4, None, iso_policy) {
+        let counter = Arc::new(AtomicUsize::new(0));
+        
+        // Submit a task that uses par_iter inside the group
+        let counter_clone = counter.clone();
+        
+        // Use install to ensure we are in the pool's context
+        group.install(|| {
+            // This should run on the 4 threads of "par-iter-test-group"
+            (0..1000).into_par_iter().for_each(|_| {
+                counter_clone.fetch_add(1, Ordering::Relaxed);
+            });
+        });
+        
+        assert_eq!(counter.load(Ordering::Relaxed), 1000);
+        
+        // Cleanup
+        let _ = s.remove_group(group_name);
+    }
+}

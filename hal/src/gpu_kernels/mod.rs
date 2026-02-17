@@ -4,7 +4,7 @@
 //! All shaders are written in WGSL (WebGPU Shading Language).
 
 use wgpu::{
-    CommandEncoder, Device, Queue,
+    CommandEncoder, Device, Queue
 };
 use nalgebra::Vector3;
 use std::sync::Arc;
@@ -287,7 +287,7 @@ pub mod buffer_utils {
             size as u64,
         );
 
-        queue.submit(Some(encoder.finish()));
+        let index = queue.submit(std::iter::once(encoder.finish()));
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         
@@ -296,7 +296,7 @@ pub mod buffer_utils {
             tx.send(res).ok();
         });
 
-        device.poll(wgpu::Maintain::Wait);
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
 
         rx.await
             .map_err(|_| crate::Error::DeviceError("Readback channel closed".to_string()))?

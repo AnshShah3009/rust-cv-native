@@ -12,5 +12,5 @@ cv-core = { path = "../core" }
 core_affinity = { workspace = true }
 tokio = { workspace = true, features = ["sync", "macros", "rt-multi-thread"] }
 num_cpus = "1.16"
-wgpu = { version = "24.0.0" }
+wgpu = { workspace = true }
 bytemuck = { workspace = true }

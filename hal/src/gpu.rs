@@ -28,7 +28,7 @@ impl GpuContext {
             power_preference: PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
-        }).await.ok_or_else(|| crate::Error::InitError("Failed to find a suitable GPU adapter".to_string()))?;
+        }).await.map_err(|e| crate::Error::InitError(format!("Failed to find a suitable GPU adapter: {}", e)))?;
 
         // Request device
         let (device, queue) = adapter.request_device(
@@ -36,9 +36,10 @@ impl GpuContext {
                 label: Some("CV-HAL Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::downlevel_defaults(),
-                ..Default::default()
+                memory_hints: wgpu::MemoryHints::default(),
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+                trace: wgpu::Trace::default(),
             },
-            None,
         ).await.map_err(|e| crate::Error::InitError(format!("Failed to create GPU device: {}", e)))?;
 
         Ok(Self {
