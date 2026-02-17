@@ -7,6 +7,13 @@ Cargo.lock
 *.swo
 *~
 
+# Archives and large binaries
+*.zip
+*.tar.gz
+*.7z
+*.iso
+*.bin
+
 # Rerun
 *.rrd
 
