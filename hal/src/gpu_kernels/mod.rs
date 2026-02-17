@@ -41,6 +41,9 @@ impl GpuCompute {
     }
 }
 
+pub mod convolve;
+pub mod threshold;
+
 /// Shader compilation utilities
 pub mod shaders {
     use std::collections::HashMap;

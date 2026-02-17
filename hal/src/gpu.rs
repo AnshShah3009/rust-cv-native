@@ -1,6 +1,11 @@
 use wgpu::{Device, Queue, Instance, RequestAdapterOptions, PowerPreference, Backends};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use futures::executor::block_on;
+use crate::context::{ComputeContext, BorderMode, ThresholdType};
+use crate::{DeviceId, BackendType};
+use cv_core::{Tensor, storage::Storage};
+
+static GLOBAL_CONTEXT: OnceLock<Option<GpuContext>> = OnceLock::new();
 
 /// Shared GPU Context containing Device and Queue.
 #[derive(Debug)]
@@ -9,7 +14,94 @@ pub struct GpuContext {
     pub queue: Arc<Queue>,
 }
 
+impl ComputeContext for GpuContext {
+    fn backend_type(&self) -> BackendType {
+        BackendType::WebGPU
+    }
+
+    fn device_id(&self) -> DeviceId {
+        DeviceId(0)
+    }
+
+    fn wait_idle(&self) -> crate::Result<()> {
+        let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        Ok(())
+    }
+
+    fn convolve_2d<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+        kernel: &Tensor<f32, S>,
+        border_mode: BorderMode,
+    ) -> crate::Result<Tensor<f32, S>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            // SAFETY: TypeId check ensures S is GpuStorage<f32>, so memory layout is identical
+            let input_ptr = input as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let kernel_ptr = kernel as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            
+            let input_gpu = unsafe { &*input_ptr };
+            let kernel_gpu = unsafe { &*kernel_ptr };
+
+            let result_gpu = crate::gpu_kernels::convolve::convolve_2d(self, input_gpu, kernel_gpu, border_mode)?;
+
+            // Move result_gpu into Tensor<f32, S>
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<f32, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into()))
+        }
+    }
+
+    fn dispatch<S: Storage<u8> + 'static>(
+        &self,
+        _name: &str,
+        _buffers: &[&Tensor<u8, S>],
+        _uniforms: &[u8],
+        _workgroups: (u32, u32, u32),
+    ) -> crate::Result<()> {
+        // TODO: Implement generic dispatch
+        Err(crate::Error::NotSupported("Generic GPU dispatch pending implementation".into()))
+    }
+
+    fn threshold<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        thresh: u8,
+        max_value: u8,
+        typ: ThresholdType,
+    ) -> crate::Result<Tensor<u8, S>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
+            // SAFETY: TypeId check ensures S is GpuStorage<u8>, so memory layout is identical
+            let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            let result_gpu = crate::gpu_kernels::threshold::threshold(self, input_gpu, thresh, max_value, typ)?;
+
+            // Move result_gpu into Tensor<u8, S>
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<u8, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into()))
+        }
+    }
+}
+
 impl GpuContext {
+    /// Get the global GPU context, initializing it if necessary.
+    pub fn global() -> Option<&'static GpuContext> {
+        GLOBAL_CONTEXT.get_or_init(|| {
+            Self::new().ok()
+        }).as_ref()
+    }
+
     /// Initialize a new GPU context (synchronous wrapper).
     pub fn new() -> crate::Result<Self> {
         block_on(Self::new_async())

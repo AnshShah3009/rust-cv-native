@@ -1,5 +1,10 @@
 pub mod backend;
+pub mod batch;
+pub mod compute;
+pub mod context;
 pub mod cpu;
+pub mod storage;
+pub mod tensor_ext;
 pub mod device;
 pub mod gpu;
 pub mod gpu_utils;
@@ -41,6 +46,9 @@ pub enum Error {
 
     #[error("Initialization error: {0}")]
     InitError(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
 impl Error {

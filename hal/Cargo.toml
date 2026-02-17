@@ -9,6 +9,7 @@ description = "Hardware Abstraction Layer for multi-backend acceleration"
 cv-core = { path = "../core" }
 rayon = { workspace = true }
 nalgebra = { workspace = true }
+wide = { workspace = true }
 
 thiserror = "2.0"
 wgpu = { workspace = true }
