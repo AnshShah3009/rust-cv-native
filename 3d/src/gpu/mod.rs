@@ -702,7 +702,7 @@ pub mod point_cloud {
 
     // Helper functions
     fn compute_pca_normal(
-        center: &Point3<f32>,
+        _center: &Point3<f32>,
         neighbors: &[(f32, usize)],
         points: &[Point3<f32>],
     ) -> Vector3<f32> {
@@ -733,7 +733,7 @@ pub mod point_cloud {
     }
 
     fn compute_pca_normal_regularized(
-        center: &Point3<f32>,
+        _center: &Point3<f32>,
         neighbors: &[(f32, usize)],
         points: &[Point3<f32>],
         epsilon: f32,
