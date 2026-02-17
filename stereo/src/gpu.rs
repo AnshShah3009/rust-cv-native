@@ -4,13 +4,14 @@
 
 use crate::{DisparityMap, StereoError, Result};
 use image::GrayImage;
-use std::env;
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
+use cv_hal::gpu::GpuContext;
+use cv_hal::gpu_utils::{read_gpu_max_bytes_from_env, fits_in_budget, estimate_image_buffer_size};
 
 /// GPU-accelerated stereo matcher
 pub struct GpuStereoMatcher {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    ctx: Arc<GpuContext>,
     stereo_pipeline: wgpu::ComputePipeline,
     params_bind_group_layout: wgpu::BindGroupLayout,
     algorithm: GpuStereoAlgorithm,
@@ -25,39 +26,18 @@ pub enum GpuStereoAlgorithm {
 
 impl GpuStereoMatcher {
     pub async fn new(algorithm: GpuStereoAlgorithm) -> Result<Self> {
-        // Initialize wgpu
-        let instance = wgpu::Instance::default();
-        let policy = read_gpu_adapter_policy_from_env()?;
-        let adapter = select_adapter_by_policy(&instance, policy).await;
-        let adapter = adapter.ok_or_else(|| {
-            let detail = match policy {
-                GpuAdapterPolicy::NvidiaOnly => " (policy: nvidia_only)",
-                GpuAdapterPolicy::DiscreteOnly => " (policy: discrete_only)",
-                GpuAdapterPolicy::PreferDiscrete => " (policy: prefer_discrete)",
-                GpuAdapterPolicy::Auto => " (policy: auto)",
-            };
-            StereoError::InvalidParameters(format!("No suitable GPU adapter found{detail}"))
+        let ctx = GpuContext::global().ok_or_else(|| {
+            StereoError::InvalidParameters("GPU not available or not initialized".to_string())
         })?;
-
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("Stereo GPU Device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::default(),
-                    experimental_features: wgpu::ExperimentalFeatures::default(),
-                    trace: wgpu::Trace::default(),
-                },
-            )
-            .await
-            .map_err(|e| StereoError::InvalidParameters(
-                format!("Failed to create GPU device: {}", e)
-            ))?;
+        
+        let ctx = Arc::new(GpuContext {
+            device: ctx.device.clone(),
+            queue: ctx.queue.clone(),
+        });
 
         // Create bind group layout for stereo parameters
         let params_bind_group_layout = 
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            ctx.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Stereo Params Bind Group Layout"),
                 entries: &[
                     // Left image
@@ -108,7 +88,7 @@ impl GpuStereoMatcher {
             });
 
         // Create shader module
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let shader = ctx.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Stereo Shader"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
                 include_str!("shaders/stereo.wgsl")
@@ -116,13 +96,13 @@ impl GpuStereoMatcher {
         });
 
         // Create compute pipeline
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = ctx.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Stereo Pipeline Layout"),
             bind_group_layouts: &[&params_bind_group_layout],
             immediate_size: 0,
         });
 
-        let stereo_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let stereo_pipeline = ctx.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Stereo Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
@@ -132,8 +112,7 @@ impl GpuStereoMatcher {
         });
 
         Ok(Self {
-            device,
-            queue,
+            ctx,
             stereo_pipeline,
             params_bind_group_layout,
             algorithm,
@@ -153,7 +132,9 @@ impl GpuStereoMatcher {
             ));
         }
 
-        if let Some(max_bytes) = read_gpu_max_bytes_from_env()? {
+        let max_bytes = read_gpu_max_bytes_from_env().unwrap_or(None);
+        
+        if let Some(max_bytes) = max_bytes {
             let estimated = estimate_gpu_bytes(left.width(), left.height());
             if estimated > max_bytes {
                 return self.compute_disparity_batched(
@@ -191,7 +172,7 @@ impl GpuStereoMatcher {
         let right_texture = self.create_input_texture(right, texture_size);
 
         // Create output texture for disparity
-        let disparity_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+        let disparity_texture = self.ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Disparity Output"),
             size: texture_size,
             mip_level_count: 1,
@@ -211,14 +192,14 @@ impl GpuStereoMatcher {
             block_size: self.block_size(),
         };
 
-        let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let params_buffer = self.ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Stereo Parameters"),
             contents: bytemuck::bytes_of(&params),
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
         // Create bind group
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = self.ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Stereo Bind Group"),
             layout: &self.params_bind_group_layout,
             entries: &[
@@ -248,7 +229,7 @@ impl GpuStereoMatcher {
         });
 
         // Create command encoder and compute pass
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut encoder = self.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Stereo Encoder"),
         });
 
@@ -270,7 +251,7 @@ impl GpuStereoMatcher {
 
         // Copy result to buffer
         let output_buffer_size = (width * height * 4) as wgpu::BufferAddress;
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+        let output_buffer = self.ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Output Buffer"),
             size: output_buffer_size,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
@@ -295,12 +276,12 @@ impl GpuStereoMatcher {
             texture_size,
         );
 
-        let index = self.queue.submit(std::iter::once(encoder.finish()));
+        let index = self.ctx.queue.submit(std::iter::once(encoder.finish()));
 
         // Read back results
         let buffer_slice = output_buffer.slice(..);
         buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
+        self.ctx.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
 
         let data = buffer_slice.get_mapped_range();
         let disparity_data: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
@@ -385,7 +366,7 @@ impl GpuStereoMatcher {
         image: &GrayImage,
         size: wgpu::Extent3d,
     ) -> wgpu::Texture {
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+        let texture = self.ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Input Image"),
             size,
             mip_level_count: 1,
@@ -398,7 +379,7 @@ impl GpuStereoMatcher {
         });
 
         // Upload image data
-        self.queue.write_texture(
+        self.ctx.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: 0,
@@ -425,153 +406,11 @@ impl GpuStereoMatcher {
     }
 }
 
-#[derive(Clone, Copy)]
-enum GpuAdapterPolicy {
-    Auto,
-    PreferDiscrete,
-    DiscreteOnly,
-    NvidiaOnly,
-}
-
-async fn select_adapter_by_policy(
-    instance: &wgpu::Instance,
-    policy: GpuAdapterPolicy,
-) -> Option<wgpu::Adapter> {
-    const NVIDIA_VENDOR_ID: u32 = 0x10DE;
-    let mut best: Option<(i32, wgpu::Adapter)> = None;
-    for adapter in instance.enumerate_adapters(wgpu::Backends::all()).await {
-        let info = adapter.get_info();
-        let is_nvidia_discrete =
-            info.vendor == NVIDIA_VENDOR_ID && info.device_type == wgpu::DeviceType::DiscreteGpu;
-        let score = match policy {
-            GpuAdapterPolicy::NvidiaOnly => {
-                if is_nvidia_discrete {
-                    100
-                } else {
-                    continue;
-                }
-            }
-            GpuAdapterPolicy::DiscreteOnly => {
-                if is_nvidia_discrete {
-                    100
-                } else if info.device_type == wgpu::DeviceType::DiscreteGpu {
-                    90
-                } else {
-                    continue;
-                }
-            }
-            GpuAdapterPolicy::PreferDiscrete => {
-                if is_nvidia_discrete {
-                    100
-                } else if info.device_type == wgpu::DeviceType::DiscreteGpu {
-                    90
-                } else if info.device_type == wgpu::DeviceType::IntegratedGpu {
-                    10
-                } else {
-                    1
-                }
-            }
-            GpuAdapterPolicy::Auto => {
-                if is_nvidia_discrete {
-                    100
-                } else if info.device_type == wgpu::DeviceType::DiscreteGpu {
-                    80
-                } else if info.device_type == wgpu::DeviceType::IntegratedGpu {
-                    20
-                } else {
-                    1
-                }
-            }
-        };
-
-        if best.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
-            best = Some((score, adapter));
-        }
-    }
-    best.map(|(_, adapter)| adapter)
-}
-
-fn read_gpu_adapter_policy_from_env() -> Result<GpuAdapterPolicy> {
-    let raw = match env::var("RUSTCV_GPU_ADAPTER") {
-        Ok(v) => v,
-        Err(env::VarError::NotPresent) => return Ok(GpuAdapterPolicy::PreferDiscrete),
-        Err(e) => {
-            return Err(StereoError::InvalidParameters(format!(
-                "Failed to read RUSTCV_GPU_ADAPTER: {e}"
-            )))
-        }
-    };
-    let normalized = raw.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "auto" => Ok(GpuAdapterPolicy::Auto),
-        "prefer_discrete" | "discrete_preferred" => Ok(GpuAdapterPolicy::PreferDiscrete),
-        "discrete_only" => Ok(GpuAdapterPolicy::DiscreteOnly),
-        "nvidia_only" => Ok(GpuAdapterPolicy::NvidiaOnly),
-        _ => Err(StereoError::InvalidParameters(format!(
-            "RUSTCV_GPU_ADAPTER must be one of: auto, prefer_discrete, discrete_only, nvidia_only; got '{raw}'"
-        ))),
-    }
-}
-
 fn estimate_gpu_bytes(width: u32, height: u32) -> usize {
     // Approx: left r8 + right r8 + disparity r32 + readback buffer r32.
     // Add fixed overhead so guard errs on the safe side.
     let pixels = width as usize * height as usize;
     pixels * 10 + 4096
-}
-
-fn read_gpu_max_bytes_from_env() -> Result<Option<usize>> {
-    let raw = match env::var("RUSTCV_GPU_MAX_BYTES") {
-        Ok(v) => v,
-        Err(env::VarError::NotPresent) => return Ok(None),
-        Err(e) => {
-            return Err(StereoError::InvalidParameters(format!(
-                "Failed to read RUSTCV_GPU_MAX_BYTES: {e}"
-            )))
-        }
-    };
-
-    let parsed = parse_bytes_with_suffix(&raw)?;
-    if parsed == 0 {
-        return Err(StereoError::InvalidParameters(
-            "RUSTCV_GPU_MAX_BYTES must be >= 1".to_string(),
-        ));
-    }
-
-    Ok(Some(parsed))
-}
-
-fn parse_bytes_with_suffix(raw: &str) -> Result<usize> {
-    let s = raw.trim();
-    if s.is_empty() {
-        return Err(StereoError::InvalidParameters(
-            "RUSTCV_GPU_MAX_BYTES cannot be empty".to_string(),
-        ));
-    }
-
-    let upper = s.to_ascii_uppercase().replace('_', "");
-    let (number_part, multiplier): (&str, usize) = if let Some(v) = upper.strip_suffix("KB") {
-        (v, 1024)
-    } else if let Some(v) = upper.strip_suffix("MB") {
-        (v, 1024 * 1024)
-    } else if let Some(v) = upper.strip_suffix("GB") {
-        (v, 1024 * 1024 * 1024)
-    } else if let Some(v) = upper.strip_suffix('B') {
-        (v, 1)
-    } else {
-        (upper.as_str(), 1)
-    };
-
-    let base: usize = number_part.parse().map_err(|_| {
-        StereoError::InvalidParameters(format!(
-            "RUSTCV_GPU_MAX_BYTES must be like '134217728', '512MB', or '2GB'; got '{raw}'"
-        ))
-    })?;
-    base.checked_mul(multiplier).ok_or_else(|| {
-        StereoError::InvalidParameters(format!(
-            "RUSTCV_GPU_MAX_BYTES value '{raw}' is too large"
-        ))
-    })
 }
 
 fn extract_rows(image: &GrayImage, start_row: u32, end_row: u32) -> Result<GrayImage> {
@@ -603,17 +442,12 @@ struct StereoParamsGPU {
 
 /// Check if GPU acceleration is available
 pub async fn is_gpu_available() -> bool {
-    let instance = wgpu::Instance::default();
-    let policy = read_gpu_adapter_policy_from_env().unwrap_or(GpuAdapterPolicy::PreferDiscrete);
-    select_adapter_by_policy(&instance, policy).await.is_some()
+    GpuContext::is_available_async().await
 }
 
 /// Enumerate adapters visible to wgpu on this machine.
 pub async fn enumerate_adapters() -> Vec<wgpu::AdapterInfo> {
-    let instance = wgpu::Instance::default();
-    instance
-        .enumerate_adapters(wgpu::Backends::all())
-        .await
+    GpuContext::enumerate_adapters().await
         .into_iter()
         .map(|adapter| adapter.get_info())
         .collect()
@@ -664,15 +498,6 @@ mod tests {
             .iter()
             .any(|a| a.device_type == wgpu::DeviceType::IntegratedGpu);
         println!("Integrated GPU visible: {}", integrated);
-    }
-
-    #[test]
-    fn parse_bytes_with_suffix_variants() {
-        assert_eq!(parse_bytes_with_suffix("1024").unwrap(), 1024);
-        assert_eq!(parse_bytes_with_suffix("1KB").unwrap(), 1024);
-        assert_eq!(parse_bytes_with_suffix("64mb").unwrap(), 64 * 1024 * 1024);
-        assert_eq!(parse_bytes_with_suffix("2_GB").unwrap(), 2 * 1024 * 1024 * 1024);
-        assert!(parse_bytes_with_suffix("abc").is_err());
     }
 
     #[tokio::test]

@@ -32,6 +32,8 @@ pub fn convert_gray_to_rgb_in_pool(gray: &GrayImage, pool: Option<&ThreadPool>) 
     }
 }
 
+use crate::simd::rgb_to_gray_simd;
+
 pub fn convert_rgb_to_gray(rgb: &RgbImage) -> GrayImage {
     convert_rgb_to_gray_in_pool(rgb, None)
 }
@@ -43,14 +45,12 @@ pub fn convert_rgb_to_gray_in_pool(rgb: &RgbImage, pool: Option<&ThreadPool>) ->
         let mut gray_data = vec![0u8; count];
         let rgb_data = rgb.as_raw();
 
+        // Process in parallel chunks, but use SIMD within each chunk
         gray_data
-            .par_iter_mut()
-            .zip(rgb_data.par_chunks(3))
-            .for_each(|(g, rgb_pixel)| {
-                // Using standard luminance weights: 0.299 R + 0.587 G + 0.114 B
-                *g = (0.299 * rgb_pixel[0] as f32
-                    + 0.587 * rgb_pixel[1] as f32
-                    + 0.114 * rgb_pixel[2] as f32) as u8;
+            .par_chunks_mut(4096) // Larger chunk size for SIMD efficiency
+            .zip(rgb_data.par_chunks(4096 * 3))
+            .for_each(|(g_chunk, rgb_chunk)| {
+                rgb_to_gray_simd(rgb_chunk, g_chunk);
             });
 
         GrayImage::from_raw(w, h, gray_data).unwrap()

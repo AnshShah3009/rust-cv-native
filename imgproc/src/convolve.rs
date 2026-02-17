@@ -2,6 +2,12 @@ use image::GrayImage;
 use rayon::prelude::*;
 use rayon::ThreadPool;
 use wide::*;
+use crate::simd::convolve_row_1d;
+use cv_core::{Tensor, TensorShape};
+use cv_hal::compute::{get_device, ComputeDevice};
+use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
+use cv_hal::context::BorderMode as HalBorderMode;
+use cv_hal::gpu::GpuContext;
 
 #[derive(Debug, Clone)]
 pub struct Kernel {
@@ -188,6 +194,85 @@ pub fn convolve_with_border_into(
     convolve_with_border_into_in_pool(image, output, kernel, border, None)
 }
 
+pub fn gaussian_blur_with_border(image: &GrayImage, sigma: f32, border: BorderMode) -> GrayImage {
+    let device = get_device();
+    if let ComputeDevice::Gpu(gpu) = device {
+        if let Ok(result) = gaussian_blur_gpu(gpu, image, sigma, border) {
+            return result;
+        }
+    }
+    gaussian_blur_with_border_in_pool(image, sigma, border, None)
+}
+
+fn gaussian_blur_gpu(
+    gpu: &GpuContext,
+    image: &GrayImage,
+    sigma: f32,
+    border: BorderMode,
+) -> cv_hal::Result<GrayImage> {
+    use cv_hal::context::ComputeContext;
+    
+    let size = ((sigma * 6.0).ceil() as usize) | 1;
+    let kernel = gaussian_kernel(sigma, size);
+    
+    let input_tensor = Tensor::from_image_gray(image.as_raw(), image.width() as usize, image.height() as usize);
+    let input_gpu = input_tensor.to_gpu()?;
+    
+    let kernel_tensor = Tensor::from_vec(
+        kernel.data,
+        TensorShape::new(1, kernel.height, kernel.width),
+    );
+    let kernel_gpu = kernel_tensor.to_gpu()?;
+    
+    let hal_border = match border {
+        BorderMode::Constant(v) => HalBorderMode::Constant(v as f32),
+        BorderMode::Replicate => HalBorderMode::Replicate,
+        BorderMode::Reflect => HalBorderMode::Reflect,
+        BorderMode::Wrap => HalBorderMode::Wrap,
+        _ => HalBorderMode::Replicate, // Fallback for Reflect101
+    };
+    
+    let output_gpu = gpu.convolve_2d(&input_gpu, &kernel_gpu, hal_border)?;
+    let output_cpu = output_gpu.to_cpu()?;
+    
+    let data = output_cpu.to_image_gray();
+    GrayImage::from_raw(image.width(), image.height(), data)
+        .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
+}
+
+fn convolve_gpu(
+    gpu: &GpuContext,
+    image: &GrayImage,
+    kernel: &Kernel,
+    border: BorderMode,
+) -> cv_hal::Result<GrayImage> {
+    use cv_hal::context::ComputeContext;
+    
+    let input_tensor = Tensor::from_image_gray(image.as_raw(), image.width() as usize, image.height() as usize);
+    let input_gpu = input_tensor.to_gpu()?;
+    
+    let kernel_tensor = Tensor::from_vec(
+        kernel.data.clone(),
+        TensorShape::new(1, kernel.height, kernel.width),
+    );
+    let kernel_gpu = kernel_tensor.to_gpu()?;
+    
+    let hal_border = match border {
+        BorderMode::Constant(v) => HalBorderMode::Constant(v as f32),
+        BorderMode::Replicate => HalBorderMode::Replicate,
+        BorderMode::Reflect => HalBorderMode::Reflect,
+        BorderMode::Reflect101 => HalBorderMode::Reflect, // Approximation
+        BorderMode::Wrap => HalBorderMode::Wrap,
+    };
+    
+    let output_gpu = gpu.convolve_2d(&input_gpu, &kernel_gpu, hal_border)?;
+    let output_cpu = output_gpu.to_cpu()?;
+    
+    let data = output_cpu.to_image_gray();
+    GrayImage::from_raw(image.width(), image.height(), data)
+        .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
+}
+
 pub fn convolve_with_border_into_in_pool(
     image: &GrayImage,
     output: &mut GrayImage,
@@ -195,6 +280,14 @@ pub fn convolve_with_border_into_in_pool(
     border: BorderMode,
     pool: Option<&ThreadPool>,
 ) {
+    let device = get_device();
+    if let ComputeDevice::Gpu(gpu) = device {
+        if let Ok(result) = convolve_gpu(gpu, image, kernel, border) {
+            output.copy_from_slice(result.as_raw());
+            return;
+        }
+    }
+
     let (kx_center, ky_center) = kernel.center();
     if output.width() != image.width() || output.height() != image.height() {
         *output = GrayImage::new(image.width(), image.height());
@@ -274,125 +367,98 @@ pub fn separable_convolve_into_in_pool(
 
     let width = image.width() as usize;
     let height = image.height() as usize;
-    let radius = (kernel_1d.len() / 2) as isize;
+    let radius = kernel_1d.len() / 2;
+    let k_len = kernel_1d.len();
     let src = image.as_raw();
 
-    // Use BufferPool for temporary storage
+    // Horizontal Pass
     let buffer_pool = cv_core::BufferPool::global();
-    // 4 bytes per f32
-    let mut tmp_vec = buffer_pool.get(width * height * 4); 
-    
-    // Convert pointer to usize to allow sharing across threads safely (as simple integer)
+    let mut tmp_vec = buffer_pool.get(width * height * 4); // f32
     let tmp_addr = tmp_vec.as_mut_ptr() as usize;
 
-    let mut run = || {
-        // Horizontal Pass (SIMD optimized + Parallel)
+    let run_horiz = || {
         let tmp_slice = unsafe { std::slice::from_raw_parts_mut(tmp_addr as *mut f32, width * height) };
         
-        tmp_slice.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
-            let row_offset = y * width; 
+        tmp_slice.par_chunks_mut(width).enumerate().for_each(|(y, row_out)| {
+            let row_offset = y * width;
             
-            for x in (0..width).step_by(8) {
-                let mut sum_v = f32x8::ZERO;
-                
-                if x + 8 <= width {
-                    for (k, &w) in kernel_1d.iter().enumerate() {
-                        let w_v = f32x8::splat(w);
-                        let mut px_v = [0.0f32; 8];
-                        for i in 0..8 {
-                            let sx = (x + i) as isize + k as isize - radius;
-                            px_v[i] = match map_coord(sx, width, border) {
-                                Some(ix) => src[row_offset + ix] as f32,
-                                None => match border {
-                                    BorderMode::Constant(v) => v as f32,
-                                    _ => 0.0,
-                                },
-                            };
-                        }
-                        sum_v += f32x8::from(px_v) * w_v;
-                    }
-                    let results: [f32; 8] = sum_v.into();
-                    row[x..x + 8].copy_from_slice(&results);
-                } else {
-                    // Scalar fallback
-                    for cur_x in x..width {
-                        let mut sum = 0.0f32;
-                        for (k, &w) in kernel_1d.iter().enumerate() {
-                            let sx = cur_x as isize + k as isize - radius;
-                            let px = match map_coord(sx, width, border) {
-                                Some(ix) => src[row_offset + ix] as f32,
-                                None => match border {
-                                    BorderMode::Constant(v) => v as f32,
-                                    _ => 0.0,
-                                },
-                            };
-                            sum += px * w;
-                        }
-                        row[cur_x] = sum;
-                    }
-                }
+            let padded_width = width + 2 * radius;
+            let mut padded_row = vec![0.0f32; padded_width];
+            
+            for i in 0..padded_width {
+                let src_x = (i as isize) - (radius as isize);
+                padded_row[i] = match map_coord(src_x, width, border) {
+                    Some(ix) => src[row_offset + ix] as f32,
+                    None => match border {
+                        BorderMode::Constant(v) => v as f32,
+                        _ => 0.0,
+                    },
+                };
             }
+
+            convolve_row_1d(&padded_row, row_out, kernel_1d, radius);
         });
+    };
 
-        // Vertical Pass (SIMD optimized + Parallel)
-        out.as_mut().par_chunks_mut(width).enumerate().for_each(|(y, out_row)| {
-            let tmp_read = unsafe { std::slice::from_raw_parts(tmp_addr as *const f32, width * height) };
-            
+    let mut run_vert = || {
+        let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_addr as *const f32, width * height) };
+        
+        out.as_mut().par_chunks_mut(width).enumerate().for_each(|(y, row_out)| {
             for x in (0..width).step_by(8) {
-                let mut sum_v = f32x8::ZERO;
-
-                if x + 8 <= width {
-                    for (k, &w) in kernel_1d.iter().enumerate() {
-                        let w_v = f32x8::splat(w);
-                        let mut py_v = [0.0f32; 8];
-                        let sy_base = y as isize + k as isize - radius;
+                 if x + 8 <= width {
+                    let mut sum_v = f32x8::ZERO;
+                    
+                    for k in 0..k_len {
+                        let w_v = f32x8::splat(kernel_1d[k]);
+                        let sy_base = (y as isize) + (k as isize) - (radius as isize);
                         let target_y = map_coord(sy_base, height, border);
-
+                        
+                        let mut vals = [0.0f32; 8];
+                        
                         if let Some(iy) = target_y {
-                            let src_offset = iy * width + x;
-                            py_v.copy_from_slice(&tmp_read[src_offset..src_offset + 8]);
+                            let idx = iy * width + x;
+                            vals.copy_from_slice(&tmp_slice[idx..idx+8]);
                         } else if let BorderMode::Constant(v) = border {
-                            py_v = [v as f32; 8];
+                             vals = [v as f32; 8];
                         }
-
-                        sum_v += f32x8::from(py_v) * w_v;
+                        
+                        sum_v += f32x8::from(vals) * w_v;
                     }
-                    let results: [f32; 8] = sum_v.into();
+                    
+                    let res: [f32; 8] = sum_v.into();
                     for i in 0..8 {
-                        out_row[x + i] = results[i].clamp(0.0, 255.0) as u8;
+                        row_out[x+i] = res[i].clamp(0.0, 255.0) as u8;
                     }
-                } else {
-                    for cur_x in x..width {
-                        let mut sum = 0.0f32;
-                        for (k, &w) in kernel_1d.iter().enumerate() {
-                            let sy = y as isize + k as isize - radius;
-                            let py = match map_coord(sy, height, border) {
-                                Some(iy) => tmp_read[iy * width + cur_x],
+                 } else {
+                     for cx in x..width {
+                         let mut sum = 0.0;
+                         for k in 0..k_len {
+                            let sy = (y as isize) + (k as isize) - (radius as isize);
+                            let val = match map_coord(sy, height, border) {
+                                Some(iy) => tmp_slice[iy * width + cx],
                                 None => match border {
                                     BorderMode::Constant(v) => v as f32,
                                     _ => 0.0,
                                 },
                             };
-                            sum += py * w;
-                        }
-                        out_row[cur_x] = sum.clamp(0.0, 255.0) as u8;
-                    }
-                }
+                            sum += val * kernel_1d[k];
+                         }
+                         row_out[cx] = sum.clamp(0.0, 255.0) as u8;
+                     }
+                 }
             }
         });
     };
 
     if let Some(p) = pool {
-        p.install(run)
+        p.install(run_horiz);
+        p.install(run_vert);
     } else {
-        run()
+        run_horiz();
+        run_vert();
     }
-
+    
     buffer_pool.return_buffer(tmp_vec);
-}
-
-pub fn gaussian_blur_with_border(image: &GrayImage, sigma: f32, border: BorderMode) -> GrayImage {
-    gaussian_blur_with_border_in_pool(image, sigma, border, None)
 }
 
 pub fn gaussian_blur_with_border_in_pool(

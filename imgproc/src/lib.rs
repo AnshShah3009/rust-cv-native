@@ -8,6 +8,7 @@ pub mod histogram;
 pub mod local_threshold;
 pub mod morph;
 pub mod resize;
+pub mod simd;
 pub mod template_matching;
 pub mod threshold;
 

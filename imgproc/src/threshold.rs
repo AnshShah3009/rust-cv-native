@@ -1,6 +1,10 @@
 use crate::{gaussian_blur_with_border, BorderMode};
 use image::GrayImage;
 use wide::*;
+use cv_core::{Tensor, storage::Storage};
+use cv_hal::compute::{get_device, ComputeDevice};
+use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
+use cv_hal::context::ThresholdType as HalThresholdType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThresholdType {
@@ -18,6 +22,49 @@ pub enum AdaptiveMethod {
 }
 
 pub fn threshold(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType) -> GrayImage {
+    let device = get_device();
+    
+    match device {
+        ComputeDevice::Gpu(gpu) => {
+            if let Ok(result) = threshold_gpu(gpu, src, thresh, max_value, typ) {
+                return result;
+            }
+        }
+        _ => {}
+    }
+    
+    threshold_cpu(src, thresh, max_value, typ)
+}
+
+fn threshold_gpu(
+    gpu: &cv_hal::gpu::GpuContext,
+    src: &GrayImage,
+    thresh: u8,
+    max_value: u8,
+    typ: ThresholdType,
+) -> cv_hal::Result<GrayImage> {
+    use cv_hal::context::ComputeContext;
+    
+    let input_tensor = Tensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize));
+    let input_gpu = input_tensor.to_gpu()?;
+    
+    let hal_typ = match typ {
+        ThresholdType::Binary => HalThresholdType::Binary,
+        ThresholdType::BinaryInv => HalThresholdType::BinaryInv,
+        ThresholdType::Trunc => HalThresholdType::Trunc,
+        ThresholdType::ToZero => HalThresholdType::ToZero,
+        ThresholdType::ToZeroInv => HalThresholdType::ToZeroInv,
+    };
+    
+    let output_gpu = gpu.threshold(&input_gpu, thresh, max_value, hal_typ)?;
+    let output_cpu = output_gpu.to_cpu()?;
+    
+    let data = output_cpu.storage.as_slice().unwrap().to_vec();
+    GrayImage::from_raw(src.width(), src.height(), data)
+        .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
+}
+
+pub fn threshold_cpu(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType) -> GrayImage {
     let mut dst = GrayImage::new(src.width(), src.height());
     let len = src.as_raw().len();
     let src_raw = src.as_raw();
