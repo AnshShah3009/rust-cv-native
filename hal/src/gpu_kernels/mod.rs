@@ -43,6 +43,9 @@ impl GpuCompute {
 
 pub mod convolve;
 pub mod threshold;
+pub mod sobel;
+pub mod morphology;
+pub mod nms;
 
 /// Shader compilation utilities
 pub mod shaders {

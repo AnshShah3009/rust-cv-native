@@ -1,7 +1,7 @@
 use wgpu::{Device, Queue, Instance, RequestAdapterOptions, PowerPreference, Backends};
 use std::sync::{Arc, OnceLock};
 use futures::executor::block_on;
-use crate::context::{ComputeContext, BorderMode, ThresholdType};
+use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType};
 use crate::{DeviceId, BackendType};
 use cv_core::{Tensor, storage::Storage};
 
@@ -92,6 +92,142 @@ impl ComputeContext for GpuContext {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into()))
         }
     }
+
+    fn sobel<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        dx: i32,
+        dy: i32,
+        ksize: usize,
+    ) -> crate::Result<(Tensor<u8, S>, Tensor<u8, S>)> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
+            let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            let (gx_gpu, gy_gpu) = crate::gpu_kernels::sobel::sobel(self, input_gpu, dx, dy, ksize)?;
+
+            let gx = unsafe { std::ptr::read(&gx_gpu as *const _ as *const Tensor<u8, S>) };
+            let gy = unsafe { std::ptr::read(&gy_gpu as *const _ as *const Tensor<u8, S>) };
+            std::mem::forget(gx_gpu);
+            std::mem::forget(gy_gpu);
+            Ok((gx, gy))
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn morphology<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        typ: MorphologyType,
+        kernel: &Tensor<u8, S>,
+        iterations: u32,
+    ) -> crate::Result<Tensor<u8, S>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
+            let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+            let input_gpu = unsafe { &*input_ptr };
+            
+            let kernel_ptr = kernel as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+            let kernel_gpu = unsafe { &*kernel_ptr };
+
+            let result_gpu = crate::gpu_kernels::morphology::morphology(self, input_gpu, typ, kernel_gpu, iterations)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<u8, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn warp<S: Storage<u8> + 'static>(
+        &self,
+        _input: &Tensor<u8, S>,
+        _matrix: &[[f32; 3]; 3],
+        _new_shape: (usize, usize),
+        _typ: WarpType,
+    ) -> crate::Result<Tensor<u8, S>> {
+        Err(crate::Error::NotSupported("GPU Warp pending implementation".into()))
+    }
+
+    fn nms<S: Storage<f32> + 'static>(
+        &self,
+        _input: &Tensor<f32, S>,
+        _threshold: f32,
+        _window_size: usize,
+    ) -> crate::Result<Tensor<f32, S>> {
+        Err(crate::Error::NotSupported("GPU Pixel-wise NMS pending implementation".into()))
+    }
+
+    fn nms_boxes<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+        iou_threshold: f32,
+    ) -> crate::Result<Vec<usize>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let input_ptr = input as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            crate::gpu_kernels::nms::nms_boxes(self, input_gpu, iou_threshold)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn nms_rotated_boxes<S: Storage<f32> + 'static>(
+        &self,
+        _input: &Tensor<f32, S>,
+        _iou_threshold: f32,
+    ) -> crate::Result<Vec<usize>> {
+        Err(crate::Error::NotSupported("GPU Rotated NMS pending implementation".into()))
+    }
+
+    fn nms_polygons(
+        &self,
+        _polygons: &[cv_core::Polygon],
+        _scores: &[f32],
+        _iou_threshold: f32,
+    ) -> crate::Result<Vec<usize>> {
+        Err(crate::Error::NotSupported("GPU Polygon NMS pending implementation".into()))
+    }
+
+    fn pointcloud_transform<S: Storage<f32> + 'static>(
+        &self,
+        _points: &Tensor<f32, S>,
+        _transform: &[[f32; 4]; 4],
+    ) -> crate::Result<Tensor<f32, S>> {
+        Err(crate::Error::NotSupported("GPU pointcloud_transform pending implementation".into()))
+    }
+
+    fn pointcloud_normals<S: Storage<f32> + 'static>(
+        &self,
+        _points: &Tensor<f32, S>,
+        _k_neighbors: u32,
+    ) -> crate::Result<Tensor<f32, S>> {
+        Err(crate::Error::NotSupported("GPU pointcloud_normals pending implementation".into()))
+    }
+
+    fn tsdf_integrate<S: Storage<f32> + 'static>(
+        &self,
+        _depth_image: &Tensor<f32, S>,
+        _camera_pose: &[[f32; 4]; 4],
+        _intrinsics: &[f32; 4],
+        _tsdf_volume: &mut Tensor<f32, S>,
+        _weight_volume: &mut Tensor<f32, S>,
+        _voxel_size: f32,
+        _truncation: f32,
+    ) -> crate::Result<()> {
+        Err(crate::Error::NotSupported("GPU tsdf_integrate pending implementation".into()))
+    }
 }
 
 impl GpuContext {
@@ -174,11 +310,6 @@ impl GpuContext {
     /// Get reference to device (convenience method)
     pub fn device(&self) -> &Device {
         &self.device
-    }
-
-    /// Get reference to queue (convenience method)
-    pub fn queue(&self) -> &Queue {
-        &self.queue
     }
 
     /// Get Arc to device

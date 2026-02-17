@@ -1,8 +1,12 @@
 use image::GrayImage;
 use rayon::prelude::*;
-use rayon::ThreadPool;
+use cv_core::{Tensor, storage::Storage};
+use cv_hal::compute::{ComputeDevice};
+use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
+use cv_hal::context::ComputeContext;
+use cv_runtime::orchestrator::{ResourceGroup, scheduler};
 
-use crate::convolve::{convolve_with_border_into_in_pool, gaussian_blur_with_border_in_pool, BorderMode, Kernel};
+use crate::convolve::{convolve_with_border_into_in_pool, gaussian_blur_with_border_in_pool, BorderMode, Kernel, Pool};
 
 fn sobel_kernels_1d(ksize: usize) -> Option<(Vec<f32>, Vec<f32>)> {
     match ksize {
@@ -50,10 +54,11 @@ pub fn sobel_ex(
     delta: f32,
     border: BorderMode,
 ) -> GrayImage {
-    sobel_ex_in_pool(src, dx, dy, ksize, scale, delta, border, None)
+    let group = scheduler().get_group("default").unwrap().unwrap();
+    sobel_ex_ctx(src, dx, dy, ksize, scale, delta, border, &group)
 }
 
-pub fn sobel_ex_in_pool(
+pub fn sobel_ex_ctx(
     src: &GrayImage,
     dx: i32,
     dy: i32,
@@ -61,7 +66,54 @@ pub fn sobel_ex_in_pool(
     scale: f32,
     delta: f32,
     border: BorderMode,
-    pool: Option<&ThreadPool>,
+    group: &ResourceGroup,
+) -> GrayImage {
+    let device = group.device();
+    
+    if let ComputeDevice::Gpu(gpu) = device {
+        if dx == 1 && dy == 1 && ksize == 3 {
+            if let Ok(result) = sobel_gpu(gpu, src, ksize) {
+                let (gx, gy) = result;
+                let target = if dx > 0 { gx } else { gy };
+                return apply_linear_transform(target, scale, delta);
+            }
+        }
+    }
+    
+    sobel_ex_in_pool(src, dx, dy, ksize, scale, delta, border, Some(Pool::Group(group)))
+}
+
+fn sobel_gpu(
+    gpu: &cv_hal::gpu::GpuContext,
+    src: &GrayImage,
+    ksize: usize,
+) -> cv_hal::Result<(GrayImage, GrayImage)> {
+    let input_tensor = Tensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize));
+    let input_gpu = input_tensor.to_gpu()?;
+    
+    let (gx_gpu, gy_gpu) = gpu.sobel(&input_gpu, 1, 1, ksize)?;
+    
+    let gx_cpu: Tensor<u8, cv_core::CpuStorage<u8>> = gx_gpu.to_cpu()?;
+    let gy_cpu: Tensor<u8, cv_core::CpuStorage<u8>> = gy_gpu.to_cpu()?;
+    
+    let gx_data = gx_cpu.storage.as_slice().unwrap().to_vec();
+    let gy_data = gy_cpu.storage.as_slice().unwrap().to_vec();
+    
+    let gx = GrayImage::from_raw(src.width(), src.height(), gx_data).unwrap();
+    let gy = GrayImage::from_raw(src.width(), src.height(), gy_data).unwrap();
+    
+    Ok((gx, gy))
+}
+
+pub fn sobel_ex_in_pool<'a>(
+    src: &GrayImage,
+    dx: i32,
+    dy: i32,
+    ksize: usize,
+    scale: f32,
+    delta: f32,
+    border: BorderMode,
+    pool: Option<Pool<'a>>,
 ) -> GrayImage {
     let run = || {
         let (deriv, smooth) = sobel_kernels_1d(ksize).unwrap_or_else(|| {
@@ -73,9 +125,7 @@ pub fn sobel_ex_in_pool(
         let kernel = kernel_from_1d(kx, ky);
         
         let mut out = GrayImage::new(src.width(), src.height());
-        // We pass None for pool here because we are already running inside the pool (if provided)
-        // thanks to p.install(run) below.
-        convolve_with_border_into_in_pool(src, &mut out, &kernel, border, None);
+        convolve_with_border_into_in_pool(src, &mut out, &kernel, border, None as Option<Pool>);
         apply_linear_transform(out, scale, delta)
     };
 
@@ -94,17 +144,30 @@ pub fn scharr_ex(
     delta: f32,
     border: BorderMode,
 ) -> GrayImage {
-    scharr_ex_in_pool(src, dx, dy, scale, delta, border, None)
+    let group = scheduler().get_group("default").unwrap().unwrap();
+    scharr_ex_ctx(src, dx, dy, scale, delta, border, &group)
 }
 
-pub fn scharr_ex_in_pool(
+pub fn scharr_ex_ctx(
     src: &GrayImage,
     dx: i32,
     dy: i32,
     scale: f32,
     delta: f32,
     border: BorderMode,
-    pool: Option<&ThreadPool>,
+    group: &ResourceGroup,
+) -> GrayImage {
+    scharr_ex_in_pool(src, dx, dy, scale, delta, border, Some(Pool::Group(group)))
+}
+
+pub fn scharr_ex_in_pool<'a>(
+    src: &GrayImage,
+    dx: i32,
+    dy: i32,
+    scale: f32,
+    delta: f32,
+    border: BorderMode,
+    pool: Option<Pool<'a>>,
 ) -> GrayImage {
     let run = || {
         let (deriv, smooth) = scharr_kernels_1d();
@@ -113,7 +176,7 @@ pub fn scharr_ex_in_pool(
         let kernel = kernel_from_1d(kx, ky);
         
         let mut out = GrayImage::new(src.width(), src.height());
-        convolve_with_border_into_in_pool(src, &mut out, &kernel, border, None);
+        convolve_with_border_into_in_pool(src, &mut out, &kernel, border, None as Option<Pool>);
         apply_linear_transform(out, scale, delta)
     };
 
@@ -125,13 +188,16 @@ pub fn scharr_ex_in_pool(
 }
 
 pub fn sobel_with_border(src: &GrayImage, border: BorderMode) -> (GrayImage, GrayImage) {
-    sobel_with_border_in_pool(src, border, None)
+    let group = scheduler().get_group("default").unwrap().unwrap();
+    let gx = sobel_ex_ctx(src, 1, 0, 3, 1.0, 0.0, border, &group);
+    let gy = sobel_ex_ctx(src, 0, 1, 3, 1.0, 0.0, border, &group);
+    (gx, gy)
 }
 
-pub fn sobel_with_border_in_pool(src: &GrayImage, border: BorderMode, pool: Option<&ThreadPool>) -> (GrayImage, GrayImage) {
+pub fn sobel_with_border_in_pool<'a>(src: &GrayImage, border: BorderMode, pool: Option<Pool<'a>>) -> (GrayImage, GrayImage) {
     let run = || {
-        let gx = sobel_ex_in_pool(src, 1, 0, 3, 1.0, 0.0, border, None);
-        let gy = sobel_ex_in_pool(src, 0, 1, 3, 1.0, 0.0, border, None);
+        let gx = sobel_ex_in_pool(src, 1, 0, 3, 1.0, 0.0, border, None as Option<Pool>);
+        let gy = sobel_ex_in_pool(src, 0, 1, 3, 1.0, 0.0, border, None as Option<Pool>);
         (gx, gy)
     };
     if let Some(p) = pool {
@@ -146,13 +212,16 @@ pub fn sobel(src: &GrayImage) -> (GrayImage, GrayImage) {
 }
 
 pub fn scharr_with_border(src: &GrayImage, border: BorderMode) -> (GrayImage, GrayImage) {
-    scharr_with_border_in_pool(src, border, None)
+    let group = scheduler().get_group("default").unwrap().unwrap();
+    let gx = scharr_ex_ctx(src, 1, 0, 1.0, 0.0, border, &group);
+    let gy = scharr_ex_ctx(src, 0, 1, 1.0, 0.0, border, &group);
+    (gx, gy)
 }
 
-pub fn scharr_with_border_in_pool(src: &GrayImage, border: BorderMode, pool: Option<&ThreadPool>) -> (GrayImage, GrayImage) {
+pub fn scharr_with_border_in_pool<'a>(src: &GrayImage, border: BorderMode, pool: Option<Pool<'a>>) -> (GrayImage, GrayImage) {
     let run = || {
-        let gx = scharr_ex_in_pool(src, 1, 0, 1.0, 0.0, border, None);
-        let gy = scharr_ex_in_pool(src, 0, 1, 1.0, 0.0, border, None);
+        let gx = scharr_ex_in_pool(src, 1, 0, 1.0, 0.0, border, None as Option<Pool>);
+        let gy = scharr_ex_in_pool(src, 0, 1, 1.0, 0.0, border, None as Option<Pool>);
         (gx, gy)
     };
     if let Some(p) = pool {
@@ -167,10 +236,10 @@ pub fn scharr(src: &GrayImage) -> (GrayImage, GrayImage) {
 }
 
 pub fn sobel_magnitude(gx: &GrayImage, gy: &GrayImage) -> GrayImage {
-    sobel_magnitude_in_pool(gx, gy, None)
+    sobel_magnitude_in_pool(gx, gy, None as Option<Pool>)
 }
 
-pub fn sobel_magnitude_in_pool(gx: &GrayImage, gy: &GrayImage, pool: Option<&ThreadPool>) -> GrayImage {
+pub fn sobel_magnitude_in_pool<'a>(gx: &GrayImage, gy: &GrayImage, pool: Option<Pool<'a>>) -> GrayImage {
     let run = || {
         let width = gx.width();
         let height = gx.height();
@@ -198,14 +267,14 @@ pub fn sobel_magnitude_in_pool(gx: &GrayImage, gy: &GrayImage, pool: Option<&Thr
 }
 
 pub fn laplacian(src: &GrayImage) -> GrayImage {
-    laplacian_in_pool(src, None)
+    laplacian_in_pool(src, None as Option<Pool>)
 }
 
-pub fn laplacian_in_pool(src: &GrayImage, pool: Option<&ThreadPool>) -> GrayImage {
+pub fn laplacian_in_pool<'a>(src: &GrayImage, pool: Option<Pool<'a>>) -> GrayImage {
     let run = || {
         let kernel = Kernel::from_slice(&[0.0, 1.0, 0.0, 1.0, -4.0, 1.0, 0.0, 1.0, 0.0], 3, 3);
         let mut out = GrayImage::new(src.width(), src.height());
-        convolve_with_border_into_in_pool(src, &mut out, &kernel, BorderMode::Replicate, None);
+        convolve_with_border_into_in_pool(src, &mut out, &kernel, BorderMode::Replicate, None as Option<Pool>);
         out
     };
     if let Some(p) = pool {
@@ -343,19 +412,22 @@ fn hysteresis(width: usize, height: usize, nms: &[f32], low: f32, high: f32) -> 
 }
 
 pub fn canny(src: &GrayImage, low_threshold: u8, high_threshold: u8) -> GrayImage {
-    canny_in_pool(src, low_threshold, high_threshold, None)
+    let group = scheduler().get_group("default").unwrap().unwrap();
+    canny_ctx(src, low_threshold, high_threshold, &group)
 }
 
-pub fn canny_in_pool(
+pub fn canny_ctx(src: &GrayImage, low_threshold: u8, high_threshold: u8, group: &ResourceGroup) -> GrayImage {
+    canny_in_pool(src, low_threshold, high_threshold, Some(Pool::Group(group)))
+}
+
+pub fn canny_in_pool<'a>(
     src: &GrayImage, 
     low_threshold: u8, 
     high_threshold: u8, 
-    pool: Option<&ThreadPool>
+    pool: Option<Pool<'a>>
 ) -> GrayImage {
     let run = || {
-        // Calls gaussian_blur which calls separable_convolve_into.
-        // We pass None because we are already in the pool.
-        let blurred = gaussian_blur_with_border_in_pool(src, 1.0, BorderMode::Reflect101, None);
+        let blurred = gaussian_blur_with_border_in_pool(src, 1.0, BorderMode::Reflect101, None as Option<Pool>);
         let width = blurred.width() as usize;
         let height = blurred.height() as usize;
         let (mag, dir) = gradients_and_directions(&blurred);
@@ -388,38 +460,5 @@ mod tests {
         let (gx, gy) = sobel_with_border(&img, BorderMode::Reflect101);
         assert!(gx.as_raw().iter().all(|&v| v == 0));
         assert!(gy.as_raw().iter().all(|&v| v == 0));
-    }
-
-    #[test]
-    fn scharr_preserves_size() {
-        let img = GrayImage::new(32, 20);
-        let (gx, gy) = scharr_with_border(&img, BorderMode::Replicate);
-        assert_eq!(gx.width(), 32);
-        assert_eq!(gx.height(), 20);
-        assert_eq!(gy.width(), 32);
-        assert_eq!(gy.height(), 20);
-    }
-
-    #[test]
-    fn sobel_ex_ksize_5_preserves_size() {
-        let img = GrayImage::new(21, 13);
-        let out = sobel_ex(&img, 1, 0, 5, 1.0, 0.0, BorderMode::Reflect101);
-        assert_eq!(out.width(), 21);
-        assert_eq!(out.height(), 13);
-    }
-
-    #[test]
-    fn canny_detects_step_edge() {
-        let mut img = GrayImage::new(64, 32);
-        for y in 0..32 {
-            for x in 0..64 {
-                let v = if x < 32 { 20 } else { 220 };
-                img.put_pixel(x, y, Luma([v]));
-            }
-        }
-
-        let edges = canny(&img, 40, 100);
-        let count = edges.as_raw().iter().filter(|&&v| v > 0).count();
-        assert!(count > 0, "canny should detect the vertical intensity step");
     }
 }

@@ -1,13 +1,15 @@
 use image::GrayImage;
 use rayon::prelude::*;
 use rayon::ThreadPool;
+use std::sync::Arc;
 use wide::*;
 use crate::simd::convolve_row_1d;
 use cv_core::{Tensor, TensorShape};
-use cv_hal::compute::{get_device, ComputeDevice};
+use cv_hal::compute::{ComputeDevice};
 use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
 use cv_hal::context::BorderMode as HalBorderMode;
 use cv_hal::gpu::GpuContext;
+use cv_runtime::orchestrator::{ResourceGroup, scheduler};
 
 #[derive(Debug, Clone)]
 pub struct Kernel {
@@ -52,7 +54,7 @@ impl Kernel {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorderMode {
     Constant(u8),
     Replicate,
@@ -180,9 +182,26 @@ pub fn convolve(image: &GrayImage, kernel: &Kernel) -> GrayImage {
 }
 
 pub fn convolve_with_border(image: &GrayImage, kernel: &Kernel, border: BorderMode) -> GrayImage {
+    let group = scheduler().get_group("default").unwrap().unwrap();
+    convolve_ctx(image, kernel, border, &group)
+}
+
+pub fn convolve_ctx(image: &GrayImage, kernel: &Kernel, border: BorderMode, group: &ResourceGroup) -> GrayImage {
     let mut output = GrayImage::new(image.width(), image.height());
-    convolve_with_border_into(image, &mut output, kernel, border);
+    convolve_into_ctx(image, &mut output, kernel, border, group);
     output
+}
+
+pub fn convolve_into_ctx(image: &GrayImage, output: &mut GrayImage, kernel: &Kernel, border: BorderMode, group: &ResourceGroup) {
+    let device = group.device();
+    if let ComputeDevice::Gpu(gpu) = device {
+        if let Ok(result) = convolve_gpu(gpu, image, kernel, border) {
+            output.copy_from_slice(result.as_raw());
+            return;
+        }
+    }
+    
+    convolve_with_border_into_in_pool(image, output, kernel, border, Some(Pool::Group(group)));
 }
 
 pub fn convolve_with_border_into(
@@ -191,17 +210,23 @@ pub fn convolve_with_border_into(
     kernel: &Kernel,
     border: BorderMode,
 ) {
-    convolve_with_border_into_in_pool(image, output, kernel, border, None)
+    let group = scheduler().get_group("default").unwrap().unwrap();
+    convolve_into_ctx(image, output, kernel, border, &group);
 }
 
 pub fn gaussian_blur_with_border(image: &GrayImage, sigma: f32, border: BorderMode) -> GrayImage {
-    let device = get_device();
+    let group = scheduler().get_group("default").unwrap().unwrap();
+    gaussian_blur_ctx(image, sigma, border, &group)
+}
+
+pub fn gaussian_blur_ctx(image: &GrayImage, sigma: f32, border: BorderMode, group: &ResourceGroup) -> GrayImage {
+    let device = group.device();
     if let ComputeDevice::Gpu(gpu) = device {
         if let Ok(result) = gaussian_blur_gpu(gpu, image, sigma, border) {
             return result;
         }
     }
-    gaussian_blur_with_border_in_pool(image, sigma, border, None)
+    gaussian_blur_with_border_in_pool(image, sigma, border, Some(Pool::Group(group)))
 }
 
 fn gaussian_blur_gpu(
@@ -229,7 +254,7 @@ fn gaussian_blur_gpu(
         BorderMode::Replicate => HalBorderMode::Replicate,
         BorderMode::Reflect => HalBorderMode::Reflect,
         BorderMode::Wrap => HalBorderMode::Wrap,
-        _ => HalBorderMode::Replicate, // Fallback for Reflect101
+        _ => HalBorderMode::Replicate, 
     };
     
     let output_gpu = gpu.convolve_2d(&input_gpu, &kernel_gpu, hal_border)?;
@@ -261,7 +286,7 @@ fn convolve_gpu(
         BorderMode::Constant(v) => HalBorderMode::Constant(v as f32),
         BorderMode::Replicate => HalBorderMode::Replicate,
         BorderMode::Reflect => HalBorderMode::Reflect,
-        BorderMode::Reflect101 => HalBorderMode::Reflect, // Approximation
+        BorderMode::Reflect101 => HalBorderMode::Reflect, 
         BorderMode::Wrap => HalBorderMode::Wrap,
     };
     
@@ -273,21 +298,28 @@ fn convolve_gpu(
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
 }
 
-pub fn convolve_with_border_into_in_pool(
+#[derive(Clone, Copy)]
+pub enum Pool<'a> {
+    Rayon(&'a ThreadPool),
+    Group(&'a ResourceGroup),
+}
+
+impl<'a> Pool<'a> {
+    pub fn install<F, R>(&self, f: F) -> R where F: FnOnce() -> R + Send, R: Send {
+        match self {
+            Pool::Rayon(p) => p.install(f),
+            Pool::Group(g) => g.install(f),
+        }
+    }
+}
+
+pub fn convolve_with_border_into_in_pool<'a>(
     image: &GrayImage,
     output: &mut GrayImage,
     kernel: &Kernel,
     border: BorderMode,
-    pool: Option<&ThreadPool>,
+    pool: Option<Pool<'a>>,
 ) {
-    let device = get_device();
-    if let ComputeDevice::Gpu(gpu) = device {
-        if let Ok(result) = convolve_gpu(gpu, image, kernel, border) {
-            output.copy_from_slice(result.as_raw());
-            return;
-        }
-    }
-
     let (kx_center, ky_center) = kernel.center();
     if output.width() != image.width() || output.height() != image.height() {
         *output = GrayImage::new(image.width(), image.height());
@@ -338,6 +370,19 @@ pub fn convolve_with_border_into_in_pool(
     }
 }
 
+impl<'a> From<&'a ThreadPool> for Pool<'a> {
+    fn from(p: &'a ThreadPool) -> Self { Pool::Rayon(p) }
+}
+
+impl<'a> From<&'a ResourceGroup> for Pool<'a> {
+    fn from(g: &'a ResourceGroup) -> Self { Pool::Group(g) }
+}
+
+// Add conversions from &Arc<ResourceGroup> too
+impl<'a> From<&'a Arc<ResourceGroup>> for Pool<'a> {
+    fn from(g: &'a Arc<ResourceGroup>) -> Self { Pool::Group(g) }
+}
+
 pub fn separable_convolve(image: &GrayImage, kernel_1d: &[f32], border: BorderMode) -> GrayImage {
     let mut out = GrayImage::new(image.width(), image.height());
     separable_convolve_into(image, &mut out, kernel_1d, border);
@@ -350,15 +395,16 @@ pub fn separable_convolve_into(
     kernel_1d: &[f32],
     border: BorderMode,
 ) {
-    separable_convolve_into_in_pool(image, out, kernel_1d, border, None)
+    let group = scheduler().get_group("default").unwrap().unwrap();
+    separable_convolve_into_in_pool(image, out, kernel_1d, border, Some(Pool::Group(&*group)))
 }
 
-pub fn separable_convolve_into_in_pool(
+pub fn separable_convolve_into_in_pool<'a>(
     image: &GrayImage,
     out: &mut GrayImage,
     kernel_1d: &[f32],
     border: BorderMode,
-    pool: Option<&ThreadPool>,
+    pool: Option<Pool<'a>>,
 ) {
     assert!(kernel_1d.len() % 2 == 1, "1D kernel size must be odd");
     if out.width() != image.width() || out.height() != image.height() {
@@ -371,20 +417,16 @@ pub fn separable_convolve_into_in_pool(
     let k_len = kernel_1d.len();
     let src = image.as_raw();
 
-    // Horizontal Pass
     let buffer_pool = cv_core::BufferPool::global();
-    let mut tmp_vec = buffer_pool.get(width * height * 4); // f32
+    let mut tmp_vec = buffer_pool.get(width * height * 4);
     let tmp_addr = tmp_vec.as_mut_ptr() as usize;
 
     let run_horiz = || {
         let tmp_slice = unsafe { std::slice::from_raw_parts_mut(tmp_addr as *mut f32, width * height) };
-        
         tmp_slice.par_chunks_mut(width).enumerate().for_each(|(y, row_out)| {
             let row_offset = y * width;
-            
             let padded_width = width + 2 * radius;
             let mut padded_row = vec![0.0f32; padded_width];
-            
             for i in 0..padded_width {
                 let src_x = (i as isize) - (radius as isize);
                 padded_row[i] = match map_coord(src_x, width, border) {
@@ -395,40 +437,31 @@ pub fn separable_convolve_into_in_pool(
                     },
                 };
             }
-
             convolve_row_1d(&padded_row, row_out, kernel_1d, radius);
         });
     };
 
     let mut run_vert = || {
         let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_addr as *const f32, width * height) };
-        
         out.as_mut().par_chunks_mut(width).enumerate().for_each(|(y, row_out)| {
             for x in (0..width).step_by(8) {
                  if x + 8 <= width {
                     let mut sum_v = f32x8::ZERO;
-                    
                     for k in 0..k_len {
                         let w_v = f32x8::splat(kernel_1d[k]);
                         let sy_base = (y as isize) + (k as isize) - (radius as isize);
                         let target_y = map_coord(sy_base, height, border);
-                        
                         let mut vals = [0.0f32; 8];
-                        
                         if let Some(iy) = target_y {
                             let idx = iy * width + x;
                             vals.copy_from_slice(&tmp_slice[idx..idx+8]);
                         } else if let BorderMode::Constant(v) = border {
                              vals = [v as f32; 8];
                         }
-                        
                         sum_v += f32x8::from(vals) * w_v;
                     }
-                    
                     let res: [f32; 8] = sum_v.into();
-                    for i in 0..8 {
-                        row_out[x+i] = res[i].clamp(0.0, 255.0) as u8;
-                    }
+                    for i in 0..8 { row_out[x+i] = res[i].clamp(0.0, 255.0) as u8; }
                  } else {
                      for cx in x..width {
                          let mut sum = 0.0;
@@ -461,11 +494,11 @@ pub fn separable_convolve_into_in_pool(
     buffer_pool.return_buffer(tmp_vec);
 }
 
-pub fn gaussian_blur_with_border_in_pool(
+pub fn gaussian_blur_with_border_in_pool<'a>(
     image: &GrayImage,
     sigma: f32,
     border: BorderMode,
-    pool: Option<&ThreadPool>,
+    pool: Option<Pool<'a>>,
 ) -> GrayImage {
     let mut out = GrayImage::new(image.width(), image.height());
     gaussian_blur_with_border_into_in_pool(image, &mut out, sigma, border, pool);
@@ -478,15 +511,16 @@ pub fn gaussian_blur_with_border_into(
     sigma: f32,
     border: BorderMode,
 ) {
-    gaussian_blur_with_border_into_in_pool(image, out, sigma, border, None)
+    let group = scheduler().get_group("default").unwrap().unwrap();
+    gaussian_blur_ctx(image, sigma, border, &group);
 }
 
-pub fn gaussian_blur_with_border_into_in_pool(
+pub fn gaussian_blur_with_border_into_in_pool<'a>(
     image: &GrayImage,
     out: &mut GrayImage,
     sigma: f32,
     border: BorderMode,
-    pool: Option<&ThreadPool>,
+    pool: Option<Pool<'a>>,
 ) {
     let size = ((sigma * 6.0).ceil() as usize) | 1;
     let kernel_1d = gaussian_kernel_1d(sigma, size);

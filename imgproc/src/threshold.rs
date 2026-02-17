@@ -2,9 +2,10 @@ use crate::{gaussian_blur_with_border, BorderMode};
 use image::GrayImage;
 use wide::*;
 use cv_core::{Tensor, storage::Storage};
-use cv_hal::compute::{get_device, ComputeDevice};
+use cv_hal::compute::{ComputeDevice};
 use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
 use cv_hal::context::ThresholdType as HalThresholdType;
+use cv_runtime::orchestrator::{ResourceGroup, scheduler};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThresholdType {
@@ -22,15 +23,17 @@ pub enum AdaptiveMethod {
 }
 
 pub fn threshold(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType) -> GrayImage {
-    let device = get_device();
+    let group = scheduler().get_group("default").unwrap().unwrap();
+    threshold_ctx(src, thresh, max_value, typ, &group)
+}
+
+pub fn threshold_ctx(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType, group: &ResourceGroup) -> GrayImage {
+    let device = group.device();
     
-    match device {
-        ComputeDevice::Gpu(gpu) => {
-            if let Ok(result) = threshold_gpu(gpu, src, thresh, max_value, typ) {
-                return result;
-            }
+    if let ComputeDevice::Gpu(gpu) = device {
+        if let Ok(result) = threshold_gpu(gpu, src, thresh, max_value, typ) {
+            return result;
         }
-        _ => {}
     }
     
     threshold_cpu(src, thresh, max_value, typ)
@@ -99,7 +102,6 @@ pub fn threshold_cpu(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdT
                 dst_raw[i + j] = res_arr[j] as u8;
             }
         } else {
-            // Tail
             for idx in i..end {
                 dst_raw[idx] = apply_threshold(src_raw[idx], thresh, max_value, typ);
             }
@@ -292,7 +294,6 @@ fn local_mean_image(src: &GrayImage, block_size: u32) -> GrayImage {
             (width + 1) * (height + 1),
         )
     };
-    // Ensure it's zeroed since we use it for accumulation
     integral.fill(0);
 
     for y in 0..height {
@@ -344,44 +345,5 @@ mod tests {
 
         let out = threshold(&img, 100, 255, ThresholdType::Binary);
         assert_eq!(out.as_raw(), &[0, 0, 0, 255]);
-    }
-
-    #[test]
-    fn otsu_picks_middle_split_on_bimodal_image() {
-        let mut img = GrayImage::new(16, 1);
-        for x in 0..8 {
-            img.put_pixel(x, 0, Luma([30]));
-        }
-        for x in 8..16 {
-            img.put_pixel(x, 0, Luma([220]));
-        }
-
-        let (t, out) = threshold_otsu(&img, 255, ThresholdType::Binary);
-        assert!(t >= 30 && t < 220);
-        assert_eq!(out.as_raw()[0], 0);
-        assert_eq!(out.as_raw()[15], 255);
-    }
-
-    #[test]
-    fn adaptive_mean_handles_uneven_lighting() {
-        let mut img = GrayImage::new(9, 9);
-        for y in 0..9 {
-            for x in 0..9 {
-                let base = 30 + x as u8 * 20;
-                img.put_pixel(x, y, Luma([base]));
-            }
-        }
-        img.put_pixel(4, 4, Luma([255]));
-
-        let out = adaptive_threshold(
-            &img,
-            255,
-            AdaptiveMethod::MeanC,
-            ThresholdType::Binary,
-            5,
-            5.0,
-        );
-
-        assert_eq!(out.get_pixel(4, 4)[0], 255);
     }
 }

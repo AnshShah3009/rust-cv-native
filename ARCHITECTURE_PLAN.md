@@ -56,6 +56,20 @@ trait ComputeContext {
     - Submits them in a single `queue.submit()`.
     - Uses `indirect_dispatch` for variable-sized workloads if possible.
 
-### CPU Batching
-- Continue using `rayon` for task parallelism.
-- Use `par_chunks` for data parallelism combined with SIMD kernels.
+## 5. Large Scale Acceleration & Resource Management
+
+### Integration with Resource Groups
+- Add `ComputeDevice` to `ResourceGroup`.
+- Each `ResourceGroup` can be configured with a specific backend (CPU, GPU).
+- Functions in `imgproc`, `features`, etc., will take an optional `ResourceGroup` or `ComputeDevice`.
+
+### API Propagation Strategy
+- Standard API: `gaussian_blur(img, sigma)` -> Uses `GpuContext::global()` or default CPU.
+- Advanced API: `gaussian_blur_ctx(img, sigma, device)` -> Explicit control.
+
+### Hardware-Accelerated Primitives Expansion
+- **Filtering:** Sobel, Laplacian, Bilateral.
+- **Geometric:** Resize (Linear/Nearest), Warp.
+- **Morphology:** Erode, Dilate.
+- **Features:** FAST, ORB (Pyramid building on GPU).
+

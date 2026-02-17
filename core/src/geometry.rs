@@ -425,3 +425,73 @@ impl Rect {
         intersection / union
     }
 }
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RotatedRect {
+    pub cx: f32,
+    pub cy: f32,
+    pub w: f32,
+    pub h: f32,
+    pub angle: f32, // Degrees
+}
+
+impl RotatedRect {
+    pub fn new(cx: f32, cy: f32, w: f32, h: f32, angle: f32) -> Self {
+        Self { cx, cy, w, h, angle }
+    }
+
+    pub fn area(&self) -> f32 {
+        self.w * self.h
+    }
+
+    /// Get the 4 corners of the rotated rectangle
+    pub fn points(&self) -> [[f32; 2]; 4] {
+        let angle_rad = self.angle.to_radians();
+        let cos_a = angle_rad.cos();
+        let sin_a = angle_rad.sin();
+
+        let half_w = self.w / 2.0;
+        let half_h = self.h / 2.0;
+
+        let mut pts = [[0.0, 0.0]; 4];
+        // Relative corners before rotation
+        let corners = [
+            [-half_w, -half_h],
+            [half_w, -half_h],
+            [half_w, half_h],
+            [-half_w, half_h],
+        ];
+
+        for i in 0..4 {
+            pts[i][0] = self.cx + corners[i][0] * cos_a - corners[i][1] * sin_a;
+            pts[i][1] = self.cy + corners[i][0] * sin_a + corners[i][1] * cos_a;
+        }
+        pts
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Polygon {
+    pub points: Vec<[f32; 2]>,
+}
+
+impl Polygon {
+    pub fn new(points: Vec<[f32; 2]>) -> Self {
+        Self { points }
+    }
+
+    pub fn area(&self) -> f32 {
+        if self.points.len() < 3 {
+            return 0.0;
+        }
+        let mut area = 0.0;
+        for i in 0..self.points.len() {
+            let p1 = self.points[i];
+            let p2 = self.points[(i + 1) % self.points.len()];
+            area += p1[0] * p2[1] - p2[0] * p1[1];
+        }
+        area.abs() * 0.5
+    }
+}
+
+

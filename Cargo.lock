@@ -1290,6 +1290,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "wgpu 28.0.0",
+ "wide",
 ]
 
 [[package]]
@@ -1299,6 +1300,7 @@ dependencies = [
  "criterion",
  "cv-core",
  "cv-hal",
+ "cv-runtime",
  "image 0.25.9",
  "nalgebra",
  "rayon",
@@ -1310,6 +1312,7 @@ dependencies = [
 name = "cv-io"
 version = "0.1.0"
 dependencies = [
+ "cv-3d",
  "cv-core",
  "cv-runtime",
  "nalgebra",
@@ -1347,6 +1350,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cv-point-cloud"
+version = "0.1.0"
+dependencies = [
+ "cv-3d",
+ "cv-core",
+ "cv-scientific",
+ "nalgebra",
+ "ndarray 0.15.6",
+ "rayon",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "cv-python"
 version = "0.1.0"
 dependencies = [
@@ -1354,6 +1370,7 @@ dependencies = [
  "cv-calib3d",
  "cv-core",
  "cv-features",
+ "cv-hal",
  "cv-imgproc",
  "cv-registration",
  "cv-runtime",

@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use crate::Result;
 use core_affinity::CoreId;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use cv_hal::compute::{ComputeDevice, get_device};
 
 /// Policy for a resource group
 #[derive(Debug, Clone, Copy)]
@@ -54,9 +55,7 @@ impl PoolBackend {
         R: Send,
     {
         match self {
-            // For global pool, we are likely already in it or can just run.
-            // But to be safe and ensure we use global pool if called from outside:
-            PoolBackend::Global => f(), // Rayon operations default to global pool automatically
+            PoolBackend::Global => f(),
             PoolBackend::Private(pool) => pool.install(f),
         }
     }
@@ -68,10 +67,11 @@ pub struct ResourceGroup {
     backend: RwLock<PoolBackend>,
     pub cores: Vec<usize>,
     pub policy: GroupPolicy,
+    device: ComputeDevice<'static>,
 }
 
 impl ResourceGroup {
-    pub fn new(_scheduler: &TaskScheduler, name: &str, num_threads: usize, core_ids: Option<Vec<usize>>, policy: GroupPolicy) -> Result<Self> {
+    pub fn new(_scheduler: &TaskScheduler, name: &str, num_threads: usize, core_ids: Option<Vec<usize>>, policy: GroupPolicy, device: Option<ComputeDevice<'static>>) -> Result<Self> {
         let name_str = name.to_string();
         
         if let Some(ref cores) = core_ids {
@@ -81,10 +81,8 @@ impl ResourceGroup {
         }
 
         let backend = if policy.allow_work_stealing {
-            // Use Global Pool
             PoolBackend::Global
         } else {
-            // Isolated groups get their own pool
             let pool = Self::create_isolated_pool(name, num_threads, &core_ids)?;
             PoolBackend::Private(Arc::new(pool))
         };
@@ -94,6 +92,7 @@ impl ResourceGroup {
             backend: RwLock::new(backend),
             cores: core_ids.clone().unwrap_or_default(),
             policy,
+            device: device.unwrap_or_else(get_device),
         })
     }
 
@@ -123,7 +122,6 @@ impl ResourceGroup {
         }
 
         if self.policy.allow_work_stealing {
-            // Cannot resize global pool at runtime easily/safely in this architecture
             return Err(crate::Error::RuntimeError("Cannot resize the global shared pool".to_string()));
         }
 
@@ -135,8 +133,6 @@ impl ResourceGroup {
         Ok(())
     }
 
-    /// Access the underlying private pool if it exists.
-    /// Returns None if using Global pool.
     pub fn private_pool(&self) -> Option<Arc<ThreadPool>> {
         let guard = self.backend.read().unwrap();
         match &*guard {
@@ -163,6 +159,10 @@ impl ResourceGroup {
     pub fn current_num_threads(&self) -> usize {
         self.backend.read().unwrap().current_num_threads()
     }
+
+    pub fn device(&self) -> ComputeDevice<'static> {
+        self.device
+    }
 }
 
 pub struct TaskScheduler {
@@ -178,7 +178,7 @@ impl TaskScheduler {
         }
     }
 
-    pub fn create_group(&self, name: &str, num_threads: usize, cores: Option<Vec<usize>>, policy: GroupPolicy) -> Result<Arc<ResourceGroup>> {
+    pub fn create_group(&self, name: &str, num_threads: usize, cores: Option<Vec<usize>>, policy: GroupPolicy, device: Option<ComputeDevice<'static>>) -> Result<Arc<ResourceGroup>> {
         let mut groups = self.groups.lock()
             .map_err(|_| crate::Error::ConcurrencyError("groups mutex poisoned".to_string()))?;
             
@@ -189,13 +189,12 @@ impl TaskScheduler {
         let current_total = self.total_threads.load(Ordering::Relaxed);
         let max_cores = num_cpus::get();
         
-        // Warn if isolated groups oversubscribe (shared global pool doesn't count towards isolated limit check logic usually, or we assume it takes all cores)
         if !policy.allow_work_stealing && current_total + num_threads > max_cores {
             eprintln!("Warning: Isolated resource group '{}' with {} threads will oversubscribe CPU (total isolated threads: {}/{})", 
                 name, num_threads, current_total + num_threads, max_cores);
         }
 
-        let group = Arc::new(ResourceGroup::new(self, name, num_threads, cores, policy)?);
+        let group = Arc::new(ResourceGroup::new(self, name, num_threads, cores, policy, device)?);
         groups.insert(name.to_string(), group.clone());
         
         if !policy.allow_work_stealing {
@@ -246,12 +245,9 @@ static GLOBAL_SCHEDULER: OnceLock<TaskScheduler> = OnceLock::new();
 
 pub fn scheduler() -> &'static TaskScheduler {
     GLOBAL_SCHEDULER.get_or_init(|| {
-        // Unify: Initialize the global Rayon pool
         let _ = cv_core::init_global_thread_pool(None);
-        
         let s = TaskScheduler::new();
-        // Create a default group that maps to the global pool
-        s.create_group("default", num_cpus::get(), None, GroupPolicy::default()).unwrap();
+        s.create_group("default", num_cpus::get(), None, GroupPolicy::default(), None).unwrap();
         s
     })
 }
@@ -269,14 +265,11 @@ mod tests {
             allow_dynamic_scaling: true,
         };
         
-        let g1 = s.create_group("g1", 4, None, policy).unwrap();
-        let g2 = s.create_group("g2", 4, None, policy).unwrap();
+        let g1 = s.create_group("g1", 4, None, policy, None).unwrap();
+        let g2 = s.create_group("g2", 4, None, policy, None).unwrap();
         
-        // Both use global backend, so they don't have private pools
         assert!(g1.private_pool().is_none());
         assert!(g2.private_pool().is_none());
-        
-        // Total isolated threads should be 0
         assert_eq!(s.total_allocated_threads(), 0);
     }
 
@@ -288,13 +281,10 @@ mod tests {
             allow_dynamic_scaling: false,
         };
         
-        let g1 = s.create_group("iso1", 2, None, policy).unwrap();
-        let g2 = s.create_group("iso2", 2, None, policy).unwrap();
+        let g1 = s.create_group("iso1", 2, None, policy, None).unwrap();
+        let g2 = s.create_group("iso2", 2, None, policy, None).unwrap();
         
-        // Should have different pools
         assert_ne!(Arc::as_ptr(&g1.private_pool().unwrap()), Arc::as_ptr(&g2.private_pool().unwrap()));
-        
-        // Total threads should be 4
         assert_eq!(s.total_allocated_threads(), 4);
         
         s.remove_group("iso1").unwrap();
@@ -309,7 +299,7 @@ mod tests {
             allow_dynamic_scaling: true,
         };
         
-        let g1 = s.create_group("dynamic", 2, None, policy).unwrap();
+        let g1 = s.create_group("dynamic", 2, None, policy, None).unwrap();
         assert_eq!(g1.current_num_threads(), 2);
         
         g1.resize(4).unwrap();
@@ -321,8 +311,8 @@ mod tests {
         let s = TaskScheduler::new();
         let policy = GroupPolicy::default();
         
-        s.create_group("same", 2, None, policy).unwrap();
-        let res = s.create_group("same", 2, None, policy);
+        s.create_group("same", 2, None, policy, None).unwrap();
+        let res = s.create_group("same", 2, None, policy, None);
         
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("already exists"));
@@ -331,7 +321,7 @@ mod tests {
     #[test]
     fn test_submit_logic() {
         let s = TaskScheduler::new();
-        s.create_group("worker", 2, None, GroupPolicy::default()).unwrap();
+        s.create_group("worker", 2, None, GroupPolicy::default(), None).unwrap();
         
         let (tx, rx) = std::sync::mpsc::channel();
         s.submit("worker", move || {
@@ -349,8 +339,7 @@ mod tests {
             allow_dynamic_scaling: true,
         };
         
-        // Create a group with threads > cores to trigger warning (visible in stderr)
         let num_threads = num_cpus::get() + 1;
-        let _ = s.create_group("oversubscribed", num_threads, None, policy).unwrap();
+        let _ = s.create_group("oversubscribed", num_threads, None, policy, None).unwrap();
     }
 }
