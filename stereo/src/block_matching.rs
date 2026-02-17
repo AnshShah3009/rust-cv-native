@@ -6,6 +6,7 @@
 use crate::{DisparityMap, Result, StereoError};
 use image::GrayImage;
 use rayon::prelude::*;
+use wide::*;
 
 /// Block matching stereo matcher
 pub struct BlockMatcher {
@@ -148,35 +149,150 @@ impl BlockMatcher {
         disparity: i32,
         half_block: i32,
     ) -> f32 {
-        let mut cost = 0.0f32;
+        match self.metric {
+            MatchingMetric::SAD => self.compute_sad_simd(left_data, right_data, width, x, y, disparity, half_block),
+            MatchingMetric::SSD => self.compute_ssd_simd(left_data, right_data, width, x, y, disparity, half_block),
+            MatchingMetric::NCC => {
+                let mut cost = 0.0f32;
+                let mut count = 0usize;
+
+                for dy in -half_block..=half_block {
+                    let ly = (y + dy) as usize;
+                    for dx in -half_block..=half_block {
+                        let lx = (x + dx) as usize;
+                        let rx = (x + dx - disparity) as usize;
+                        let left_val = left_data[ly * width + lx] as f32;
+                        let right_val = right_data[ly * width + rx] as f32;
+                        cost += left_val * right_val;
+                        count += 1;
+                    }
+                }
+                cost / count as f32
+            }
+        }
+    }
+
+    fn compute_sad_simd(
+        &self,
+        left_data: &[u8],
+        right_data: &[u8],
+        width: usize,
+        x: i32,
+        y: i32,
+        disparity: i32,
+        half_block: i32,
+    ) -> f32 {
+        let mut total_sad = f32x8::ZERO;
         let mut count = 0usize;
 
         for dy in -half_block..=half_block {
             let ly = (y + dy) as usize;
-            for dx in -half_block..=half_block {
+            let mut dx = -half_block;
+            
+            while dx <= half_block - 7 {
                 let lx = (x + dx) as usize;
                 let rx = (x + dx - disparity) as usize;
-                let left_val = left_data[ly * width + lx] as f32;
-                let right_val = right_data[ly * width + rx] as f32;
-
-                match self.metric {
-                    MatchingMetric::SAD => {
-                        cost += (left_val - right_val).abs();
-                    }
-                    MatchingMetric::SSD => {
-                        let diff = left_val - right_val;
-                        cost += diff * diff;
-                    }
-                    MatchingMetric::NCC => {
-                        // Simplified NCC - would need mean subtraction in practice
-                        cost += left_val * right_val;
-                    }
-                }
+                
+                let l_vals = f32x8::from([
+                    left_data[ly * width + lx] as f32,
+                    left_data[ly * width + lx + 1] as f32,
+                    left_data[ly * width + lx + 2] as f32,
+                    left_data[ly * width + lx + 3] as f32,
+                    left_data[ly * width + lx + 4] as f32,
+                    left_data[ly * width + lx + 5] as f32,
+                    left_data[ly * width + lx + 6] as f32,
+                    left_data[ly * width + lx + 7] as f32,
+                ]);
+                
+                let r_vals = f32x8::from([
+                    right_data[ly * width + rx] as f32,
+                    right_data[ly * width + rx + 1] as f32,
+                    right_data[ly * width + rx + 2] as f32,
+                    right_data[ly * width + rx + 3] as f32,
+                    right_data[ly * width + rx + 4] as f32,
+                    right_data[ly * width + rx + 5] as f32,
+                    right_data[ly * width + rx + 6] as f32,
+                    right_data[ly * width + rx + 7] as f32,
+                ]);
+                
+                total_sad += (l_vals - r_vals).abs();
+                dx += 8;
+                count += 8;
+            }
+            
+            // Remainder
+            for rem_dx in dx..=half_block {
+                let lx = (x + rem_dx) as usize;
+                let rx = (x + rem_dx - disparity) as usize;
+                let diff = (left_data[ly * width + lx] as f32 - right_data[ly * width + rx] as f32).abs();
+                total_sad += f32x8::from([diff, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
                 count += 1;
             }
         }
 
-        cost / count as f32
+        total_sad.reduce_add() / count as f32
+    }
+
+    fn compute_ssd_simd(
+        &self,
+        left_data: &[u8],
+        right_data: &[u8],
+        width: usize,
+        x: i32,
+        y: i32,
+        disparity: i32,
+        half_block: i32,
+    ) -> f32 {
+        let mut total_ssd = f32x8::ZERO;
+        let mut count = 0usize;
+
+        for dy in -half_block..=half_block {
+            let ly = (y + dy) as usize;
+            let mut dx = -half_block;
+            
+            while dx <= half_block - 7 {
+                let lx = (x + dx) as usize;
+                let rx = (x + dx - disparity) as usize;
+                
+                let l_vals = f32x8::from([
+                    left_data[ly * width + lx] as f32,
+                    left_data[ly * width + lx + 1] as f32,
+                    left_data[ly * width + lx + 2] as f32,
+                    left_data[ly * width + lx + 3] as f32,
+                    left_data[ly * width + lx + 4] as f32,
+                    left_data[ly * width + lx + 5] as f32,
+                    left_data[ly * width + lx + 6] as f32,
+                    left_data[ly * width + lx + 7] as f32,
+                ]);
+                
+                let r_vals = f32x8::from([
+                    right_data[ly * width + rx] as f32,
+                    right_data[ly * width + rx + 1] as f32,
+                    right_data[ly * width + rx + 2] as f32,
+                    right_data[ly * width + rx + 3] as f32,
+                    right_data[ly * width + rx + 4] as f32,
+                    right_data[ly * width + rx + 5] as f32,
+                    right_data[ly * width + rx + 6] as f32,
+                    right_data[ly * width + rx + 7] as f32,
+                ]);
+                
+                let diff = l_vals - r_vals;
+                total_ssd += diff * diff;
+                dx += 8;
+                count += 8;
+            }
+            
+            // Remainder
+            for rem_dx in dx..=half_block {
+                let lx = (x + rem_dx) as usize;
+                let rx = (x + rem_dx - disparity) as usize;
+                let diff = left_data[ly * width + lx] as f32 - right_data[ly * width + rx] as f32;
+                total_ssd += f32x8::from([diff * diff, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+                count += 1;
+            }
+        }
+
+        total_ssd.reduce_add() / count as f32
     }
 }
 

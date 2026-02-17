@@ -1,4 +1,5 @@
 use image::GrayImage;
+use rayon::prelude::*;
 
 pub fn compute_histogram(image: &GrayImage) -> [u32; 256] {
     let mut hist = [0u32; 256];
@@ -31,17 +32,30 @@ pub fn histogram_equalization(image: &GrayImage) -> GrayImage {
     let total = image.width() * image.height() as u32;
 
     let mut lut = [0u8; 256];
-    for i in 0..256 {
-        let val = ((cdf[i] - cdf_min) as f32 / (total - cdf_min) as f32 * 255.0).round() as u8;
-        lut[i] = val;
+    if total > cdf_min {
+        for i in 0..256 {
+            let val = ((cdf[i].saturating_sub(cdf_min)) as f32 / (total - cdf_min) as f32 * 255.0).round() as u8;
+            lut[i] = val;
+        }
+    } else {
+        // If total == cdf_min (e.g. constant image), identity mapping
+        for i in 0..256 { lut[i] = i as u8; }
     }
 
     let mut output = GrayImage::new(image.width(), image.height());
+    let src_raw = image.as_raw();
 
-    for (i, pixel) in output.pixels_mut().enumerate() {
-        let src_pixel = image.as_raw()[i];
-        pixel[0] = lut[src_pixel as usize];
-    }
+    output
+        .as_mut()
+        .par_chunks_mut(image.width() as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let offset = y * image.width() as usize;
+            for x in 0..image.width() as usize {
+                let src_pixel = src_raw[offset + x];
+                row[x] = lut[src_pixel as usize];
+            }
+        });
 
     output
 }

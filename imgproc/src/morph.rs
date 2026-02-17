@@ -1,5 +1,6 @@
 use crate::convolve::BorderMode;
 use image::GrayImage;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MorphShape {
@@ -120,25 +121,30 @@ fn dilate_once_into(
         *output = GrayImage::new(src.width(), src.height());
     }
 
-    for y in 0..height {
-        for x in 0..width {
-            let mut max_val = 0u8;
-            for &(kx, ky) in kernel {
-                let px = x + kx;
-                let py = y + ky;
+    output
+        .as_mut()
+        .par_chunks_mut(width as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let y = y as i32;
+            for x in 0..width {
+                let mut max_val = 0u8;
+                for &(kx, ky) in kernel {
+                    let px = x + kx;
+                    let py = y + ky;
 
-                let val = match (map_coord(px, width, border), map_coord(py, height, border)) {
-                    (Some(ix), Some(iy)) => src_data[(iy * width + ix) as usize],
-                    _ => match border {
-                        BorderMode::Constant(v) => v,
-                        _ => 0,
-                    },
-                };
-                max_val = max_val.max(val);
+                    let val = match (map_coord(px, width, border), map_coord(py, height, border)) {
+                        (Some(ix), Some(iy)) => src_data[(iy * width + ix) as usize],
+                        _ => match border {
+                            BorderMode::Constant(v) => v,
+                            _ => 0,
+                        },
+                    };
+                    max_val = max_val.max(val);
+                }
+                row[x as usize] = max_val;
             }
-            output.as_mut()[(y * width + x) as usize] = max_val;
-        }
-    }
+        });
 }
 
 #[allow(dead_code)]
@@ -161,25 +167,30 @@ fn erode_once_into(
         *output = GrayImage::new(src.width(), src.height());
     }
 
-    for y in 0..height {
-        for x in 0..width {
-            let mut min_val = 255u8;
-            for &(kx, ky) in kernel {
-                let px = x + kx;
-                let py = y + ky;
+    output
+        .as_mut()
+        .par_chunks_mut(width as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let y = y as i32;
+            for x in 0..width {
+                let mut min_val = 255u8;
+                for &(kx, ky) in kernel {
+                    let px = x + kx;
+                    let py = y + ky;
 
-                let val = match (map_coord(px, width, border), map_coord(py, height, border)) {
-                    (Some(ix), Some(iy)) => src_data[(iy * width + ix) as usize],
-                    _ => match border {
-                        BorderMode::Constant(v) => v,
-                        _ => 255,
-                    },
-                };
-                min_val = min_val.min(val);
+                    let val = match (map_coord(px, width, border), map_coord(py, height, border)) {
+                        (Some(ix), Some(iy)) => src_data[(iy * width + ix) as usize],
+                        _ => match border {
+                            BorderMode::Constant(v) => v,
+                            _ => 255,
+                        },
+                    };
+                    min_val = min_val.min(val);
+                }
+                row[x as usize] = min_val;
             }
-            output.as_mut()[(y * width + x) as usize] = min_val;
-        }
-    }
+        });
 }
 
 pub fn dilate_with_border(

@@ -1,4 +1,5 @@
 use image::{GrayImage, RgbImage};
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interpolation {
@@ -28,14 +29,18 @@ fn resize_nearest(src: &GrayImage, width: u32, height: u32) -> GrayImage {
     let dst_width = width as f32;
     let dst_height = height as f32;
 
-    for y in 0..height {
-        for x in 0..width {
-            let sx = ((x as f32 * src_width / dst_width).floor() as u32).min(src.width() - 1);
-            let sy = ((y as f32 * src_height / dst_height).floor() as u32).min(src.height() - 1);
-            let val = src.get_pixel(sx, sy)[0];
-            dst.put_pixel(x, y, image::Luma([val]));
-        }
-    }
+    dst.as_mut()
+        .par_chunks_mut(width as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let y = y as u32;
+            for x in 0..width {
+                let sx = ((x as f32 * src_width / dst_width).floor() as u32).min(src.width() - 1);
+                let sy = ((y as f32 * src_height / dst_height).floor() as u32).min(src.height() - 1);
+                let val = src.get_pixel(sx, sy)[0];
+                row[x as usize] = val;
+            }
+        });
     dst
 }
 
@@ -50,31 +55,35 @@ fn resize_linear(src: &GrayImage, width: u32, height: u32) -> GrayImage {
         return dst;
     }
 
-    for y in 0..height {
-        for x in 0..width {
-            let fx = (x as f32 / dst_width) * src_width;
-            let fy = (y as f32 / dst_height) * src_height;
+    dst.as_mut()
+        .par_chunks_mut(width as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let y = y as u32;
+            for x in 0..width {
+                let fx = (x as f32 / dst_width) * src_width;
+                let fy = (y as f32 / dst_height) * src_height;
 
-            let x0 = fx as u32;
-            let y0 = fy as u32;
-            let x1 = (x0 + 1).min(src.width() - 1);
-            let y1 = (y0 + 1).min(src.height() - 1);
+                let x0 = fx as u32;
+                let y0 = fy as u32;
+                let x1 = (x0 + 1).min(src.width() - 1);
+                let y1 = (y0 + 1).min(src.height() - 1);
 
-            let dx = fx - x0 as f32;
-            let dy = fy - y0 as f32;
+                let dx = fx - x0 as f32;
+                let dy = fy - y0 as f32;
 
-            let v00 = src.get_pixel(x0, y0)[0] as f32;
-            let v10 = src.get_pixel(x1, y0)[0] as f32;
-            let v01 = src.get_pixel(x0, y1)[0] as f32;
-            let v11 = src.get_pixel(x1, y1)[0] as f32;
+                let v00 = src.get_pixel(x0, y0)[0] as f32;
+                let v10 = src.get_pixel(x1, y0)[0] as f32;
+                let v01 = src.get_pixel(x0, y1)[0] as f32;
+                let v11 = src.get_pixel(x1, y1)[0] as f32;
 
-            let v0 = v00 * (1.0 - dx) + v10 * dx;
-            let v1 = v01 * (1.0 - dx) + v11 * dx;
-            let v = v0 * (1.0 - dy) + v1 * dy;
+                let v0 = v00 * (1.0 - dx) + v10 * dx;
+                let v1 = v01 * (1.0 - dx) + v11 * dx;
+                let v = v0 * (1.0 - dy) + v1 * dy;
 
-            dst.put_pixel(x, y, image::Luma([v.clamp(0.0, 255.0) as u8]));
-        }
-    }
+                row[x as usize] = v.clamp(0.0, 255.0) as u8;
+            }
+        });
 
     dst
 }
@@ -99,37 +108,37 @@ pub fn resize_rgb(
         return dst;
     }
 
-    for y in 0..height {
-        for x in 0..width {
-            let fx = (x as f32 / dst_width) * src_width;
-            let fy = (y as f32 / dst_height) * src_height;
+    dst.as_mut()
+        .par_chunks_mut(width as usize * 3)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let y = y as u32;
+            for x in 0..width {
+                let fx = (x as f32 / dst_width) * src_width;
+                let fy = (y as f32 / dst_height) * src_height;
 
-            let x0 = fx as u32;
-            let y0 = fy as u32;
-            let x1 = (x0 + 1).min(src.width() - 1);
-            let y1 = (y0 + 1).min(src.height() - 1);
+                let x0 = fx as u32;
+                let y0 = fy as u32;
+                let x1 = (x0 + 1).min(src.width() - 1);
+                let y1 = (y0 + 1).min(src.height() - 1);
 
-            let dx = fx - x0 as f32;
-            let dy = fy - y0 as f32;
+                let dx = fx - x0 as f32;
+                let dy = fy - y0 as f32;
 
-            let mut result = [0u8; 3];
+                for c in 0..3 {
+                    let v00 = src.get_pixel(x0, y0)[c] as f32;
+                    let v10 = src.get_pixel(x1, y0)[c] as f32;
+                    let v01 = src.get_pixel(x0, y1)[c] as f32;
+                    let v11 = src.get_pixel(x1, y1)[c] as f32;
 
-            for c in 0..3 {
-                let v00 = src.get_pixel(x0, y0)[c] as f32;
-                let v10 = src.get_pixel(x1, y0)[c] as f32;
-                let v01 = src.get_pixel(x0, y1)[c] as f32;
-                let v11 = src.get_pixel(x1, y1)[c] as f32;
+                    let v0 = v00 * (1.0 - dx) + v10 * dx;
+                    let v1 = v01 * (1.0 - dx) + v11 * dx;
+                    let v = v0 * (1.0 - dy) + v1 * dy;
 
-                let v0 = v00 * (1.0 - dx) + v10 * dx;
-                let v1 = v01 * (1.0 - dx) + v11 * dx;
-                let v = v0 * (1.0 - dy) + v1 * dy;
-
-                result[c] = v.clamp(0.0, 255.0) as u8;
+                    row[x as usize * 3 + c] = v.clamp(0.0, 255.0) as u8;
+                }
             }
-
-            dst.put_pixel(x, y, image::Rgb(result));
-        }
-    }
+        });
 
     dst
 }

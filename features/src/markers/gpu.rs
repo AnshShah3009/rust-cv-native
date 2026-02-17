@@ -110,7 +110,8 @@ impl MarkerGpuContext {
                 compatible_surface: None,
                 force_fallback_adapter: false,
             })
-            .await?;
+            .await
+            .ok()?;
 
         let (device, queue) = adapter
             .request_device(
@@ -118,8 +119,10 @@ impl MarkerGpuContext {
                     label: Some("Marker GPU Device"),
                     required_features: wgpu::Features::empty(),
                     required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                    experimental_features: wgpu::ExperimentalFeatures::default(),
+                    trace: wgpu::Trace::default(),
                 },
-                None,
             )
             .await
             .ok()?;
@@ -198,15 +201,16 @@ impl MarkerGpuContext {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Marker Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Marker Scan Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: "main",
+            entry_point: Some("main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
         });
 
         Some(Self {
@@ -405,7 +409,7 @@ impl MarkerGpuContext {
         // Copy results to staging buffer
         encoder.copy_buffer_to_buffer(&results_buffer, 0, &staging_buffer, 0, results_size);
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        let index = self.queue.submit(std::iter::once(encoder.finish()));
 
         // Read back results
         let buffer_slice = staging_buffer.slice(..);
@@ -414,7 +418,7 @@ impl MarkerGpuContext {
             tx.send(result).unwrap();
         });
 
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
 
         rx.recv()
             .map_err(|e| FeatureError::DetectionError(format!("GPU sync failed: {}", e)))?
