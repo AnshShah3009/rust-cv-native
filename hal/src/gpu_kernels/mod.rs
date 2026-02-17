@@ -205,7 +205,7 @@ pub mod buffer_utils {
             }
         }
 
-        fn get_size_bucket(size: u64) -> u64 {
+        pub(crate) fn get_size_bucket(size: u64) -> u64 {
             // Round up to nearest power of 2 or multiple of 1MB
             if size <= 1024 * 1024 {
                 size.next_power_of_two().max(256)

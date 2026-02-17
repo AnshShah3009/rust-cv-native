@@ -81,3 +81,61 @@ pub fn convolve_row_1d(src: &[f32], dst: &mut [f32], kernel: &[f32], radius: usi
         dst[x..x+8].copy_from_slice(&res);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rgb_to_gray_simd_parity() {
+        let rgb = vec![
+            255, 0, 0,   // Red
+            0, 255, 0,   // Green
+            0, 0, 255,   // Blue
+            255, 255, 255, // White
+            0, 0, 0,     // Black
+            128, 128, 128, // Gray
+            10, 20, 30,
+            100, 150, 200,
+        ];
+        let mut gray_simd = vec![0u8; 8];
+        let mut gray_scalar = vec![0u8; 8];
+
+        rgb_to_gray_simd(&rgb, &mut gray_simd);
+
+        for i in 0..8 {
+            let r = rgb[i * 3] as f32;
+            let g = rgb[i * 3 + 1] as f32;
+            let b = rgb[i * 3 + 2] as f32;
+            gray_scalar[i] = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
+        }
+
+        assert_eq!(gray_simd, gray_scalar);
+    }
+
+    #[test]
+    fn test_convolve_row_1d_simd_parity() {
+        let src = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+        let kernel = vec![0.25, 0.5, 0.25];
+        let radius = 1;
+        
+        let mut dst_simd = vec![0.0f32; 8];
+        let mut dst_scalar = vec![0.0f32; 8];
+
+        // SIMD
+        convolve_row_1d(&src, &mut dst_simd, &kernel, radius);
+
+        // Scalar
+        for x in 0..8 {
+            let mut sum = 0.0;
+            for k in 0..3 {
+                sum += src[x + k] * kernel[k];
+            }
+            dst_scalar[x] = sum;
+        }
+
+        for i in 0..8 {
+            assert!((dst_simd[i] - dst_scalar[i]).abs() < 1e-6);
+        }
+    }
+}
