@@ -5003,6 +5003,7 @@ name = "rust-cv-native"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "cv-3d",
  "cv-core",
  "cv-features",
  "cv-hal",
@@ -5010,6 +5011,7 @@ dependencies = [
  "cv-stereo",
  "cv-video",
  "image 0.25.9",
+ "nalgebra",
  "rayon",
  "tokio",
 ]

@@ -573,17 +573,21 @@ impl CpuBackend {
 }
 
 fn rotated_iou(r1: &cv_core::RotatedRect, r2: &cv_core::RotatedRect) -> f32 {
-    let p1 = cv_core::Polygon::new(r1.points().to_vec());
-    let p2 = cv_core::Polygon::new(r2.points().to_vec());
+    let mut p1 = cv_core::Polygon::new(r1.points().to_vec());
+    let mut p2 = cv_core::Polygon::new(r2.points().to_vec());
+    p1.ensure_counter_clockwise();
+    p2.ensure_counter_clockwise();
     polygon_iou_internal(&p1, &p2)
 }
 
 fn polygon_iou_internal(p1: &cv_core::Polygon, p2: &cv_core::Polygon) -> f32 {
     let inter_area = intersection_area_polygons(p1, p2);
+    let a1 = p1.unsigned_area();
+    let a2 = p2.unsigned_area();
     if inter_area <= 0.0 {
         return 0.0;
     }
-    let union_area = p1.area() + p2.area() - inter_area;
+    let union_area = a1 + a2 - inter_area;
     inter_area / union_area
 }
 

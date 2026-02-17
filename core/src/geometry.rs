@@ -490,8 +490,23 @@ impl Polygon {
             let p2 = self.points[(i + 1) % self.points.len()];
             area += p1[0] * p2[1] - p2[0] * p1[1];
         }
-        area.abs() * 0.5
+        area * 0.5 // Keep signed area for winding check
+    }
+
+    pub fn is_clockwise(&self) -> bool {
+        self.area() < 0.0
+    }
+
+    pub fn ensure_counter_clockwise(&mut self) {
+        if self.is_clockwise() {
+            self.points.reverse();
+        }
+    }
+
+    pub fn unsigned_area(&self) -> f32 {
+        self.area().abs()
     }
 }
+
 
 

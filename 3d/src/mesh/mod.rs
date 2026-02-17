@@ -4,6 +4,8 @@
 
 use cv_core::point_cloud::PointCloud;
 use nalgebra::{Point3, Vector3};
+use rand::distributions::{Distribution, WeightedIndex};
+use rand::Rng;
 use rayon::prelude::*;
 
 /// Triangle mesh with vertices and face indices
@@ -54,7 +56,13 @@ impl TriangleMesh {
                 let e1 = v1 - v0;
                 let e2 = v2 - v0;
 
-                e1.cross(&e2).normalize()
+                let cross = e1.cross(&e2);
+                let norm = cross.norm();
+                if norm > 1e-9 {
+                    cross / norm
+                } else {
+                    Vector3::zeros()
+                }
             })
             .collect()
     }
@@ -73,7 +81,10 @@ impl TriangleMesh {
 
         // Normalize
         for normal in vertex_normals.iter_mut() {
-            *normal = normal.normalize();
+            let norm = normal.norm();
+            if norm > 1e-9 {
+                *normal /= norm;
+            }
         }
 
         self.normals = Some(vertex_normals);
@@ -120,6 +131,61 @@ impl TriangleMesh {
     /// Convert to point cloud (vertex positions)
     pub fn to_point_cloud(&self) -> PointCloud {
         PointCloud::new(self.vertices.clone())
+    }
+
+    /// Sample points from mesh surface
+    pub fn sample_points(&self, num_points: usize) -> PointCloud {
+        if self.faces.is_empty() {
+            return PointCloud::new(Vec::new());
+        }
+
+        // 1. Calculate area of each face
+        let face_areas: Vec<f32> = self.faces
+            .par_iter()
+            .map(|face| {
+                let v0 = self.vertices[face[0]];
+                let v1 = self.vertices[face[1]];
+                let v2 = self.vertices[face[2]];
+                let e1 = v1 - v0;
+                let e2 = v2 - v0;
+                e1.cross(&e2).norm() * 0.5
+            })
+            .collect();
+
+        // 2. Build weighted index for sampling faces
+        let dist = match WeightedIndex::new(&face_areas) {
+            Ok(d) => d,
+            Err(_) => return PointCloud::new(Vec::new()), // All zero area faces
+        };
+        
+        let mut rng = rand::thread_rng();
+        let mut sampled_points = Vec::with_capacity(num_points);
+
+        for _ in 0..num_points {
+            // Pick a face
+            let face_idx = dist.sample(&mut rng);
+            let face = self.faces[face_idx];
+
+            let v0 = self.vertices[face[0]];
+            let v1 = self.vertices[face[1]];
+            let v2 = self.vertices[face[2]];
+
+            // Random barycentric coordinates
+            let r1: f32 = rng.gen();
+            let r2: f32 = rng.gen();
+            
+            let (u, v) = if r1 + r2 > 1.0 {
+                (1.0 - r1, 1.0 - r2)
+            } else {
+                (r1, r2)
+            };
+            let w = 1.0 - u - v;
+
+            let p = v0.coords * u + v1.coords * v + v2.coords * w;
+            sampled_points.push(Point3::from(p));
+        }
+
+        PointCloud::new(sampled_points)
     }
 }
 
