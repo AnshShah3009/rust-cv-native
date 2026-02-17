@@ -379,11 +379,76 @@ pub mod pointcloud_gpu {
 
     /// Compute normals from points on GPU
     pub fn compute_normals(
-        _gpu: &GpuCompute,
-        _points: &[Vector3<f32>],
-        _k_neighbors: u32,
+        gpu: &GpuCompute,
+        points: &[Vector3<f32>],
+        neighbor_indices: &[u32],
+        k_neighbors: u32,
     ) -> crate::Result<Vec<Vector3<f32>>> {
-        Err(crate::Error::not_supported("GPU normal computation"))
+        use wgpu::BufferUsages;
+        use crate::gpu_kernels::buffer_utils::{create_buffer, create_buffer_uninit, read_buffer};
+
+        let device = gpu.device();
+        let queue = gpu.queue();
+        let num_points = points.len() as u32;
+
+        // 1. Create buffers
+        // Convert Vector3 to [f32; 4] for 16-byte alignment (vec4 in shader)
+        let points_data: Vec<[f32; 4]> = points.iter().map(|p| [p.x, p.y, p.z, 0.0]).collect();
+        
+        let points_buf = create_buffer(device, &points_data, BufferUsages::STORAGE);
+        let indices_buf = create_buffer(device, neighbor_indices, BufferUsages::STORAGE);
+        let normals_buf = create_buffer_uninit(device, points.len() * 16, BufferUsages::STORAGE | BufferUsages::COPY_SRC);
+        let num_points_buf = create_buffer(device, &[num_points], BufferUsages::UNIFORM);
+        let k_buf = create_buffer(device, &[k_neighbors], BufferUsages::UNIFORM);
+
+        // 2. Create pipeline
+        let shader_source = include_str!("pointcloud_normals.wgsl");
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Point Cloud Normals Shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Normals Pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // 3. Create bind group
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Normals Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: points_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: normals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: indices_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: num_points_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: k_buf.as_entire_binding() },
+            ],
+        });
+
+        // 4. Dispatch
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { 
+                label: None,
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            let x = dispatch_size_1d(num_points);
+            pass.dispatch_workgroups(x, 1, 1);
+        }
+
+        gpu.submit(encoder);
+
+        // 5. Read back
+        let result_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(gpu.device.clone(), queue, &normals_buf, 0, points.len() * 16))?;
+        let result: Vec<Vector3<f32>> = result_data.into_iter().map(|v| Vector3::new(v[0], v[1], v[2])).collect();
+        Ok(result)
     }
 
     /// Voxel downsample on GPU

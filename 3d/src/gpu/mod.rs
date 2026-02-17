@@ -173,6 +173,66 @@ pub mod point_cloud {
         }
     }
 
+    /// Compute normals using a specific GPU context
+    pub fn compute_normals_with_ctx(
+        points: &[Point3<f32>],
+        k: usize,
+        ctx: &cv_hal::gpu::GpuContext,
+    ) -> Vec<Vector3<f32>> {
+        use cv_hal::gpu_kernels::{GpuCompute, pointcloud_gpu};
+        let k = k.min(points.len().saturating_sub(1)).max(3);
+        let gpu = GpuCompute::new(ctx.device.clone(), ctx.queue.clone());
+
+        let voxel_size = compute_adaptive_voxel_size(points, k);
+        let mut voxel_grid: std::collections::HashMap<(i32, i32, i32), Vec<usize>> =
+            std::collections::HashMap::with_capacity(points.len() / 10);
+
+        for (i, p) in points.iter().enumerate() {
+            let vx = (p.x / voxel_size).floor() as i32;
+            let vy = (p.y / voxel_size).floor() as i32;
+            let vz = (p.z / voxel_size).floor() as i32;
+            voxel_grid.entry((vx, vy, vz)).or_default().push(i);
+        }
+
+        let neighbor_indices: Vec<u32> = points.par_iter().enumerate().flat_map(|(i, center)| {
+            let (vx, vy, vz) = (
+                (center.x / voxel_size).floor() as i32,
+                (center.y / voxel_size).floor() as i32,
+                (center.z / voxel_size).floor() as i32,
+            );
+            let mut candidates = Vec::new();
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        if let Some(indices) = voxel_grid.get(&(vx+dx, vy+dy, vz+dz)) {
+                            for &idx in indices {
+                                if idx != i {
+                                    let p = points[idx];
+                                    let d = (center.x-p.x).powi(2) + (center.y-p.y).powi(2) + (center.z-p.z).powi(2);
+                                    candidates.push((d, idx));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            candidates.truncate(k);
+            let mut result = vec![0u32; k];
+            for (j, &(_, idx)) in candidates.iter().enumerate() {
+                result[j] = idx as u32;
+            }
+            result
+        }).collect();
+
+        let points_v3: Vec<Vector3<f32>> = points.iter().map(|p| p.coords).collect();
+
+        match pointcloud_gpu::compute_normals(&gpu, &points_v3, &neighbor_indices, k as u32) {
+            Ok(n) => n,
+            Err(_) => compute_normals_cpu(points, k, 0.0),
+        }
+    }
+
     /// Simple compute_normals with default config (backward compatible)
     pub fn compute_normals_simple(points: &[Point3<f32>], k: usize) -> Vec<Vector3<f32>> {
         compute_normals(
@@ -184,17 +244,72 @@ pub mod point_cloud {
         )
     }
 
-    /// GPU path - placeholder for actual GPU implementation
+    /// GPU path
     fn compute_normals_gpu(points: &[Point3<f32>], k: usize) -> Vec<Vector3<f32>> {
-        // TODO: Implement GPU path:
-        // 1. Upload points to GPU (single transfer)
-        // 2. Build spatial hash on GPU
-        // 3. Run k-NN search compute shader
-        // 4. Run PCA normal compute shader
-        // 5. Download normals only (single transfer)
+        use cv_hal::gpu::GpuContext;
+        use cv_hal::gpu_kernels::{GpuCompute, pointcloud_gpu};
 
-        // For now, fall back to optimized CPU
-        compute_normals_cpu(points, k, 0.0)
+        let k = k.min(points.len().saturating_sub(1)).max(3);
+        
+        // 1. Get GPU context
+        let ctx = match GpuContext::new() {
+            Ok(c) => c,
+            Err(_) => return compute_normals_cpu(points, k, 0.0),
+        };
+        let gpu = GpuCompute::new(ctx.device, ctx.queue);
+
+        // 2. Compute neighbor indices on CPU (Simplified hybrid approach)
+        // In a full implementation, this would also happen on GPU
+        let voxel_size = compute_adaptive_voxel_size(points, k);
+        let mut voxel_grid: std::collections::HashMap<(i32, i32, i32), Vec<usize>> =
+            std::collections::HashMap::with_capacity(points.len() / 10);
+
+        for (i, p) in points.iter().enumerate() {
+            let vx = (p.x / voxel_size).floor() as i32;
+            let vy = (p.y / voxel_size).floor() as i32;
+            let vz = (p.z / voxel_size).floor() as i32;
+            voxel_grid.entry((vx, vy, vz)).or_default().push(i);
+        }
+
+        let neighbor_indices: Vec<u32> = points.par_iter().enumerate().flat_map(|(i, center)| {
+            let (vx, vy, vz) = (
+                (center.x / voxel_size).floor() as i32,
+                (center.y / voxel_size).floor() as i32,
+                (center.z / voxel_size).floor() as i32,
+            );
+            let mut candidates = Vec::new();
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        if let Some(indices) = voxel_grid.get(&(vx+dx, vy+dy, vz+dz)) {
+                            for &idx in indices {
+                                if idx != i {
+                                    let p = points[idx];
+                                    let d = (center.x-p.x).powi(2) + (center.y-p.y).powi(2) + (center.z-p.z).powi(2);
+                                    candidates.push((d, idx));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            candidates.truncate(k);
+            let mut result = vec![0u32; k];
+            for (j, &(_, idx)) in candidates.iter().enumerate() {
+                result[j] = idx as u32;
+            }
+            result
+        }).collect();
+
+        // 3. Convert types for HAL
+        let points_v3: Vec<Vector3<f32>> = points.iter().map(|p| p.coords).collect();
+
+        // 4. Run on GPU
+        match pointcloud_gpu::compute_normals(&gpu, &points_v3, &neighbor_indices, k as u32) {
+            Ok(n) => n,
+            Err(_) => compute_normals_cpu(points, k, 0.0),
+        }
     }
 
     /// CPU path with optimized spatial hashing

@@ -17,6 +17,10 @@ impl GpuContext {
 
     /// Initialize a new GPU context asynchronously.
     pub async fn new_async() -> crate::Result<Self> {
+        Self::new_with_policy(PowerPreference::HighPerformance).await
+    }
+
+    pub async fn new_with_policy(preference: PowerPreference) -> crate::Result<Self> {
         // Create instance
         let instance = Instance::new(&wgpu::InstanceDescriptor {
             backends: Backends::all(),
@@ -25,11 +29,15 @@ impl GpuContext {
 
         // Request adapter
         let adapter = instance.request_adapter(&RequestAdapterOptions {
-            power_preference: PowerPreference::HighPerformance,
+            power_preference: preference,
             compatible_surface: None,
             force_fallback_adapter: false,
         }).await.map_err(|e| crate::Error::InitError(format!("Failed to find a suitable GPU adapter: {}", e)))?;
 
+        Self::from_adapter(adapter).await
+    }
+
+    pub async fn from_adapter(adapter: wgpu::Adapter) -> crate::Result<Self> {
         // Request device
         let (device, queue) = adapter.request_device(
             &wgpu::DeviceDescriptor {
@@ -46,6 +54,15 @@ impl GpuContext {
             device: Arc::new(device),
             queue: Arc::new(queue),
         })
+    }
+
+    /// Enumerate all available adapters.
+    pub async fn enumerate_adapters() -> Vec<wgpu::Adapter> {
+        let instance = Instance::new(&wgpu::InstanceDescriptor {
+            backends: Backends::all(),
+            ..Default::default()
+        });
+        instance.enumerate_adapters(Backends::all()).await
     }
     
     /// Create a simplified compute pipeline.
