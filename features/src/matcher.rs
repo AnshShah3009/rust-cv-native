@@ -1,5 +1,6 @@
 use crate::descriptor::Descriptors;
 use cv_core::{FeatureMatch, Matches};
+use rayon::prelude::*;
 
 pub enum MatchType {
     BruteForce,
@@ -40,57 +41,59 @@ impl Matcher {
     }
 
     fn brute_force_match(&self, query: &Descriptors, train: &Descriptors) -> Matches {
-        let mut matches = Matches::with_capacity(query.len());
+        let matches: Vec<FeatureMatch> = (0..query.len())
+            .into_par_iter()
+            .filter_map(|query_idx| {
+                let q_desc = &query.descriptors[query_idx];
+                let mut best_match: Option<(usize, u32)> = None;
+                let mut second_best: Option<u32> = None;
 
-        for (query_idx, q_desc) in query.iter().enumerate() {
-            let mut best_match: Option<(usize, u32)> = None;
-            let mut second_best: Option<u32> = None;
+                for (train_idx, t_desc) in train.iter().enumerate() {
+                    let distance = q_desc.hamming_distance(t_desc);
 
-            for (train_idx, t_desc) in train.iter().enumerate() {
-                let distance = q_desc.hamming_distance(t_desc);
-
-                match best_match {
-                    None => {
-                        best_match = Some((train_idx, distance));
-                    }
-                    Some((_, best_dist)) => {
-                        if distance < best_dist {
-                            second_best = Some(best_dist);
+                    match best_match {
+                        None => {
                             best_match = Some((train_idx, distance));
-                        } else if second_best.is_none() || distance < second_best.unwrap() {
-                            second_best = Some(distance);
+                        }
+                        Some((_, best_dist)) => {
+                            if distance < best_dist {
+                                second_best = Some(best_dist);
+                                best_match = Some((train_idx, distance));
+                            } else if second_best.is_none() || distance < second_best.unwrap() {
+                                second_best = Some(distance);
+                            }
                         }
                     }
                 }
-            }
 
-            if let Some((train_idx, distance)) = best_match {
-                let mut keep_match = true;
+                if let Some((train_idx, distance)) = best_match {
+                    let mut keep_match = true;
 
-                if let Some(threshold) = self.ratio_threshold {
-                    if let Some(second) = second_best {
-                        let ratio = distance as f32 / second as f32;
-                        if ratio > threshold {
+                    if let Some(threshold) = self.ratio_threshold {
+                        if let Some(second) = second_best {
+                            let ratio = distance as f32 / second as f32;
+                            if ratio > threshold {
+                                keep_match = false;
+                            }
+                        }
+                    }
+
+                    if self.cross_check {
+                        let reverse_match = self.find_best_match(train, query, train_idx);
+                        if reverse_match != Some(query_idx) {
                             keep_match = false;
                         }
                     }
-                }
 
-                if self.cross_check {
-                    let reverse_match = self.find_best_match(train, query, train_idx);
-                    if reverse_match != Some(query_idx) {
-                        keep_match = false;
+                    if keep_match {
+                        return Some(FeatureMatch::new(query_idx as i32, train_idx as i32, distance as f32));
                     }
                 }
+                None
+            })
+            .collect();
 
-                if keep_match {
-                    let m = FeatureMatch::new(query_idx as i32, train_idx as i32, distance as f32);
-                    matches.push(m);
-                }
-            }
-        }
-
-        matches
+        Matches { matches, mask: None }
     }
 
     fn find_best_match(

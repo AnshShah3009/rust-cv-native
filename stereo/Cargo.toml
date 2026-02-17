@@ -13,6 +13,7 @@ cv-hal = { path = "../hal" }
 nalgebra = { workspace = true }
 rayon = { workspace = true }
 image = { workspace = true }
+wide = { workspace = true }
 
 thiserror = "2.0"
 wgpu = { workspace = true, optional = true }

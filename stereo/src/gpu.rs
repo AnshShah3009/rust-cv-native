@@ -28,7 +28,7 @@ impl GpuStereoMatcher {
         // Initialize wgpu
         let instance = wgpu::Instance::default();
         let policy = read_gpu_adapter_policy_from_env()?;
-        let adapter = select_adapter_by_policy(&instance, policy);
+        let adapter = select_adapter_by_policy(&instance, policy).await;
         let adapter = adapter.ok_or_else(|| {
             let detail = match policy {
                 GpuAdapterPolicy::NvidiaOnly => " (policy: nvidia_only)",
@@ -45,8 +45,10 @@ impl GpuStereoMatcher {
                     label: Some("Stereo GPU Device"),
                     required_features: wgpu::Features::empty(),
                     required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                    experimental_features: wgpu::ExperimentalFeatures::default(),
+                    trace: wgpu::Trace::default(),
                 },
-                None,
             )
             .await
             .map_err(|e| StereoError::InvalidParameters(
@@ -117,15 +119,16 @@ impl GpuStereoMatcher {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Stereo Pipeline Layout"),
             bind_group_layouts: &[&params_bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let stereo_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Stereo Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: "main",
+            entry_point: Some("main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
         });
 
         Ok(Self {
@@ -275,15 +278,15 @@ impl GpuStereoMatcher {
         });
 
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &disparity_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &output_buffer,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(width * 4),
                     rows_per_image: Some(height),
@@ -292,12 +295,12 @@ impl GpuStereoMatcher {
             texture_size,
         );
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        let index = self.queue.submit(std::iter::once(encoder.finish()));
 
         // Read back results
         let buffer_slice = output_buffer.slice(..);
         buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
 
         let data = buffer_slice.get_mapped_range();
         let disparity_data: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
@@ -396,14 +399,14 @@ impl GpuStereoMatcher {
 
         // Upload image data
         self.queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             image.as_raw(),
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(image.width()),
                 rows_per_image: Some(image.height()),
@@ -430,13 +433,13 @@ enum GpuAdapterPolicy {
     NvidiaOnly,
 }
 
-fn select_adapter_by_policy(
+async fn select_adapter_by_policy(
     instance: &wgpu::Instance,
     policy: GpuAdapterPolicy,
 ) -> Option<wgpu::Adapter> {
     const NVIDIA_VENDOR_ID: u32 = 0x10DE;
     let mut best: Option<(i32, wgpu::Adapter)> = None;
-    for adapter in instance.enumerate_adapters(wgpu::Backends::all()) {
+    for adapter in instance.enumerate_adapters(wgpu::Backends::all()).await {
         let info = adapter.get_info();
         let is_nvidia_discrete =
             info.vendor == NVIDIA_VENDOR_ID && info.device_type == wgpu::DeviceType::DiscreteGpu;
@@ -602,14 +605,15 @@ struct StereoParamsGPU {
 pub async fn is_gpu_available() -> bool {
     let instance = wgpu::Instance::default();
     let policy = read_gpu_adapter_policy_from_env().unwrap_or(GpuAdapterPolicy::PreferDiscrete);
-    select_adapter_by_policy(&instance, policy).is_some()
+    select_adapter_by_policy(&instance, policy).await.is_some()
 }
 
 /// Enumerate adapters visible to wgpu on this machine.
-pub fn enumerate_adapters() -> Vec<wgpu::AdapterInfo> {
+pub async fn enumerate_adapters() -> Vec<wgpu::AdapterInfo> {
     let instance = wgpu::Instance::default();
     instance
         .enumerate_adapters(wgpu::Backends::all())
+        .await
         .into_iter()
         .map(|adapter| adapter.get_info())
         .collect()
@@ -647,7 +651,7 @@ mod tests {
         let available = is_gpu_available().await;
         println!("GPU available: {}", available);
 
-        let adapters = enumerate_adapters();
+        let adapters = enumerate_adapters().await;
         for info in &adapters {
             println!(
                 "Adapter: name='{}', type={:?}, backend={:?}",

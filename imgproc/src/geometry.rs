@@ -1,6 +1,7 @@
 use crate::{BorderMode, Interpolation};
 use image::GrayImage;
 use nalgebra::{Matrix3, Point2};
+use rayon::prelude::*;
 
 pub fn get_pixel_bilinear(img: &GrayImage, x: f32, y: f32) -> f32 {
     get_pixel_bilinear_with_border(img, x, y, BorderMode::Constant(0))
@@ -124,14 +125,18 @@ pub fn warp_perspective_ex(
 ) -> GrayImage {
     let mut dst = GrayImage::new(width, height);
 
-    for y in 0..height {
-        for x in 0..width {
-            let pt = Point2::new(x as f32, y as f32);
-            let src_pt = transform_point(matrix, &pt);
-            let val = interpolate_sample(src, src_pt.x, src_pt.y, interpolation, border);
-            dst.put_pixel(x, y, image::Luma([val.clamp(0.0, 255.0) as u8]));
-        }
-    }
+    dst.as_mut()
+        .par_chunks_mut(width as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let y = y as u32;
+            for x in 0..width {
+                let pt = Point2::new(x as f32, y as f32);
+                let src_pt = transform_point(matrix, &pt);
+                let val = interpolate_sample(src, src_pt.x, src_pt.y, interpolation, border);
+                row[x as usize] = val.clamp(0.0, 255.0) as u8;
+            }
+        });
 
     dst
 }
@@ -215,15 +220,19 @@ pub fn remap(
 
     let mut dst = GrayImage::new(width, height);
 
-    for y in 0..height {
-        for x in 0..width {
-            let idx = (y * width + x) as usize;
-            let sx = map_x[idx];
-            let sy = map_y[idx];
-            let val = interpolate_sample(src, sx, sy, interpolation, border);
-            dst.put_pixel(x, y, image::Luma([val.clamp(0.0, 255.0) as u8]));
-        }
-    }
+    dst.as_mut()
+        .par_chunks_mut(width as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let y = y as u32;
+            for x in 0..width {
+                let idx = (y * width + x) as usize;
+                let sx = map_x[idx];
+                let sy = map_y[idx];
+                let val = interpolate_sample(src, sx, sy, interpolation, border);
+                row[x as usize] = val.clamp(0.0, 255.0) as u8;
+            }
+        });
 
     dst
 }

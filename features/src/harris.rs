@@ -1,6 +1,7 @@
 use crate::KeyPoints;
 use cv_core::KeyPoint;
 use image::GrayImage;
+use rayon::prelude::*;
 
 pub fn harris_detect(
     image: &GrayImage,
@@ -11,41 +12,45 @@ pub fn harris_detect(
 ) -> KeyPoints {
     let width = image.width() as i32;
     let height = image.height() as i32;
-    let mut keypoints = KeyPoints::new();
-
+    
     let half_window = 1i32;
 
-    for y in (half_window + 1)..(height - half_window - 1) {
-        for x in (half_window + 1)..(width - half_window - 1) {
-            let mut i_xx = 0.0f64;
-            let mut i_yy = 0.0f64;
-            let mut i_xy = 0.0f64;
+    let kps: Vec<KeyPoint> = (half_window + 1..height - half_window - 1)
+        .into_par_iter()
+        .flat_map(|y| {
+            let mut row_kps = Vec::new();
+            for x in (half_window + 1)..(width - half_window - 1) {
+                let mut i_xx = 0.0f64;
+                let mut i_yy = 0.0f64;
+                let mut i_xy = 0.0f64;
 
-            for by in -half_window..=half_window {
-                for bx in -half_window..=half_window {
-                    let gx = image.get_pixel((x + bx + 1) as u32, (y + by) as u32)[0] as f64
-                        - image.get_pixel((x + bx - 1) as u32, (y + by) as u32)[0] as f64;
-                    let gy = image.get_pixel((x + bx) as u32, (y + by + 1) as u32)[0] as f64
-                        - image.get_pixel((x + bx) as u32, (y + by - 1) as u32)[0] as f64;
+                for by in -half_window..=half_window {
+                    for bx in -half_window..=half_window {
+                        let gx = image.get_pixel((x + bx + 1) as u32, (y + by) as u32)[0] as f64
+                            - image.get_pixel((x + bx - 1) as u32, (y + by) as u32)[0] as f64;
+                        let gy = image.get_pixel((x + bx) as u32, (y + by + 1) as u32)[0] as f64
+                            - image.get_pixel((x + bx) as u32, (y + by - 1) as u32)[0] as f64;
 
-                    i_xx += gx * gx;
-                    i_yy += gy * gy;
-                    i_xy += gx * gy;
+                        i_xx += gx * gx;
+                        i_yy += gy * gy;
+                        i_xy += gx * gy;
+                    }
+                }
+
+                let det = i_xx * i_yy - i_xy * i_xy;
+                let trace = i_xx + i_yy;
+                let response = det - k * trace * trace;
+
+                if response > threshold {
+                    let kp = KeyPoint::new(x as f64, y as f64).with_response(response);
+                    row_kps.push(kp);
                 }
             }
+            row_kps
+        })
+        .collect();
 
-            let det = i_xx * i_yy - i_xy * i_xy;
-            let trace = i_xx + i_yy;
-            let response = det - k * trace * trace;
-
-            if response > threshold {
-                let kp = KeyPoint::new(x as f64, y as f64).with_response(response);
-                keypoints.push(kp);
-            }
-        }
-    }
-
-    keypoints
+    KeyPoints { keypoints: kps }
 }
 
 pub fn shi_tomasi_detect(

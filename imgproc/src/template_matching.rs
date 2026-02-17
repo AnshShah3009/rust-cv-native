@@ -1,4 +1,5 @@
 use image::GrayImage;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateMatchMethod {
@@ -55,68 +56,69 @@ pub fn match_template(
         })
         .sum::<f32>();
 
-    for y in 0..out_h as usize {
-        for x in 0..out_w as usize {
-            let mut sum_i = 0.0f32;
-            let mut sum_i_sq = 0.0f32;
-            let mut cross = 0.0f32;
+    out.par_chunks_mut(out_w as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            for x in 0..out_w as usize {
+                let mut sum_i = 0.0f32;
+                let mut sum_i_sq = 0.0f32;
+                let mut cross = 0.0f32;
 
-            for j in 0..th {
-                let src_row = (y + j) as u32;
-                for i in 0..tw {
-                    let src_col = (x + i) as u32;
-                    let iv = image.get_pixel(src_col, src_row)[0] as f32;
-                    let tv = t_raw[j * tw + i] as f32;
-                    sum_i += iv;
-                    sum_i_sq += iv * iv;
-                    cross += iv * tv;
+                for j in 0..th {
+                    let src_row = (y + j) as u32;
+                    for i in 0..tw {
+                        let src_col = (x + i) as u32;
+                        let iv = image.get_pixel(src_col, src_row)[0] as f32;
+                        let tv = t_raw[j * tw + i] as f32;
+                        sum_i += iv;
+                        sum_i_sq += iv * iv;
+                        cross += iv * tv;
+                    }
                 }
+
+                let n = (tw * th) as f32;
+                let i_mean = sum_i / n;
+
+                row[x] = match method {
+                    TemplateMatchMethod::SqDiff => {
+                        // ||I - T||^2 = ||I||^2 + ||T||^2 - 2 * <I, T>
+                        sum_i_sq + t_sq_sum - 2.0 * cross
+                    }
+                    TemplateMatchMethod::SqDiffNormed => {
+                        let sqdiff = sum_i_sq + t_sq_sum - 2.0 * cross;
+                        let denom = (sum_i_sq * t_sq_sum).sqrt();
+                        if denom > 1e-12 {
+                            sqdiff / denom
+                        } else {
+                            0.0
+                        }
+                    }
+                    TemplateMatchMethod::Ccorr => cross,
+                    TemplateMatchMethod::CcorrNormed => {
+                        let denom = (sum_i_sq * t_sq_sum).sqrt();
+                        if denom > 1e-12 {
+                            cross / denom
+                        } else {
+                            0.0
+                        }
+                    }
+                    TemplateMatchMethod::Ccoeff => {
+                        // sum((I - meanI) * (T - meanT)) = <I,T> - N*meanI*meanT
+                        cross - n * i_mean * t_mean
+                    }
+                    TemplateMatchMethod::CcoeffNormed => {
+                        let coeff = cross - n * i_mean * t_mean;
+                        let i_var = sum_i_sq - n * i_mean * i_mean;
+                        let denom = (i_var * t_var_sum).sqrt();
+                        if denom > 1e-12 {
+                            coeff / denom
+                        } else {
+                            0.0
+                        }
+                    }
+                };
             }
-
-            let n = (tw * th) as f32;
-            let i_mean = sum_i / n;
-            let idx = y * out_w as usize + x;
-
-            out[idx] = match method {
-                TemplateMatchMethod::SqDiff => {
-                    // ||I - T||^2 = ||I||^2 + ||T||^2 - 2 * <I, T>
-                    sum_i_sq + t_sq_sum - 2.0 * cross
-                }
-                TemplateMatchMethod::SqDiffNormed => {
-                    let sqdiff = sum_i_sq + t_sq_sum - 2.0 * cross;
-                    let denom = (sum_i_sq * t_sq_sum).sqrt();
-                    if denom > 1e-12 {
-                        sqdiff / denom
-                    } else {
-                        0.0
-                    }
-                }
-                TemplateMatchMethod::Ccorr => cross,
-                TemplateMatchMethod::CcorrNormed => {
-                    let denom = (sum_i_sq * t_sq_sum).sqrt();
-                    if denom > 1e-12 {
-                        cross / denom
-                    } else {
-                        0.0
-                    }
-                }
-                TemplateMatchMethod::Ccoeff => {
-                    // sum((I - meanI) * (T - meanT)) = <I,T> - N*meanI*meanT
-                    cross - n * i_mean * t_mean
-                }
-                TemplateMatchMethod::CcoeffNormed => {
-                    let coeff = cross - n * i_mean * t_mean;
-                    let i_var = sum_i_sq - n * i_mean * i_mean;
-                    let denom = (i_var * t_var_sum).sqrt();
-                    if denom > 1e-12 {
-                        coeff / denom
-                    } else {
-                        0.0
-                    }
-                }
-            };
-        }
-    }
+        });
 
     MatchResult {
         data: out,

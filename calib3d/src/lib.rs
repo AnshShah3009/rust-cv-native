@@ -704,7 +704,7 @@ pub fn corner_subpix(
     }
     let w = image.width() as i32;
     let h = image.height() as i32;
-    for p in corners.iter_mut() {
+    corners.par_iter_mut().for_each(|p| {
         let mut x = p.x;
         let mut y = p.y;
         for _ in 0..max_iters {
@@ -749,7 +749,7 @@ pub fn corner_subpix(
         }
         p.x = x.clamp(0.0, (image.width() - 1) as f64);
         p.y = y.clamp(0.0, (image.height() - 1) as f64);
-    }
+    });
     Ok(())
 }
 
@@ -1178,26 +1178,29 @@ pub fn init_undistort_rectify_map(
         .unwrap_or(Matrix3::identity());
     let r_inv = rectification.try_inverse().unwrap_or(Matrix3::identity());
 
-    for y in 0..height {
-        for x in 0..width {
-            let dst = Vector3::new(x as f64, y as f64, 1.0);
-            let rectified_norm = k_new_inv * dst;
-            let original_norm = r_inv * rectified_norm;
+    map_x
+        .par_chunks_mut(width as usize)
+        .zip(map_y.par_chunks_mut(width as usize))
+        .enumerate()
+        .for_each(|(y, (row_x, row_y))| {
+            for x in 0..width {
+                let dst = Vector3::new(x as f64, y as f64, 1.0);
+                let rectified_norm = &k_new_inv * dst;
+                let original_norm = &r_inv * rectified_norm;
 
-            if original_norm[2].abs() <= 1e-12 {
-                continue;
+                if original_norm[2].abs() <= 1e-12 {
+                    continue;
+                }
+                let xn = original_norm[0] / original_norm[2];
+                let yn = original_norm[1] / original_norm[2];
+                let (xd, yd) = distortion.apply(xn, yn);
+                let src_x = intrinsics.fx * xd + intrinsics.cx;
+                let src_y = intrinsics.fy * yd + intrinsics.cy;
+
+                row_x[x as usize] = src_x as f32;
+                row_y[x as usize] = src_y as f32;
             }
-            let xn = original_norm[0] / original_norm[2];
-            let yn = original_norm[1] / original_norm[2];
-            let (xd, yd) = distortion.apply(xn, yn);
-            let src_x = intrinsics.fx * xd + intrinsics.cx;
-            let src_y = intrinsics.fy * yd + intrinsics.cy;
-
-            let idx = (y * width + x) as usize;
-            map_x[idx] = src_x as f32;
-            map_y[idx] = src_y as f32;
-        }
-    }
+        });
 
     Ok((map_x, map_y))
 }
