@@ -3,6 +3,7 @@ use geo::algorithm::convex_hull::ConvexHull;
 use geo::algorithm::simplify::Simplify;
 use geo::{Area, BooleanOps, EuclideanDistance, Polygon};
 use ndarray::Array2;
+use rayon::prelude::*;
 use rstar::{PointDistance, RTree, RTreeObject, AABB};
 
 /// Wrapper for a Polygon that implements RTreeObject.
@@ -117,12 +118,18 @@ pub fn buffer(polygon: &Polygon<f64>, distance: f64) -> geo::MultiPolygon<f64> {
 /// Computes IoU between all pairs from boxes1 and boxes2.
 pub fn vectorized_iou(boxes1: &[Rect], boxes2: &[Rect]) -> Array2<f32> {
     let mut ious = Array2::zeros((boxes1.len(), boxes2.len()));
+    let n2 = boxes2.len();
 
-    for (i, b1) in boxes1.iter().enumerate() {
+    // Use raw data pointer or simple indexing if Array2 is not being cooperative with par_iter
+    let ious_raw = ious.as_slice_mut().unwrap();
+    
+    ious_raw.par_chunks_mut(n2).enumerate().for_each(|(i, row)| {
+        let b1 = &boxes1[i];
         for (j, b2) in boxes2.iter().enumerate() {
-            ious[[i, j]] = b1.iou(b2);
+            row[j] = b1.iou(b2);
         }
-    }
+    });
+    
     ious
 }
 
@@ -148,13 +155,17 @@ pub fn polygon_iou(p1: &Polygon<f64>, p2: &Polygon<f64>) -> f64 {
 /// Vectorized Polygon IoU.
 pub fn vectorized_polygon_iou(polys1: &[Polygon<f64>], polys2: &[Polygon<f64>]) -> Array2<f64> {
     let mut ious = Array2::zeros((polys1.len(), polys2.len()));
+    let n2 = polys2.len();
 
-    // TODO: parallelize with rayon
-    for (i, p1) in polys1.iter().enumerate() {
+    let ious_raw = ious.as_slice_mut().unwrap();
+
+    ious_raw.par_chunks_mut(n2).enumerate().for_each(|(i, row)| {
+        let p1 = &polys1[i];
         for (j, p2) in polys2.iter().enumerate() {
-            ious[[i, j]] = polygon_iou(p1, p2);
+            row[j] = polygon_iou(p1, p2);
         }
-    }
+    });
+    
     ious
 }
 

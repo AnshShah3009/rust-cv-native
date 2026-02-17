@@ -4,6 +4,7 @@
 
 use cv_core::point_cloud::PointCloud;
 use nalgebra::{Point3, Vector3};
+use rayon::prelude::*;
 
 /// Triangle mesh with vertices and face indices
 #[derive(Debug, Clone)]
@@ -44,7 +45,7 @@ impl TriangleMesh {
     /// Compute face normals
     pub fn compute_face_normals(&self) -> Vec<Vector3<f32>> {
         self.faces
-            .iter()
+            .par_iter()
             .map(|face| {
                 let v0 = self.vertices[face[0]];
                 let v1 = self.vertices[face[1]];
@@ -101,18 +102,19 @@ impl TriangleMesh {
 
     /// Calculate surface area
     pub fn surface_area(&self) -> f32 {
-        let mut area = 0.0;
-        for face in &self.faces {
-            let v0 = self.vertices[face[0]];
-            let v1 = self.vertices[face[1]];
-            let v2 = self.vertices[face[2]];
+        self.faces
+            .par_iter()
+            .map(|face| {
+                let v0 = self.vertices[face[0]];
+                let v1 = self.vertices[face[1]];
+                let v2 = self.vertices[face[2]];
 
-            let e1 = v1 - v0;
-            let e2 = v2 - v0;
+                let e1 = v1 - v0;
+                let e2 = v2 - v0;
 
-            area += e1.cross(&e2).norm() * 0.5;
-        }
-        area
+                e1.cross(&e2).norm() * 0.5
+            })
+            .sum()
     }
 
     /// Convert to point cloud (vertex positions)

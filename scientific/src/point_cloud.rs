@@ -1,5 +1,8 @@
 use cv_core::PointCloud;
 use nalgebra::{Matrix3, Point3, SymmetricEigen, Vector3};
+use rand::prelude::IteratorRandom;
+use rayon::prelude::*;
+use rstar::PointDistance;
 use rstar::{RTree, RTreeObject, AABB};
 use std::collections::HashMap;
 use std::fs::File;
@@ -113,18 +116,14 @@ pub fn estimate_normals(pc: &mut PointCloud, k: usize) {
         .collect();
 
     let tree = RTree::bulk_load(wrappers);
-    let mut normals = Vec::with_capacity(pc.len());
-
-    for p in &pc.points {
+    
+    let normals: Vec<Vector3<f32>> = pc.points.par_iter().map(|p| {
         let query_point = [p.x, p.y, p.z];
-        // nearest_neighbor_iter returns neighbors sorted by distance? No, usually not guaranteed sorted.
-        // We just need k neighbors.
         let neighbors: Vec<&PointWrapper> =
             tree.nearest_neighbor_iter(&query_point).take(k).collect();
 
         if neighbors.len() < 3 {
-            normals.push(Vector3::new(0.0, 0.0, 1.0)); // Default up
-            continue;
+            return Vector3::new(0.0, 0.0, 1.0); // Default up
         }
 
         // Compute centroid
@@ -143,7 +142,6 @@ pub fn estimate_normals(pc: &mut PointCloud, k: usize) {
         cov /= neighbors.len() as f32;
 
         // SVD / Eigen decomposition
-        // We want the eigenvector corresponding to the smallest eigenvalue.
         let eigen = SymmetricEigen::new(cov);
 
         // Find index of smallest eigenvalue explicitly to be robust
@@ -157,9 +155,8 @@ pub fn estimate_normals(pc: &mut PointCloud, k: usize) {
             }
         }
 
-        let normal = eigen.eigenvectors.column(min_idx).into_owned();
-        normals.push(normal);
-    }
+        eigen.eigenvectors.column(min_idx).into_owned()
+    }).collect();
 
     pc.normals = Some(normals);
 }
@@ -328,10 +325,6 @@ pub fn read_ply(path: &str) -> std::io::Result<PointCloud> {
     })
 }
 
-// Add helper imports
-use rand::seq::IndexedRandom;
-use rstar::PointDistance;
-
 /// Remove statistical outliers.
 /// Compute mean distance to `k` neighbors for each point.
 /// Points with mean distance > global_mean + std_ratio * std_dev are removed.
@@ -352,9 +345,7 @@ pub fn remove_statistical_outliers(
         .collect();
     let tree = RTree::bulk_load(wrappers);
 
-    let mut distances = Vec::with_capacity(pc.len());
-
-    for p in &pc.points {
+    let distances: Vec<f32> = pc.points.par_iter().map(|p| {
         let query_point = [p.x, p.y, p.z];
         // nearest_neighbor_iter returns k+1 including itself (dist 0).
         // take(k+1) gives nearest neighbors.
@@ -375,11 +366,11 @@ pub fn remove_statistical_outliers(
         }
 
         if count > 0 {
-            distances.push(sum_dist / count as f32);
+            sum_dist / count as f32
         } else {
-            distances.push(0.0);
+            0.0
         }
-    }
+    }).collect();
 
     let mean_dist =
         crate::mean(&distances.iter().map(|&d| d as f64).collect::<Vec<_>>()).unwrap_or(0.0) as f32;
@@ -396,7 +387,7 @@ pub fn remove_statistical_outliers(
 
     let threshold = mean_dist + std_ratio as f32 * std_dev;
 
-    let mut inliers = Vec::new();
+    let mut inliers: Vec<usize> = Vec::new();
     let mut new_points = Vec::new();
     let mut new_colors = if pc.colors.is_some() {
         Some(Vec::new())
@@ -455,7 +446,17 @@ pub fn remove_radius_outliers(
         .collect();
     let tree = RTree::bulk_load(wrappers);
 
-    let mut inliers = Vec::new();
+    let r2 = radius * radius;
+
+    let inlier_mask: Vec<bool> = pc.points.par_iter().map(|p| {
+        let query_point = [p.x, p.y, p.z];
+        // locate_within_distance uses squared distance
+        let count = tree.locate_within_distance(query_point, r2).count();
+        // count includes self.
+        count >= min_points
+    }).collect();
+
+    let mut inliers: Vec<usize> = Vec::new();
     let mut new_points = Vec::new();
     let mut new_colors = if pc.colors.is_some() {
         Some(Vec::new())
@@ -467,17 +468,11 @@ pub fn remove_radius_outliers(
     } else {
         None
     };
-    let r2 = radius * radius;
 
-    for (i, p) in pc.points.iter().enumerate() {
-        let query_point = [p.x, p.y, p.z];
-        // locate_within_distance uses squared distance
-        let count = tree.locate_within_distance(query_point, r2).count();
-
-        // count includes self.
-        if count >= min_points {
+    for (i, &is_inlier) in inlier_mask.iter().enumerate() {
+        if is_inlier {
             inliers.push(i);
-            new_points.push(*p);
+            new_points.push(pc.points[i]);
             if let Some(c) = &pc.colors {
                 if let Some(nc) = &mut new_colors {
                     nc.push(c[i]);
@@ -514,53 +509,53 @@ pub fn segment_plane(
         return (None, Vec::new());
     }
 
-    let mut rng = rand::rng();
-    let mut best_plane = None;
-    let mut best_inliers = Vec::new();
+    // Parallelize iterations
+    let best = (0..num_iterations)
+        .into_par_iter()
+        .map(|_| {
+            let mut rng = rand::rng();
+            // Sample random points
+            let sample_indices: Vec<usize> = (0..pc.points.len()).sample(&mut rng, ransac_n);
 
-    // Indices for sampling
-    let indices: Vec<usize> = (0..pc.points.len()).collect();
+            let p1 = pc.points[sample_indices[0]];
+            let p2 = pc.points[sample_indices[1]];
+            let p3 = pc.points[sample_indices[2]];
 
-    for _ in 0..num_iterations {
-        // Sample random points
-        // Use sample instead of deprecated choose_multiple
-        let sample_indices: Vec<usize> = indices.sample(&mut rng, ransac_n).cloned().collect();
+            let v1 = p2 - p1;
+            let v2 = p3 - p1;
+            let normal = v1.cross(&v2).normalize();
 
-        // Fit plane to 3 points (or more using least squares if n > 3, but strict RANSAC uses minimal set)
-        // Let's use first 3 points for minimal model.
-        let p1 = pc.points[sample_indices[0]];
-        let p2 = pc.points[sample_indices[1]];
-        let p3 = pc.points[sample_indices[2]];
-
-        let v1 = p2 - p1;
-        let v2 = p3 - p1;
-        let normal = v1.cross(&v2).normalize();
-
-        if normal.x.is_nan() || normal.y.is_nan() || normal.z.is_nan() {
-            continue;
-        }
-
-        let d = -normal.dot(&p1.coords);
-        let a = normal.x;
-        let b = normal.y;
-        let c = normal.z;
-
-        // Count inliers
-        let mut current_inliers = Vec::new();
-        for (i, p) in pc.points.iter().enumerate() {
-            let dist = (a * p.x + b * p.y + c * p.z + d).abs() / (a * a + b * b + c * c).sqrt();
-            if dist < distance_threshold {
-                current_inliers.push(i);
+            if normal.x.is_nan() || normal.y.is_nan() || normal.z.is_nan() {
+                return (None, Vec::new());
             }
-        }
 
-        if current_inliers.len() > best_inliers.len() {
-            best_inliers = current_inliers;
-            best_plane = Some([a, b, c, d]);
-        }
-    }
+            let d = -normal.dot(&p1.coords);
+            let a = normal.x;
+            let b = normal.y;
+            let c = normal.z;
 
-    (best_plane, best_inliers)
+            // Count inliers
+            let mut current_inliers = Vec::new();
+            for (i, p) in pc.points.iter().enumerate() {
+                let dist = (a * p.x + b * p.y + c * p.z + d).abs() / (a * a + b * b + c * c).sqrt();
+                if dist < distance_threshold {
+                    current_inliers.push(i);
+                }
+            }
+            (Some([a, b, c, d]), current_inliers)
+        })
+        .reduce(
+            || (None, Vec::new()),
+            |a, b| {
+                if b.1.len() > a.1.len() {
+                    b
+                } else {
+                    a
+                }
+            },
+        );
+
+    best
 }
 
 /// DBSCAN clustering.

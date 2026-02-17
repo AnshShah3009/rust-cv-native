@@ -8,6 +8,7 @@
 
 use super::TriangleMesh;
 use nalgebra::Point3;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 /// Laplacian smoothing: Move each vertex toward the average of its neighbors
@@ -29,9 +30,9 @@ pub fn laplacian_smooth(mesh: &mut TriangleMesh, iterations: usize, lambda: f32)
         // Compute new positions
         let mut new_positions = mesh.vertices.clone();
 
-        for (i, vertex) in new_positions.iter_mut().enumerate() {
+        new_positions.par_iter_mut().enumerate().for_each(|(i, vertex)| {
             if neighbors[i].is_empty() {
-                continue;
+                return;
             }
 
             let mut centroid = Point3::origin();
@@ -43,7 +44,7 @@ pub fn laplacian_smooth(mesh: &mut TriangleMesh, iterations: usize, lambda: f32)
             // Move vertex toward centroid
             let displacement = centroid - mesh.vertices[i];
             *vertex = mesh.vertices[i] + displacement * lambda;
-        }
+        });
 
         mesh.vertices = new_positions;
     }
@@ -146,18 +147,26 @@ pub fn simplify_vertex_clustering(mesh: &mut TriangleMesh, voxel_size: f32) {
     }
 
     // Create representative vertices for each cluster
-    let mut new_vertices: Vec<Point3<f32>> = Vec::new();
+    let mut cluster_vec: Vec<Vec<usize>> = cluster_map.into_values().collect();
     let mut vertex_remap: Vec<usize> = vec![0; mesh.vertices.len()];
 
-    for (cluster_indices, new_idx) in cluster_map.values().zip(0..) {
-        let mut centroid = Point3::origin();
-        for &idx in cluster_indices {
-            centroid += mesh.vertices[idx].coords;
-        }
-        centroid /= cluster_indices.len() as f32;
+    let new_vertices: Vec<Point3<f32>> = cluster_vec
+        .par_iter_mut()
+        .map(|cluster_indices| {
+            let mut centroid = Point3::origin();
+            for &idx in cluster_indices.iter() {
+                centroid += mesh.vertices[idx].coords;
+            }
+            centroid /= cluster_indices.len() as f32;
 
-        new_vertices.push(centroid);
+            // We can't easily update vertex_remap in parallel without unsafe or a separate pass
+            // So we'll do it in a separate pass or just accept this part being parallel.
+            centroid
+        })
+        .collect();
 
+    // Fill vertex_remap (serial pass is fast enough for remapping)
+    for (new_idx, cluster_indices) in cluster_vec.iter().enumerate() {
         for &idx in cluster_indices {
             vertex_remap[idx] = new_idx;
         }

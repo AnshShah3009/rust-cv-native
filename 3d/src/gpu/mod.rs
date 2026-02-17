@@ -6,6 +6,7 @@
 use cv_hal::gpu::GpuContext;
 use cv_hal::gpu_kernels::unified::{should_use_gpu, ComputeConfig};
 use nalgebra::{Matrix4, Point3, Vector3};
+use rayon::prelude::*;
 
 /// Compute mode selection for algorithms
 #[derive(Debug, Clone, Copy, Default)]
@@ -109,7 +110,6 @@ impl NormalComputeConfig {
 /// GPU-accelerated point cloud operations
 pub mod point_cloud {
     use super::*;
-    use rayon::prelude::*;
 
     /// Transform point cloud using GPU
     pub fn transform(points: &[Point3<f32>], transform: &Matrix4<f32>) -> Vec<Point3<f32>> {
@@ -867,8 +867,8 @@ pub mod raycasting {
         let mesh =
             TriangleMesh::with_vertices_and_faces(mesh_vertices.to_vec(), mesh_faces.to_vec());
         ray_origins
-            .iter()
-            .zip(ray_directions.iter())
+            .par_iter()
+            .zip(ray_directions.par_iter())
             .map(|(origin, dir)| {
                 let ray = Ray::new(*origin, *dir);
                 cast_ray_mesh(&ray, &mesh).map(|hit| (hit.distance, hit.point, hit.normal))
@@ -889,7 +889,6 @@ pub mod raycasting {
 /// GPU-accelerated point cloud filtering
 pub mod filtering {
     use super::*;
-    use rayon::prelude::*;
 
     /// Statistical Outlier Removal (SOR)
     /// Removes points that are further than std_ratio * std_dev from their k nearest neighbors
@@ -1183,7 +1182,6 @@ pub mod filtering {
 /// GPU-accelerated clustering
 pub mod clustering {
     use super::*;
-    use rayon::prelude::*;
 
     /// DBSCAN Clustering
     /// Returns cluster labels (-1 for noise)
