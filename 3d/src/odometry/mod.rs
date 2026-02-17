@@ -4,6 +4,7 @@
 //! Implements multi-scale odometry with different loss functions.
 
 use nalgebra::{Matrix3, Matrix4, Point3, Vector3};
+use rayon::prelude::*;
 
 /// RGBD Odometry result
 #[derive(Debug, Clone)]
@@ -85,7 +86,7 @@ pub fn compute_rgbd_odometry(
         };
 
         if let Some(result) = scale_result {
-            transformation = result.transformation * transformation;
+            transformation = result.transformation;
         }
     }
 
@@ -123,59 +124,67 @@ fn compute_point_to_plane(
         compute_vertex_normal_map(target_depth, intrinsics, width, height);
 
     for _ in 0..max_iterations {
-        // Build linear system
-        let mut ata = Matrix3::<f32>::zeros();
-        let mut atb = Vector3::<f32>::zeros();
-        let mut total_residual = 0.0;
-        let mut valid_points = 0;
+        // Build linear system in parallel
+        let (ata, atb, current_total_residual, valid_points) = (0..height)
+            .into_par_iter()
+            .map(|v| {
+                let mut local_ata = Matrix3::<f32>::zeros();
+                let mut local_atb = Vector3::<f32>::zeros();
+                let mut local_residual = 0.0;
+                let mut local_valid = 0;
 
-        for v in 0..height {
-            for u in 0..width {
-                let idx = v * width + u;
-                let depth = source_depth[idx];
+                for u in 0..width {
+                    let idx = v * width + u;
+                    let depth = source_depth[idx];
 
-                if depth <= 0.0 {
-                    continue;
+                    if depth <= 0.0 {
+                        continue;
+                    }
+
+                    // Backproject source point
+                    let x = (u as f32 - intrinsics.cx) * depth / intrinsics.fx;
+                    let y = (v as f32 - intrinsics.cy) * depth / intrinsics.fy;
+                    let z = depth;
+                    let source_point = Point3::new(x, y, z);
+
+                    // Transform to target frame
+                    let target_point = transformation.transform_point(&source_point);
+
+                    // Project to target image
+                    let tu = (target_point.x * intrinsics.fx / target_point.z + intrinsics.cx) as i32;
+                    let tv = (target_point.y * intrinsics.fy / target_point.z + intrinsics.cy) as i32;
+
+                    if tu < 0 || tu >= width as i32 || tv < 0 || tv >= height as i32 {
+                        continue;
+                    }
+
+                    let tidx = (tv as usize) * width + (tu as usize);
+                    let target_vertex = target_vertices[tidx];
+                    let target_normal = target_normals[tidx];
+
+                    if target_vertex.z <= 0.0 {
+                        continue;
+                    }
+
+                    // Point-to-plane error
+                    let residual = (target_point - target_vertex).dot(&target_normal);
+
+                    // Jacobian (simplified for translation only)
+                    let jacobian = target_normal;
+
+                    local_ata += jacobian * jacobian.transpose();
+                    local_atb += jacobian * residual;
+                    local_residual += residual * residual;
+                    local_valid += 1;
                 }
+                (local_ata, local_atb, local_residual, local_valid)
+            })
+            .reduce(
+                || (Matrix3::zeros(), Vector3::zeros(), 0.0, 0),
+                |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2, a.3 + b.3),
+            );
 
-                // Backproject source point
-                let x = (u as f32 - intrinsics.cx) * depth / intrinsics.fx;
-                let y = (v as f32 - intrinsics.cy) * depth / intrinsics.fy;
-                let z = depth;
-                let source_point = Point3::new(x, y, z);
-
-                // Transform to target frame
-                let target_point = transformation.transform_point(&source_point);
-
-                // Project to target image
-                let tu = (target_point.x * intrinsics.fx / target_point.z + intrinsics.cx) as i32;
-                let tv = (target_point.y * intrinsics.fy / target_point.z + intrinsics.cy) as i32;
-
-                if tu < 0 || tu >= width as i32 || tv < 0 || tv >= height as i32 {
-                    continue;
-                }
-
-                let tidx = (tv as usize) * width + (tu as usize);
-                let target_vertex = target_vertices[tidx];
-                let target_normal = target_normals[tidx];
-
-                if target_vertex.z <= 0.0 {
-                    continue;
-                }
-
-                // Point-to-plane error
-                let residual = (target_point - target_vertex).dot(&target_normal);
-
-                // Jacobian (simplified for translation only)
-                // Full implementation would include rotation
-                let jacobian = target_normal;
-
-                ata += jacobian * jacobian.transpose();
-                atb += jacobian * residual;
-                total_residual += residual * residual;
-                valid_points += 1;
-            }
-        }
+        let _ = current_total_residual; // Use it if needed for convergence check
 
         if valid_points < 100 {
             return None;
@@ -238,14 +247,14 @@ fn downsample_depth(input: &[f32], width: usize, height: usize, scale: f32) -> V
     let new_height = (height as f32 * scale) as usize;
     let mut output = vec![0.0; new_width * new_height];
 
-    for y in 0..new_height {
+    output.par_chunks_mut(new_width).enumerate().for_each(|(y, row)| {
         for x in 0..new_width {
             let src_x = (x as f32 / scale) as usize;
             let src_y = (y as f32 / scale) as usize;
             let src_idx = (src_y.min(height - 1)) * width + (src_x.min(width - 1));
-            output[y * new_width + x] = input[src_idx];
+            row[x] = input[src_idx];
         }
-    }
+    });
 
     output
 }
@@ -260,37 +269,38 @@ fn compute_vertex_normal_map(
     let mut vertices = vec![Point3::origin(); width * height];
     let mut normals = vec![Vector3::zeros(); width * height];
 
-    // Compute vertices
-    for y in 0..height {
-        for x in 0..width {
-            let idx = y * width + x;
-            let z = depth[idx];
+    // Compute vertices in parallel
+    vertices.par_iter_mut().enumerate().for_each(|(idx, v)| {
+        let x = (idx % width) as f32;
+        let y = (idx / width) as f32;
+        let z = depth[idx];
 
-            if z > 0.0 {
-                let vx = (x as f32 - intrinsics.cx) * z / intrinsics.fx;
-                let vy = (y as f32 - intrinsics.cy) * z / intrinsics.fy;
-                vertices[idx] = Point3::new(vx, vy, z);
-            }
+        if z > 0.0 {
+            let vx = (x - intrinsics.cx) * z / intrinsics.fx;
+            let vy = (y - intrinsics.cy) * z / intrinsics.fy;
+            *v = Point3::new(vx, vy, z);
         }
-    }
+    });
 
-    // Compute normals using central differences
-    for y in 1..height - 1 {
+    // Compute normals using central differences in parallel
+    let vertices_ref = &vertices;
+    normals.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
+        if y == 0 || y == height - 1 { return; }
         for x in 1..width - 1 {
             let idx = y * width + x;
 
-            let left = vertices[idx - 1];
-            let right = vertices[idx + 1];
-            let up = vertices[(y - 1) * width + x];
-            let down = vertices[(y + 1) * width + x];
+            let left = vertices_ref[idx - 1];
+            let right = vertices_ref[idx + 1];
+            let up = vertices_ref[(y - 1) * width + x];
+            let down = vertices_ref[(y + 1) * width + x];
 
             if left.z > 0.0 && right.z > 0.0 && up.z > 0.0 && down.z > 0.0 {
                 let dx = right.coords - left.coords;
                 let dy = down.coords - up.coords;
-                normals[idx] = dx.cross(&dy).normalize();
+                row[x] = dx.cross(&dy).normalize();
             }
         }
-    }
+    });
 
     (vertices, normals)
 }
@@ -304,39 +314,42 @@ fn evaluate_odometry(
     height: usize,
     transformation: &Matrix4<f32>,
 ) -> (f32, f32) {
-    let mut total_error = 0.0;
-    let mut valid_points = 0;
+    let (total_error, valid_points) = (0..height)
+        .into_par_iter()
+        .map(|v| {
+            let mut local_error = 0.0;
+            let mut local_valid = 0;
+            for u in 0..width {
+                let idx = v * width + u;
+                let depth = source_depth[idx];
 
-    for v in 0..height {
-        for u in 0..width {
-            let idx = v * width + u;
-            let depth = source_depth[idx];
+                if depth <= 0.0 {
+                    continue;
+                }
 
-            if depth <= 0.0 {
-                continue;
-            }
+                let x = (u as f32 - intrinsics.cx) * depth / intrinsics.fx;
+                let y = (v as f32 - intrinsics.cy) * depth / intrinsics.fy;
+                let z = depth;
+                let point = Point3::new(x, y, z);
 
-            let x = (u as f32 - intrinsics.cx) * depth / intrinsics.fx;
-            let y = (v as f32 - intrinsics.cy) * depth / intrinsics.fy;
-            let z = depth;
-            let point = Point3::new(x, y, z);
+                let transformed = transformation.transform_point(&point);
+                let tu = (transformed.x * intrinsics.fx / transformed.z + intrinsics.cx) as i32;
+                let tv = (transformed.y * intrinsics.fy / transformed.z + intrinsics.cy) as i32;
 
-            let transformed = transformation.transform_point(&point);
-            let tu = (transformed.x * intrinsics.fx / transformed.z + intrinsics.cx) as i32;
-            let tv = (transformed.y * intrinsics.fy / transformed.z + intrinsics.cy) as i32;
+                if tu >= 0 && tu < width as i32 && tv >= 0 && tv < height as i32 {
+                    let tidx = (tv as usize) * width + (tu as usize);
+                    let target_z = target_depth[tidx];
 
-            if tu >= 0 && tu < width as i32 && tv >= 0 && tv < height as i32 {
-                let tidx = (tv as usize) * width + (tu as usize);
-                let target_z = target_depth[tidx];
-
-                if target_z > 0.0 {
-                    let error = (transformed.z - target_z).abs();
-                    total_error += error * error;
-                    valid_points += 1;
+                    if target_z > 0.0 {
+                        let error = (transformed.z - target_z).abs();
+                        local_error += error * error;
+                        local_valid += 1;
+                    }
                 }
             }
-        }
-    }
+            (local_error, local_valid)
+        })
+        .reduce(|| (0.0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
 
     if valid_points == 0 {
         return (0.0, 0.0);
