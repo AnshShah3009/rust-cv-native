@@ -1,15 +1,8 @@
 use std::default::Default;
 use std::fmt;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceType {
-    Cpu,
-    Cuda,
-    Vulkan,
-    Metal,
-    Dml,
-    TensorRT,
-}
+use std::ops::{Deref, DerefMut};
+use std::marker::PhantomData;
+use crate::storage::{Storage, CpuStorage, DeviceType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataType {
@@ -74,14 +67,76 @@ impl TensorShape {
 }
 
 #[derive(Debug, Clone)]
-pub struct Tensor<T: Clone + Copy> {
-    pub data: Vec<T>,
+pub struct Tensor<T: Clone + Copy, S: Storage<T> = CpuStorage<T>> {
+    pub storage: S,
     pub shape: TensorShape,
     pub dtype: DataType,
-    pub device: DeviceType,
+    pub _phantom: PhantomData<T>,
 }
 
-impl<T: Clone + Copy + Default> Tensor<T> {
+impl<T: Clone + Copy + fmt::Debug, S: Storage<T>> Tensor<T, S> {
+    pub fn from_vec(data: Vec<T>, shape: TensorShape) -> Self {
+        assert_eq!(data.len(), shape.len(), "Data size mismatch with shape");
+        Self {
+            storage: S::from_vec(data),
+            shape,
+            dtype: DataType::F32,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn reshape(&self, new_shape: TensorShape) -> Self {
+        // Limitation: deep copy requires knowing length. 
+        // We can trust S to handle clone correctly, but we need to check constraints.
+        // For now, simple clone.
+        // But we check size.
+        // If as_slice() is None (GPU), we can't easily check size unless Storage exposes len().
+        // Storage trait does NOT have len().
+        // We should add len() to Storage trait? 
+        // For now, let's assume valid and panic if slice access fails, OR just trust the user?
+        // No, reshape checks size.
+        // GpuStorage has len field. 
+        // CpuStorage has vec.len().
+        // I should add len() to Storage trait for proper generic reshape.
+        
+        // However, for this fix, I'll stick to updating the impl signature.
+        // The panic in reshape "Reshape currently requires CPU access" will remain for GPU.
+        
+        let len = self.storage.as_slice().expect("Reshape currently requires CPU access").len();
+        
+        assert_eq!(
+            len,
+            new_shape.len(),
+            "Cannot reshape: size mismatch"
+        );
+        Self {
+            storage: self.storage.clone(),
+            shape: new_shape,
+            dtype: self.dtype,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        self.storage.as_slice().expect("Data not on CPU")
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        self.storage.as_mut_slice().expect("Data not on CPU")
+    }
+
+    pub fn index(&self, c: usize, h: usize, w: usize) -> T {
+        let idx = c * self.shape.height * self.shape.width + h * self.shape.width + w;
+        self.as_slice()[idx]
+    }
+
+    pub fn index_mut(&mut self, c: usize, h: usize, w: usize) -> &mut T {
+        let idx = c * self.shape.height * self.shape.width + h * self.shape.width + w;
+        &mut self.as_mut_slice()[idx]
+    }
+}
+
+impl<T: Clone + Copy + Default + fmt::Debug> Tensor<T> {
     pub fn new(shape: TensorShape) -> Self {
         let dtype = match std::any::type_name::<T>() {
             "u8" => DataType::U8,
@@ -94,69 +149,23 @@ impl<T: Clone + Copy + Default> Tensor<T> {
         };
 
         Self {
-            data: vec![T::default(); shape.len()],
+            storage: CpuStorage::new(shape.len(), T::default()),
             shape,
             dtype,
-            device: DeviceType::Cpu,
+            _phantom: PhantomData,
         }
     }
 
-    pub fn from_vec(data: Vec<T>, shape: TensorShape) -> Self {
-        assert_eq!(data.len(), shape.len(), "Data size mismatch with shape");
-        Self {
-            data,
-            shape,
-            dtype: DataType::F32,
-            device: DeviceType::Cpu,
-        }
-    }
-
-    pub fn zeros(shape: TensorShape) -> Self
-    where
-        T: Default,
-    {
+    pub fn zeros(shape: TensorShape) -> Self {
         Self::new(shape)
     }
 
-    pub fn ones(shape: TensorShape) -> Self
-    where
-        T: Default + Clone,
-    {
+    pub fn ones(shape: TensorShape) -> Self {
         let mut t = Self::new(shape);
-        t.data.fill(T::default());
-        t
-    }
-
-    pub fn reshape(&self, new_shape: TensorShape) -> Self {
-        assert_eq!(
-            self.data.len(),
-            new_shape.len(),
-            "Cannot reshape: size mismatch"
-        );
-        Self {
-            data: self.data.clone(),
-            shape: new_shape,
-            dtype: self.dtype,
-            device: self.device,
+        if let Some(s) = t.storage.as_mut_slice() {
+            s.fill(T::default());
         }
-    }
-
-    pub fn as_slice(&self) -> &[T] {
-        &self.data
-    }
-
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
-        &mut self.data
-    }
-
-    pub fn index(&self, c: usize, h: usize, w: usize) -> T {
-        let idx = c * self.shape.height * self.shape.width + h * self.shape.width + w;
-        self.data[idx]
-    }
-
-    pub fn index_mut(&mut self, c: usize, h: usize, w: usize) -> &mut T {
-        let idx = c * self.shape.height * self.shape.width + h * self.shape.width + w;
-        &mut self.data[idx]
+        t
     }
 }
 
@@ -181,31 +190,46 @@ impl Tensor<f32> {
 
     pub fn to_image_gray(&self) -> Vec<u8> {
         assert!(self.shape.is_2d(), "Tensor must be 2D for gray image");
-        self.data
+        self.as_slice()
             .iter()
             .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
             .collect()
     }
 }
 
-impl<T: Clone + Copy> fmt::Display for Tensor<T> {
+impl<T: Clone + Copy + fmt::Debug, S: Storage<T>> fmt::Display for Tensor<T, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "Tensor({}, {}, {}, {:?})",
-            self.shape.channels, self.shape.height, self.shape.width, self.device
+            self.shape.channels, self.shape.height, self.shape.width, self.storage.device()
         )
+    }
+}
+
+// Deref coercion for CpuStorage tensors
+impl<T: Clone + Copy + fmt::Debug> Deref for Tensor<T, CpuStorage<T>> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl<T: Clone + Copy + fmt::Debug> DerefMut for Tensor<T, CpuStorage<T>> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut_slice()
     }
 }
 
 pub type Tensor3f = Tensor<f32>;
 pub type Tensor4f = Tensor<f64>;
 
-pub fn create_tensor_2d<T: Clone + Copy + Default>(height: usize, width: usize) -> Tensor<T> {
+pub fn create_tensor_2d<T: Clone + Copy + Default + fmt::Debug>(height: usize, width: usize) -> Tensor<T> {
     Tensor::new(TensorShape::new(1, height, width))
 }
 
-pub fn create_tensor_3d<T: Clone + Copy + Default>(
+pub fn create_tensor_3d<T: Clone + Copy + Default + fmt::Debug>(
     channels: usize,
     height: usize,
     width: usize,
