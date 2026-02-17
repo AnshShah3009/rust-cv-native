@@ -56,6 +56,20 @@ impl GpuContext {
         })
     }
 
+    /// Check if a GPU is available.
+    pub fn is_available() -> bool {
+        block_on(Self::is_available_async())
+    }
+
+    /// Check if a GPU is available asynchronously.
+    pub async fn is_available_async() -> bool {
+        let instance = Instance::new(&wgpu::InstanceDescriptor {
+            backends: Backends::all(),
+            ..Default::default()
+        });
+        !instance.enumerate_adapters(Backends::all()).await.is_empty()
+    }
+
     /// Enumerate all available adapters.
     pub async fn enumerate_adapters() -> Vec<wgpu::Adapter> {
         let instance = Instance::new(&wgpu::InstanceDescriptor {
@@ -65,13 +79,38 @@ impl GpuContext {
         instance.enumerate_adapters(Backends::all()).await
     }
     
+    /// Get reference to device (convenience method)
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
+    /// Get reference to queue (convenience method)
+    pub fn queue(&self) -> &Queue {
+        &self.queue
+    }
+
+    /// Get Arc to device
+    pub fn device_arc(&self) -> Arc<Device> {
+        self.device.clone()
+    }
+
+    /// Get Arc to queue
+    pub fn queue_arc(&self) -> Arc<Queue> {
+        self.queue.clone()
+    }
+
+    /// Submit a command encoder (convenience method)
+    pub fn submit(&self, encoder: wgpu::CommandEncoder) {
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
     /// Create a simplified compute pipeline.
     pub fn create_compute_pipeline(&self, shader_source: &str, entry_point: &str) -> wgpu::ComputePipeline {
         let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Compute Shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
-        
+
         self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Compute Pipeline"),
             layout: None,

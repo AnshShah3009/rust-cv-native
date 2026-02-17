@@ -51,6 +51,7 @@ members = [
     "runtime",
     "optimize",
     "scientific",
+    "point-cloud",
     "python",
     "viewer",
     "io",

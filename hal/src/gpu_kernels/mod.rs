@@ -8,14 +8,19 @@ use wgpu::{
 };
 use nalgebra::Vector3;
 use std::sync::Arc;
+use crate::gpu::GpuContext;
 
-/// GPU Compute Context
+/// GPU Compute Context (Deprecated: Use GpuContext instead)
+#[deprecated(since = "0.1.1", note = "Use cv_hal::gpu::GpuContext directly instead")]
 pub struct GpuCompute {
     device: Arc<Device>,
     queue: Arc<Queue>,
 }
 
+#[allow(deprecated)]
 impl GpuCompute {
+    /// Create a new GpuCompute from Device and Queue (Deprecated)
+    #[deprecated(since = "0.1.1", note = "Use cv_hal::gpu::GpuContext::new() instead")]
     pub fn new(device: Arc<Device>, queue: Arc<Queue>) -> Self {
         Self { device, queue }
     }
@@ -59,6 +64,18 @@ pub mod shaders {
             shaders.insert(
                 "pointcloud_normals",
                 include_str!("pointcloud_normals.wgsl"),
+            );
+
+            // Point cloud normals - fast GPU
+            shaders.insert(
+                "pointcloud_normals_fast_gpu",
+                include_str!("pointcloud_normals_fast_gpu.wgsl"),
+            );
+
+            // Point cloud normals - Morton code optimized
+            shaders.insert(
+                "pointcloud_normals_morton",
+                include_str!("pointcloud_normals_morton.wgsl"),
             );
 
             // TSDF integration
@@ -377,6 +394,16 @@ pub mod pointcloud_gpu {
         Err(crate::Error::not_supported("GPU point cloud transform"))
     }
 
+    /// Compute normals using fast GPU implementation
+    pub fn compute_normals_fast_gpu(
+        gpu: &GpuCompute,
+        points: &[Vector3<f32>],
+        k_neighbors: u32,
+    ) -> crate::Result<Vec<Vector3<f32>>> {
+        // Use Morton code optimized version
+        compute_normals_morton_gpu(gpu, points, k_neighbors)
+    }
+
     /// Compute normals from points on GPU
     pub fn compute_normals(
         gpu: &GpuCompute,
@@ -451,24 +478,184 @@ pub mod pointcloud_gpu {
         Ok(result)
     }
 
-    /// Voxel downsample on GPU
-    pub fn voxel_downsample(
-        _gpu: &GpuCompute,
-        _points: &[Vector3<f32>],
-        _voxel_size: f32,
+    /// Compute normals using GPU with Morton code spatial indexing
+    /// This is the optimized GPU version - O(n log n) via sorting
+    pub fn compute_normals_morton_gpu(
+        gpu: &GpuCompute,
+        points: &[Vector3<f32>],
+        k_neighbors: u32,
     ) -> crate::Result<Vec<Vector3<f32>>> {
-        Err(crate::Error::not_supported("GPU voxel downsampling"))
-    }
+        use wgpu::BufferUsages;
+        use crate::gpu_kernels::buffer_utils::{create_buffer, create_buffer_uninit, read_buffer};
 
-    /// Remove statistical outliers on GPU
-    pub fn remove_outliers(
-        _gpu: &GpuCompute,
-        _points: &[Vector3<f32>],
-        _n_neighbors: u32,
-        _std_ratio: f32,
-    ) -> crate::Result<Vec<Vector3<f32>>> {
-        Err(crate::Error::not_supported("GPU outlier removal"))
+        let device = gpu.device();
+        let queue = gpu.queue();
+        let num_points = points.len() as u32;
+        let k = k_neighbors.min(32).max(3);
+
+        // Step 1: Compute Morton codes on CPU
+        let (min_bound, max_bound) = points.iter().fold(
+            (Vector3::new(f32::MAX, f32::MAX, f32::MAX), Vector3::new(f32::MIN, f32::MIN, f32::MIN)),
+            |(min, max), p| (min.inf(p), max.sup(p))
+        );
+        let span = (max_bound - min_bound).max();
+        let grid_size = span / 1024.0;
+
+        let mut morton_data: Vec<(u32, usize)> = points.iter().enumerate().map(|(i, p)| {
+            let x = ((p.x - min_bound.x) / grid_size).max(0.0).min(1023.0) as u32;
+            let y = ((p.y - min_bound.y) / grid_size).max(0.0).min(1023.0) as u32;
+            let z = ((p.z - min_bound.z) / grid_size).max(0.0).min(1023.0) as u32;
+            (morton_encode(x, y, z), i)
+        }).collect();
+
+        // Step 2: Sort by Morton code
+        morton_data.sort_by_key(|&(code, _)| code);
+
+        let morton_codes: Vec<u32> = morton_data.iter().map(|&(code, _)| code).collect();
+        let sorted_indices: Vec<u32> = morton_data.iter().map(|&(_, i)| i as u32).collect();
+
+        // Step 3: Create GPU buffers
+        let points_data: Vec<[f32; 4]> = points.iter().map(|p| [p.x, p.y, p.z, 0.0]).collect();
+        
+        let points_buf = create_buffer(device, &points_data, BufferUsages::STORAGE);
+        let normals_buf = create_buffer_uninit(device, points.len() * 16, BufferUsages::STORAGE | BufferUsages::COPY_SRC);
+        let sorted_buf = create_buffer(device, &sorted_indices, BufferUsages::STORAGE);
+        let morton_buf = create_buffer(device, &morton_codes, BufferUsages::STORAGE);
+        
+        let params_data: [f32; 4] = [num_points as f32, k as f32, grid_size, 0.0];
+        let params_buf = create_buffer(device, &params_data, BufferUsages::UNIFORM);
+
+        // Step 4: Create pipeline
+        let shader_source = include_str!("pointcloud_normals_morton.wgsl");
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Point Cloud Normals Morton GPU"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
+
+        // Create bind group layout explicitly
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Normals Morton Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Normals Morton Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            immediate_size: 0,
+        });
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Normals Morton GPU Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Normals Morton Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: points_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: normals_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: sorted_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: morton_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: params_buf.as_entire_binding() },
+            ],
+        });
+
+        // Step 5: Dispatch
+        let workgroups = (num_points + 255) / 256;
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Step 6: Read back
+        let result_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(gpu.device.clone(), queue, &normals_buf, 0, points.len() * 16))?;
+        let result: Vec<Vector3<f32>> = result_data.into_iter().map(|v| Vector3::new(v[0], v[1], v[2])).collect();
+        Ok(result)
     }
+}
+
+/// Encode 3D coordinates to Morton code
+fn morton_encode(x: u32, y: u32, z: u32) -> u32 {
+    let mut mx = x & 0x000003FFu32;
+    let mut my = y & 0x000003FFu32;
+    let mut mz = z & 0x000003FFu32;
+    
+    mx = (mx | (mx << 16)) & 0x030000FF;
+    mx = (mx | (mx << 8)) & 0x0300F00F;
+    mx = (mx | (mx << 4)) & 0x030C30C3;
+    mx = (mx | (mx << 2)) & 0x09249249;
+    
+    my = (my | (my << 16)) & 0x030000FF;
+    my = (my | (my << 8)) & 0x0300F00F;
+    my = (my | (my << 4)) & 0x030C30C3;
+    my = (my | (my << 2)) & 0x09249249;
+    
+    mz = (mz | (mz << 16)) & 0x030000FF;
+    mz = (mz | (mz << 8)) & 0x0300F00F;
+    mz = (mz | (mz << 4)) & 0x030C30C3;
+    mz = (mz | (mz << 2)) & 0x09249249;
+    
+    mx | (my << 1) | (mz << 2)
 }
 
 /// GPU-accelerated TSDF operations

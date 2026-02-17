@@ -116,47 +116,114 @@ pub fn estimate_normals(pc: &mut PointCloud, k: usize) {
         .collect();
 
     let tree = RTree::bulk_load(wrappers);
-    
-    let normals: Vec<Vector3<f32>> = pc.points.par_iter().map(|p| {
-        let query_point = [p.x, p.y, p.z];
-        let neighbors: Vec<&PointWrapper> =
-            tree.nearest_neighbor_iter(&query_point).take(k).collect();
 
-        if neighbors.len() < 3 {
-            return Vector3::new(0.0, 0.0, 1.0); // Default up
+    let normals: Vec<Vector3<f32>> = pc
+        .points
+        .par_iter()
+        .map(|p| {
+            let query_point = [p.x, p.y, p.z];
+            let neighbors: Vec<&PointWrapper> =
+                tree.nearest_neighbor_iter(&query_point).take(k).collect();
+
+            if neighbors.len() < 3 {
+                return Vector3::new(0.0, 0.0, 1.0); // Default up
+            }
+
+            // Compute centroid
+            let mut centroid = Vector3::zeros();
+            for n in &neighbors {
+                centroid += n.1.coords;
+            }
+            centroid /= neighbors.len() as f32;
+
+            // Compute covariance matrix
+            let mut cov = Matrix3::zeros();
+            for n in &neighbors {
+                let d = n.1.coords - centroid;
+                cov += d * d.transpose();
+            }
+            cov /= neighbors.len() as f32;
+
+            // SVD / Eigen decomposition
+            let eigen = SymmetricEigen::new(cov);
+
+            // Find index of smallest eigenvalue explicitly to be robust
+            let mut min_val = f32::MAX;
+            let mut min_idx = 0;
+            for i in 0..3 {
+                let val = eigen.eigenvalues[i];
+                if val < min_val {
+                    min_val = val;
+                    min_idx = i;
+                }
+            }
+
+            eigen.eigenvectors.column(min_idx).into_owned()
+        })
+        .collect();
+
+    pc.normals = Some(normals);
+}
+
+/// Orient normals consistently using simple neighbor voting.
+/// Fast O(n*k) algorithm - much faster than Open3D's MST approach.
+pub fn orient_normals(pc: &mut PointCloud, k: usize) {
+    let n = pc.len();
+    if n < 3 || pc.normals.is_none() {
+        return;
+    }
+
+    let mut normals = pc.normals.take().unwrap();
+
+    // Build RTree
+    let wrappers: Vec<PointWrapper> = pc
+        .points
+        .iter()
+        .enumerate()
+        .map(|(i, p)| PointWrapper(i, *p))
+        .collect();
+    let tree = RTree::bulk_load(wrappers);
+
+    // Simple propagation: start from point 0, orient all neighbors
+    let mut visited = vec![false; n];
+    let mut queue = vec![0];
+    visited[0] = true;
+
+    while let Some(i) = queue.pop() {
+        let q = [pc.points[i].x, pc.points[i].y, pc.points[i].z];
+        let neighbors: Vec<_> = tree.nearest_neighbor_iter(&q).take(k).collect();
+
+        for nb in neighbors {
+            let j = nb.0;
+            if visited[j] {
+                continue;
+            }
+
+            // Flip if pointing opposite to current
+            if normals[j].dot(&normals[i]) < 0.0 {
+                normals[j] = -normals[j];
+            }
+            visited[j] = true;
+            queue.push(j);
         }
+    }
 
-        // Compute centroid
-        let mut centroid = Vector3::zeros();
-        for n in &neighbors {
-            centroid += n.1.coords;
-        }
-        centroid /= neighbors.len() as f32;
-
-        // Compute covariance matrix
-        let mut cov = Matrix3::zeros();
-        for n in &neighbors {
-            let d = n.1.coords - centroid;
-            cov += d * d.transpose();
-        }
-        cov /= neighbors.len() as f32;
-
-        // SVD / Eigen decomposition
-        let eigen = SymmetricEigen::new(cov);
-
-        // Find index of smallest eigenvalue explicitly to be robust
-        let mut min_val = f32::MAX;
-        let mut min_idx = 0;
-        for i in 0..3 {
-            let val = eigen.eigenvalues[i];
-            if val < min_val {
-                min_val = val;
-                min_idx = i;
+    // Handle unvisited (disconnected components)
+    for i in 0..n {
+        if !visited[i] {
+            let q = [pc.points[i].x, pc.points[i].y, pc.points[i].z];
+            let neighbors: Vec<_> = tree.nearest_neighbor_iter(&q).take(k).collect();
+            let mut flip = 0;
+            for nb in &neighbors {
+                if normals[i].dot(&normals[nb.0]) < 0.0 {
+                    flip += 1;
+                }
+            }
+            if flip > neighbors.len() / 2 {
+                normals[i] = -normals[i];
             }
         }
-
-        eigen.eigenvectors.column(min_idx).into_owned()
-    }).collect();
+    }
 
     pc.normals = Some(normals);
 }
@@ -345,32 +412,36 @@ pub fn remove_statistical_outliers(
         .collect();
     let tree = RTree::bulk_load(wrappers);
 
-    let distances: Vec<f32> = pc.points.par_iter().map(|p| {
-        let query_point = [p.x, p.y, p.z];
-        // nearest_neighbor_iter returns k+1 including itself (dist 0).
-        // take(k+1) gives nearest neighbors.
-        let neighbors: Vec<&PointWrapper> = tree
-            .nearest_neighbor_iter(&query_point)
-            .take(k + 1)
-            .collect();
+    let distances: Vec<f32> = pc
+        .points
+        .par_iter()
+        .map(|p| {
+            let query_point = [p.x, p.y, p.z];
+            // nearest_neighbor_iter returns k+1 including itself (dist 0).
+            // take(k+1) gives nearest neighbors.
+            let neighbors: Vec<&PointWrapper> = tree
+                .nearest_neighbor_iter(&query_point)
+                .take(k + 1)
+                .collect();
 
-        // Sum distances to k neighbors (skip itself)
-        let mut sum_dist = 0.0;
-        let mut count = 0;
-        for (idx, n) in neighbors.iter().enumerate() {
-            if idx == 0 {
-                continue;
-            } // skip self
-            sum_dist += n.distance_2(&query_point).sqrt();
-            count += 1;
-        }
+            // Sum distances to k neighbors (skip itself)
+            let mut sum_dist = 0.0;
+            let mut count = 0;
+            for (idx, n) in neighbors.iter().enumerate() {
+                if idx == 0 {
+                    continue;
+                } // skip self
+                sum_dist += n.distance_2(&query_point).sqrt();
+                count += 1;
+            }
 
-        if count > 0 {
-            sum_dist / count as f32
-        } else {
-            0.0
-        }
-    }).collect();
+            if count > 0 {
+                sum_dist / count as f32
+            } else {
+                0.0
+            }
+        })
+        .collect();
 
     let mean_dist =
         crate::mean(&distances.iter().map(|&d| d as f64).collect::<Vec<_>>()).unwrap_or(0.0) as f32;
@@ -448,13 +519,17 @@ pub fn remove_radius_outliers(
 
     let r2 = radius * radius;
 
-    let inlier_mask: Vec<bool> = pc.points.par_iter().map(|p| {
-        let query_point = [p.x, p.y, p.z];
-        // locate_within_distance uses squared distance
-        let count = tree.locate_within_distance(query_point, r2).count();
-        // count includes self.
-        count >= min_points
-    }).collect();
+    let inlier_mask: Vec<bool> = pc
+        .points
+        .par_iter()
+        .map(|p| {
+            let query_point = [p.x, p.y, p.z];
+            // locate_within_distance uses squared distance
+            let count = tree.locate_within_distance(query_point, r2).count();
+            // count includes self.
+            count >= min_points
+        })
+        .collect();
 
     let mut inliers: Vec<usize> = Vec::new();
     let mut new_points = Vec::new();

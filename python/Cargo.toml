@@ -20,6 +20,7 @@ cv-scientific = { path = "../scientific" }
 cv-registration = { path = "../registration" }
 cv-calib3d = { path = "../calib3d" }
 cv-stereo = { path = "../stereo" }
+cv-hal = { path = "../hal" }
 nalgebra = { workspace = true }
 image = { workspace = true }
 thiserror = { workspace = true }

@@ -9,6 +9,9 @@ use cv_core::Distortion as RustDistortion;
 use cv_core::Rect as RustRect;
 use cv_registration::{registration_icp_point_to_plane, GlobalRegistrationResult, ICPResult};
 use cv_scientific::geometry::vectorized_iou as rust_vectorized_iou;
+use cv_scientific::point_cloud::{
+    estimate_normals as sci_estimate_normals, orient_normals as sci_orient_normals,
+};
 use cv_slam::SlamSystem;
 use cv_stereo::{compute_validity_mask, DisparityMap, StereoParams};
 use geo::Area;
@@ -57,6 +60,19 @@ impl PyRect {
     }
 }
 
+/// Calculate Intersection over Union (IoU) between two rectangles.
+///
+/// Args:
+///     r1: First rectangle
+///     r2: Second rectangle
+///
+/// Returns:
+///     float: IoU value between 0 and 1
+///
+/// Example:
+///     >>> rect1 = PyRect(0, 0, 100, 100)
+///     >>> rect2 = PyRect(50, 50, 100, 100)
+///     >>> iou = iou(rect1, rect2)  # 0.143
 #[pyfunction]
 fn iou(r1: &PyRect, r2: &PyRect) -> f32 {
     r1.inner.iou(&r2.inner)
@@ -905,7 +921,9 @@ fn get_resource_group(name: &str) -> PyResult<PyResourceGroup> {
             "Resource group '{}' not found",
             name
         ))),
-        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            e.to_string(),
+        )),
     }
 }
 
@@ -926,6 +944,162 @@ fn create_resource_group(
         .create_group(name, num_threads, cores, policy)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
     Ok(PyResourceGroup { inner: group })
+}
+
+#[pyfunction]
+fn estimate_normals<'a>(
+    points: &'a Bound<'_, PyArray2<f32>>,
+    k: usize,
+) -> PyResult<Bound<'a, PyArray2<f32>>> {
+    let view = points.readonly();
+    let shape = view.shape();
+    let n = shape[0];
+
+    let pts: Vec<Point3<f32>> = view
+        .as_slice()?
+        .chunks(3)
+        .map(|c| Point3::new(c[0], c[1], c[2]))
+        .collect();
+
+    let mut pc = cv_core::PointCloud::new(pts);
+    sci_estimate_normals(&mut pc, k);
+
+    let normals = pc.normals.unwrap();
+
+    let py = points.py();
+    let normals_array = PyArray2::zeros_bound(py, [n, 3], false);
+    unsafe {
+        let mut slice = normals_array.as_slice_mut()?;
+        for (i, n) in normals.iter().enumerate() {
+            slice[i * 3] = n.x;
+            slice[i * 3 + 1] = n.y;
+            slice[i * 3 + 2] = n.z;
+        }
+    }
+
+    Ok(normals_array)
+}
+
+#[pyfunction]
+fn orient_normals<'a>(
+    points: &'a Bound<'_, PyArray2<f32>>,
+    normals: &'a Bound<'_, PyArray2<f32>>,
+    k: usize,
+) -> PyResult<Bound<'a, PyArray2<f32>>> {
+    let view = points.readonly();
+    let n = view.shape()[0];
+
+    let pts: Vec<Point3<f32>> = view
+        .as_slice()?
+        .chunks(3)
+        .map(|c| Point3::new(c[0], c[1], c[2]))
+        .collect();
+
+    let norms_view = normals.readonly();
+    let norms: Vec<Vector3<f32>> = norms_view
+        .as_slice()?
+        .chunks(3)
+        .map(|c| Vector3::new(c[0], c[1], c[2]))
+        .collect();
+
+    let mut pc = cv_core::PointCloud::new(pts);
+    pc.normals = Some(norms);
+    sci_orient_normals(&mut pc, k);
+
+    let oriented = pc.normals.unwrap();
+
+    let py = points.py();
+    let result = PyArray2::zeros_bound(py, [n, 3], false);
+    unsafe {
+        let mut slice = result.as_slice_mut()?;
+        for (i, n) in oriented.iter().enumerate() {
+            slice[i * 3] = n.x;
+            slice[i * 3 + 1] = n.y;
+            slice[i * 3 + 2] = n.z;
+        }
+    }
+
+    Ok(result)
+}
+
+#[pyfunction]
+fn compute_normals<'a>(
+    points: &'a Bound<'_, PyArray2<f32>>,
+    k: usize,
+) -> PyResult<Bound<'a, PyArray2<f32>>> {
+    let view = points.readonly();
+    let n = view.shape()[0];
+
+    let pts: Vec<Point3<f32>> = view
+        .as_slice()?
+        .chunks(3)
+        .map(|c| Point3::new(c[0], c[1], c[2]))
+        .collect();
+
+    let normals = cv_3d::gpu::point_cloud::compute_normals_simple(&pts, k);
+
+    let py = points.py();
+    let result = PyArray2::zeros_bound(py, [n, 3], false);
+    unsafe {
+        let mut slice = result.as_slice_mut()?;
+        for (i, n) in normals.iter().enumerate() {
+            slice[i * 3] = n.x;
+            slice[i * 3 + 1] = n.y;
+            slice[i * 3 + 2] = n.z;
+        }
+    }
+
+    Ok(result)
+}
+
+/// Check if a GPU is available on this system.
+#[pyfunction]
+fn is_gpu_available_fn() -> bool {
+    cv_hal::gpu::GpuContext::is_available()
+}
+
+/// Get information about the available GPU.
+#[pyfunction]
+fn gpu_info() -> Option<String> {
+    cv_3d::gpu::gpu_info()
+}
+
+/// Downsample a point cloud using voxel grid filtering.
+///
+/// Args:
+///     points: Nx3 numpy array of point coordinates
+///     voxel_size: Size of voxel grid cells
+///
+/// Returns:
+///     Mx3 numpy array of downsampled point coordinates
+#[pyfunction]
+fn voxel_downsample_gpu<'a>(
+    py: Python<'a>,
+    points: &Bound<'_, PyArray2<f32>>,
+    voxel_size: f32,
+) -> PyResult<Bound<'a, PyArray2<f32>>> {
+    let view = points.readonly();
+    let n = view.shape()[0];
+
+    let pts: Vec<Point3<f32>> = view
+        .as_slice()?
+        .chunks(3)
+        .map(|c| Point3::new(c[0], c[1], c[2]))
+        .collect();
+
+    let downsampled = cv_3d::gpu::point_cloud::voxel_downsample(&pts, voxel_size);
+
+    let result = PyArray2::zeros_bound(py, [downsampled.len(), 3], false);
+    unsafe {
+        let mut slice = result.as_slice_mut()?;
+        for (i, p) in downsampled.iter().enumerate() {
+            slice[i * 3] = p.x;
+            slice[i * 3 + 1] = p.y;
+            slice[i * 3 + 2] = p.z;
+        }
+    }
+
+    Ok(result)
 }
 
 #[pymodule]
@@ -962,6 +1136,12 @@ fn cv_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_pnp_ransac, m)?)?;
     m.add_function(wrap_pyfunction!(py_stereo_block_match, m)?)?;
     m.add_function(wrap_pyfunction!(compute_disparity_validity, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_normals, m)?)?;
+    m.add_function(wrap_pyfunction!(orient_normals, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_normals, m)?)?;
+    m.add_function(wrap_pyfunction!(is_gpu_available_fn, m)?)?;
+    m.add_function(wrap_pyfunction!(gpu_info, m)?)?;
+    m.add_function(wrap_pyfunction!(voxel_downsample_gpu, m)?)?;
 
     Ok(())
 }

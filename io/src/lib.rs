@@ -16,6 +16,7 @@ pub use ply::{read_ply, write_ply};
 pub use obj::{read_obj, write_obj, ObjMesh};
 pub use stl::{read_stl, write_stl, write_stl_ascii, write_stl_binary};
 pub use pcd::{read_pcd, write_pcd, PcdData};
+// TriangleMesh is now the authoritative definition from cv-3d, re-exported here for convenience
 pub use mesh::TriangleMesh;
 
 use thiserror::Error;
