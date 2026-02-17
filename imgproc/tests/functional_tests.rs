@@ -122,3 +122,30 @@ fn test_template_matching() {
     assert_eq!(max_y, 3);
     assert!((max_v - 1.0).abs() < 1e-5);
 }
+
+#[test]
+fn test_geometry_remap() {
+    let mut img = GrayImage::new(10, 10);
+    img.put_pixel(2, 3, Luma([200]));
+    
+    // Create maps for 90 degree rotation
+    let mut map_x = vec![0.0f32; 100];
+    let mut map_y = vec![0.0f32; 100];
+    
+    for y in 0..10 {
+        for x in 0..10 {
+            // dst(x, y) = src(y, 9-x)
+            map_x[y * 10 + x] = y as f32;
+            map_y[y * 10 + x] = (9 - x) as f32;
+        }
+    }
+    
+    let remapped = remap(&img, &map_x, &map_y, 10, 10, Interpolation::Nearest, BorderMode::Constant(0));
+    
+    // Original (2, 3) should move to (9-3, 2) = (6, 2)
+    // Wait, map is dst -> src. 
+    // So src(map_x(x,y), map_y(x,y))
+    // We want dst(6, 2) to sample from src(2, 3).
+    // x=6, y=2 -> map_x(6,2) = 2, map_y(6,2) = 9-6 = 3. Yes.
+    assert_eq!(remapped.get_pixel(6, 2)[0], 200);
+}

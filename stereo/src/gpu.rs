@@ -631,14 +631,16 @@ mod tests {
         let mut left = GrayImage::new(width, height);
         let mut right = GrayImage::new(width, height);
         
-        // Create pattern with horizontal shift
+        // Create pattern with positive disparity
+        // x_right = x_left - disparity
+        // so right(x) = left(x + disparity)
         for y in 0..height {
             for x in 0..width {
                 let pattern = ((x / 8) % 2) * 200;
                 left.put_pixel(x, y, Luma([pattern as u8]));
                 
-                let shifted_x = if x >= 5 { x - 5 } else { 0 };
-                let right_pattern = ((shifted_x / 8) % 2) * 200;
+                let sx = (x + 5).min(width - 1);
+                let right_pattern = ((sx / 8) % 2) * 200;
                 right.put_pixel(x, y, Luma([right_pattern as u8]));
             }
         }
@@ -671,5 +673,26 @@ mod tests {
         assert_eq!(parse_bytes_with_suffix("64mb").unwrap(), 64 * 1024 * 1024);
         assert_eq!(parse_bytes_with_suffix("2_GB").unwrap(), 2 * 1024 * 1024 * 1024);
         assert!(parse_bytes_with_suffix("abc").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_gpu_block_matching() {
+        if !is_gpu_available().await {
+            println!("Skipping GPU functional test (no GPU available)");
+            return;
+        }
+
+        let (left, right) = create_test_stereo_pair();
+        
+        let matcher = GpuStereoMatcher::new(GpuStereoAlgorithm::BlockMatching { block_size: 7 }).await.unwrap();
+        let disparity = matcher.compute_disparity(&left, &right, 0, 10).unwrap();
+        
+        assert_eq!(disparity.width, 64);
+        assert_eq!(disparity.height, 64);
+        
+        // Center should have disparity approx 5 (from create_test_stereo_pair)
+        let d = disparity.get(32, 32);
+        println!("GPU Disparity at center: {}", d);
+        assert!((d - 5.0).abs() < 1.0);
     }
 }

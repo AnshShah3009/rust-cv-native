@@ -89,3 +89,20 @@ fn test_odometry_point_to_plane_basic() {
     let tz = res.transformation.column(3)[2];
     assert!((tz - 0.1).abs() < 0.05);
 }
+
+#[test]
+fn test_simplify_vertex_clustering() {
+    let mut vertices = Vec::new();
+    // Create two clusters of points
+    for i in 0..10 {
+        vertices.push(Point3::new(0.01 * i as f32, 0.0, 0.0));
+        vertices.push(Point3::new(1.0 + 0.01 * i as f32, 0.0, 0.0));
+    }
+    let faces = vec![];
+    let mut mesh = TriangleMesh::with_vertices_and_faces(vertices, faces);
+    
+    // Clustering with voxel size 0.5 should reduce to 2 vertices
+    simplify_vertex_clustering(&mut mesh, 0.5);
+    
+    assert_eq!(mesh.vertices.len(), 2);
+}

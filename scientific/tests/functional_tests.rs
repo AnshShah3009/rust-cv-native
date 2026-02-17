@@ -69,3 +69,26 @@ fn test_segment_plane_parallel() {
     assert!(d.abs() < 0.1);
     assert_eq!(inliers.len(), 400);
 }
+
+#[test]
+fn test_outlier_removal_parallel() {
+    let mut points = Vec::new();
+    // A tight cluster
+    for _ in 0..10 {
+        points.push(Point3::new(0.0, 0.0, 0.0));
+    }
+    // An outlier
+    points.push(Point3::new(10.0, 10.0, 10.0));
+    
+    let pc = PointCloud::new(points);
+    
+    // Radius removal
+    let (pc_filtered, inliers) = remove_radius_outliers(&pc, 1.0, 5);
+    assert_eq!(pc_filtered.len(), 10);
+    assert!(!inliers.contains(&10));
+    
+    // Statistical removal
+    let (pc_filtered_stat, inliers_stat) = remove_statistical_outliers(&pc, 5, 1.0);
+    assert_eq!(pc_filtered_stat.len(), 10);
+    assert!(!inliers_stat.contains(&10));
+}
