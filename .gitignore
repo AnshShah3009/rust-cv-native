@@ -17,3 +17,5 @@ python/cv_native/*.egg-info/
 
 # Examples build artifacts
 examples/target/
+ci_artifacts/
+reference/
