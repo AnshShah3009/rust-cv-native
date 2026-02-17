@@ -178,7 +178,11 @@ impl TaskScheduler {
         }
     }
 
-    pub fn create_group(&self, name: &str, num_threads: usize, cores: Option<Vec<usize>>, policy: GroupPolicy, device: Option<ComputeDevice<'static>>) -> Result<Arc<ResourceGroup>> {
+    pub fn create_group(&self, name: &str, num_threads: usize, cores: Option<Vec<usize>>, policy: GroupPolicy) -> Result<Arc<ResourceGroup>> {
+        self.create_group_with_device(name, num_threads, cores, policy, None)
+    }
+
+    pub fn create_group_with_device(&self, name: &str, num_threads: usize, cores: Option<Vec<usize>>, policy: GroupPolicy, device: Option<ComputeDevice<'static>>) -> Result<Arc<ResourceGroup>> {
         let mut groups = self.groups.lock()
             .map_err(|_| crate::Error::ConcurrencyError("groups mutex poisoned".to_string()))?;
             
@@ -247,7 +251,7 @@ pub fn scheduler() -> &'static TaskScheduler {
     GLOBAL_SCHEDULER.get_or_init(|| {
         let _ = cv_core::init_global_thread_pool(None);
         let s = TaskScheduler::new();
-        s.create_group("default", num_cpus::get(), None, GroupPolicy::default(), None).unwrap();
+        s.create_group("default", num_cpus::get(), None, GroupPolicy::default()).unwrap();
         s
     })
 }
@@ -265,8 +269,8 @@ mod tests {
             allow_dynamic_scaling: true,
         };
         
-        let g1 = s.create_group("g1", 4, None, policy, None).unwrap();
-        let g2 = s.create_group("g2", 4, None, policy, None).unwrap();
+        let g1 = s.create_group("g1", 4, None, policy).unwrap();
+        let g2 = s.create_group("g2", 4, None, policy).unwrap();
         
         assert!(g1.private_pool().is_none());
         assert!(g2.private_pool().is_none());
@@ -281,8 +285,8 @@ mod tests {
             allow_dynamic_scaling: false,
         };
         
-        let g1 = s.create_group("iso1", 2, None, policy, None).unwrap();
-        let g2 = s.create_group("iso2", 2, None, policy, None).unwrap();
+        let g1 = s.create_group("iso1", 2, None, policy).unwrap();
+        let g2 = s.create_group("iso2", 2, None, policy).unwrap();
         
         assert_ne!(Arc::as_ptr(&g1.private_pool().unwrap()), Arc::as_ptr(&g2.private_pool().unwrap()));
         assert_eq!(s.total_allocated_threads(), 4);
@@ -299,7 +303,7 @@ mod tests {
             allow_dynamic_scaling: true,
         };
         
-        let g1 = s.create_group("dynamic", 2, None, policy, None).unwrap();
+        let g1 = s.create_group("dynamic", 2, None, policy).unwrap();
         assert_eq!(g1.current_num_threads(), 2);
         
         g1.resize(4).unwrap();
@@ -311,8 +315,8 @@ mod tests {
         let s = TaskScheduler::new();
         let policy = GroupPolicy::default();
         
-        s.create_group("same", 2, None, policy, None).unwrap();
-        let res = s.create_group("same", 2, None, policy, None);
+        s.create_group("same", 2, None, policy).unwrap();
+        let res = s.create_group("same", 2, None, policy);
         
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("already exists"));
@@ -321,7 +325,7 @@ mod tests {
     #[test]
     fn test_submit_logic() {
         let s = TaskScheduler::new();
-        s.create_group("worker", 2, None, GroupPolicy::default(), None).unwrap();
+        s.create_group("worker", 2, None, GroupPolicy::default()).unwrap();
         
         let (tx, rx) = std::sync::mpsc::channel();
         s.submit("worker", move || {
@@ -340,6 +344,6 @@ mod tests {
         };
         
         let num_threads = num_cpus::get() + 1;
-        let _ = s.create_group("oversubscribed", num_threads, None, policy, None).unwrap();
+        let _ = s.create_group("oversubscribed", num_threads, None, policy).unwrap();
     }
 }

@@ -249,9 +249,10 @@ impl GpuContext {
     }
 
     pub async fn new_with_policy(preference: PowerPreference) -> crate::Result<Self> {
-        // Create instance
+        // Create instance with conservative flags to avoid driver panics on integrated GPUs
         let instance = Instance::new(&wgpu::InstanceDescriptor {
             backends: Backends::all(),
+            flags: wgpu::InstanceFlags::default().difference(wgpu::InstanceFlags::DEBUG | wgpu::InstanceFlags::VALIDATION),
             ..Default::default()
         });
 

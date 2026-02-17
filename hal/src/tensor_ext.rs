@@ -8,8 +8,10 @@ use std::marker::PhantomData;
 
 /// Extension trait for transferring data to the GPU.
 pub trait TensorToGpu<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> {
-    /// Uploads the tensor to the GPU.
+    /// Uploads the tensor to the GPU using the global context.
     fn to_gpu(&self) -> crate::Result<Tensor<T, GpuStorage<T>>>;
+    /// Uploads the tensor to the GPU using a specific context.
+    fn to_gpu_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, GpuStorage<T>>>;
 }
 
 impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T> for Tensor<T, CpuStorage<T>> {
@@ -17,7 +19,10 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T> for Tenso
         let ctx = GpuContext::global().ok_or_else(|| {
             crate::Error::InitError("GPU context not initialized".into())
         })?;
+        self.to_gpu_ctx(ctx)
+    }
 
+    fn to_gpu_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, GpuStorage<T>>> {
         let buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Tensor Upload"),
             contents: bytemuck::cast_slice(self.as_slice()),
@@ -35,8 +40,10 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T> for Tenso
 
 /// Extension trait for transferring data back to the CPU.
 pub trait TensorToCpu<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> {
-    /// Downloads the tensor from the GPU.
+    /// Downloads the tensor from the GPU using the global context.
     fn to_cpu(&self) -> crate::Result<Tensor<T, CpuStorage<T>>>;
+    /// Downloads the tensor from the GPU using a specific context.
+    fn to_cpu_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>>;
 }
 
 impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToCpu<T> for Tensor<T, GpuStorage<T>> {
@@ -44,10 +51,10 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToCpu<T> for Tenso
         let ctx = GpuContext::global().ok_or_else(|| {
             crate::Error::InitError("GPU context not initialized".into())
         })?;
+        self.to_cpu_ctx(ctx)
+    }
 
-        // We use the synchronous readback for now to match the blocking API.
-        // buffer_utils::read_buffer is async, so we block on it.
-        
+    fn to_cpu_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>> {
         let byte_size = self.storage.len * std::mem::size_of::<T>();
         
         let data: Vec<T> = pollster::block_on(buffer_utils::read_buffer(

@@ -20,6 +20,8 @@ image = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 cv-3d = { path = "./3d" }
 nalgebra = { workspace = true }
+futures = { workspace = true }
+wgpu = { workspace = true }
 
 [features]
 default = []
