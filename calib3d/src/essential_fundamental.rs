@@ -43,9 +43,39 @@ pub fn find_essential_mat(
     estimate_essential_8_point(&n1, &n2)
 }
 
+use cv_core::{RobustModel, RobustConfig, Ransac};
+
+pub struct EssentialEstimator;
+
+impl RobustModel<(Point2<f64>, Point2<f64>)> for EssentialEstimator {
+    type Model = Matrix3<f64>;
+    fn min_sample_size(&self) -> usize { 8 }
+    fn estimate(&self, data: &[&(Point2<f64>, Point2<f64>)]) -> Option<Self::Model> {
+        let pts1: Vec<Point2<f64>> = data.iter().map(|p| p.0).collect();
+        let pts2: Vec<Point2<f64>> = data.iter().map(|p| p.1).collect();
+        estimate_essential_8_point(&pts1, &pts2).ok()
+    }
+    fn compute_error(&self, model: &Self::Model, data: &(Point2<f64>, Point2<f64>)) -> f64 {
+        sampson_error(model, &data.0, &data.1)
+    }
+}
+
+pub struct FundamentalEstimator;
+
+impl RobustModel<(Point2<f64>, Point2<f64>)> for FundamentalEstimator {
+    type Model = Matrix3<f64>;
+    fn min_sample_size(&self) -> usize { 8 }
+    fn estimate(&self, data: &[&(Point2<f64>, Point2<f64>)]) -> Option<Self::Model> {
+        let pts1: Vec<Point2<f64>> = data.iter().map(|p| p.0).collect();
+        let pts2: Vec<Point2<f64>> = data.iter().map(|p| p.1).collect();
+        estimate_fundamental_8_point(&pts1, &pts2).ok()
+    }
+    fn compute_error(&self, model: &Self::Model, data: &(Point2<f64>, Point2<f64>)) -> f64 {
+        sampson_error(model, &data.0, &data.1)
+    }
+}
+
 /// Estimate Essential matrix with RANSAC for robust outlier rejection.
-///
-/// Returns the Essential matrix and an inlier mask vector.
 pub fn find_essential_mat_ransac(
     pts1: &[Point2<f64>],
     pts2: &[Point2<f64>],
@@ -53,166 +83,47 @@ pub fn find_essential_mat_ransac(
     threshold_px: f64,
     max_iters: usize,
 ) -> Result<(Matrix3<f64>, Vec<bool>)> {
-    if pts1.len() != pts2.len() || pts1.len() < 8 {
-        return Err(CalibError::InvalidParameters(
-            "find_essential_mat_ransac needs >=8 paired points".to_string(),
-        ));
-    }
-    if threshold_px <= 0.0 {
-        return Err(CalibError::InvalidParameters(
-            "threshold_px must be > 0".to_string(),
-        ));
-    }
-
     let (n1, n2) = normalize_with_intrinsics(pts1, pts2, intrinsics);
-    let n = n1.len();
+    let data: Vec<(Point2<f64>, Point2<f64>)> = n1.into_iter().zip(n2.into_iter()).collect();
+    
     let f = 0.5 * (intrinsics.fx + intrinsics.fy);
     let thresh_norm = threshold_px / f.max(1e-12);
-    let thresh2 = thresh_norm * thresh_norm;
-
-    let mut best_inliers = vec![false; n];
-    let mut best_count = 0usize;
-    let mut best_e = None;
-
-    let iters = max_iters.max(32);
-    for i in 0..iters {
-        let idx = sample_unique_indices(n, 8, i as u64 + 1);
-        let s1: Vec<Point2<f64>> = idx.iter().map(|&j| n1[j]).collect();
-        let s2: Vec<Point2<f64>> = idx.iter().map(|&j| n2[j]).collect();
-
-        let e = match estimate_essential_8_point(&s1, &s2) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let mut mask = vec![false; n];
-        let mut count = 0usize;
-        for j in 0..n {
-            let err = sampson_error(&e, &n1[j], &n2[j]);
-            if err <= thresh2 {
-                mask[j] = true;
-                count += 1;
-            }
-        }
-
-        if count > best_count {
-            best_count = count;
-            best_inliers = mask;
-            best_e = Some(e);
-        }
-    }
-
-    let best_e = best_e.ok_or_else(|| {
-        CalibError::InvalidParameters("RANSAC failed to estimate essential matrix".to_string())
-    })?;
-
-    let in1: Vec<Point2<f64>> = n1
-        .iter()
-        .zip(best_inliers.iter())
-        .filter_map(|(p, &m)| if m { Some(*p) } else { None })
-        .collect();
-    let in2: Vec<Point2<f64>> = n2
-        .iter()
-        .zip(best_inliers.iter())
-        .filter_map(|(p, &m)| if m { Some(*p) } else { None })
-        .collect();
-
-    let refined = if in1.len() >= 8 {
-        estimate_essential_8_point(&in1, &in2).unwrap_or(best_e)
-    } else {
-        best_e
+    
+    let config = RobustConfig {
+        threshold: thresh_norm * thresh_norm,
+        max_iterations: max_iters,
+        confidence: 0.99,
+        min_sample_size: 8,
     };
-
-    Ok((refined, best_inliers))
-}
-
-/// Estimate Fundamental matrix from two sets of corresponding points.
-///
-/// Uses the 8-point algorithm with Hartley normalization.
-/// Requires at least 8 point pairs.
-pub fn find_fundamental_mat(pts1: &[Point2<f64>], pts2: &[Point2<f64>]) -> Result<Matrix3<f64>> {
-    if pts1.len() != pts2.len() || pts1.len() < 8 {
-        return Err(CalibError::InvalidParameters(
-            "find_fundamental_mat needs >=8 paired points".to_string(),
-        ));
-    }
-    estimate_fundamental_8_point(pts1, pts2)
+    
+    let ransac = Ransac::new(config);
+    let res = ransac.run(&EssentialEstimator, &data);
+    
+    let model = res.model.ok_or_else(|| CalibError::InvalidParameters("RANSAC failed".into()))?;
+    Ok((model, res.inliers))
 }
 
 /// Estimate Fundamental matrix with RANSAC for robust outlier rejection.
-///
-/// Returns the Fundamental matrix and an inlier mask vector.
 pub fn find_fundamental_mat_ransac(
     pts1: &[Point2<f64>],
     pts2: &[Point2<f64>],
     threshold_px: f64,
     max_iters: usize,
 ) -> Result<(Matrix3<f64>, Vec<bool>)> {
-    if pts1.len() != pts2.len() || pts1.len() < 8 {
-        return Err(CalibError::InvalidParameters(
-            "find_fundamental_mat_ransac needs >=8 paired points".to_string(),
-        ));
-    }
-    if threshold_px <= 0.0 {
-        return Err(CalibError::InvalidParameters(
-            "threshold_px must be > 0".to_string(),
-        ));
-    }
-
-    let n = pts1.len();
-    let thresh2 = threshold_px * threshold_px;
-    let mut best_inliers = vec![false; n];
-    let mut best_count = 0usize;
-    let mut best_f = None;
-    let iters = max_iters.max(32);
-
-    for i in 0..iters {
-        let idx = sample_unique_indices(n, 8, i as u64 + 7);
-        let s1: Vec<Point2<f64>> = idx.iter().map(|&j| pts1[j]).collect();
-        let s2: Vec<Point2<f64>> = idx.iter().map(|&j| pts2[j]).collect();
-        let f = match estimate_fundamental_8_point(&s1, &s2) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let mut mask = vec![false; n];
-        let mut count = 0usize;
-        for j in 0..n {
-            let err = sampson_error(&f, &pts1[j], &pts2[j]);
-            if err <= thresh2 {
-                mask[j] = true;
-                count += 1;
-            }
-        }
-
-        if count > best_count {
-            best_count = count;
-            best_inliers = mask;
-            best_f = Some(f);
-        }
-    }
-
-    let best_f = best_f.ok_or_else(|| {
-        CalibError::InvalidParameters("RANSAC failed to estimate fundamental matrix".to_string())
-    })?;
-
-    let in1: Vec<Point2<f64>> = pts1
-        .iter()
-        .zip(best_inliers.iter())
-        .filter_map(|(p, &m)| if m { Some(*p) } else { None })
-        .collect();
-    let in2: Vec<Point2<f64>> = pts2
-        .iter()
-        .zip(best_inliers.iter())
-        .filter_map(|(p, &m)| if m { Some(*p) } else { None })
-        .collect();
-
-    let refined = if in1.len() >= 8 {
-        estimate_fundamental_8_point(&in1, &in2).unwrap_or(best_f)
-    } else {
-        best_f
+    let data: Vec<(Point2<f64>, Point2<f64>)> = pts1.iter().cloned().zip(pts2.iter().cloned()).collect();
+    
+    let config = RobustConfig {
+        threshold: threshold_px * threshold_px,
+        max_iterations: max_iters,
+        confidence: 0.99,
+        min_sample_size: 8,
     };
-    Ok((refined, best_inliers))
+    
+    let ransac = Ransac::new(config);
+    let res = ransac.run(&FundamentalEstimator, &data);
+    
+    let model = res.model.ok_or_else(|| CalibError::InvalidParameters("RANSAC failed".into()))?;
+    Ok((model, res.inliers))
 }
 
 // Helper functions

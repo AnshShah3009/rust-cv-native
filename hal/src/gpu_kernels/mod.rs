@@ -48,6 +48,9 @@ pub mod nms;
 pub mod pointcloud;
 pub mod color;
 pub mod resize;
+pub mod pyramid;
+pub mod orientation;
+pub mod brief;
 pub mod bilateral;
 pub mod fast;
 pub mod matching;
@@ -56,6 +59,7 @@ pub mod icp;
 pub mod subtract;
 pub mod akaze;
 pub mod sparse;
+pub mod radix_sort;
 
 /// Shader compilation utilities
 pub mod shaders {

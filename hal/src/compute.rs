@@ -359,6 +359,25 @@ impl<'a> ComputeDevice<'a> {
             ComputeDevice::Gpu(gpu) => gpu.mog2_update(frame, model, mask, params),
         }
     }
+
+    /// Get a pooled GPU buffer if this is a GPU device.
+    pub fn get_buffer(&self, size: u64, usage: wgpu::BufferUsages) -> Result<wgpu::Buffer> {
+        match self {
+            ComputeDevice::Gpu(gpu) => Ok(gpu.get_buffer(size, usage)),
+            ComputeDevice::Cpu(_) => Err(crate::Error::NotSupported("GPU buffer pooling not available on CPU".into())),
+        }
+    }
+
+    /// Return a buffer to the pool if this is a GPU device.
+    pub fn return_buffer(&self, buffer: wgpu::Buffer, usage: wgpu::BufferUsages) -> Result<()> {
+        match self {
+            ComputeDevice::Gpu(gpu) => {
+                gpu.return_buffer(buffer, usage);
+                Ok(())
+            }
+            ComputeDevice::Cpu(_) => Err(crate::Error::NotSupported("GPU buffer pooling not available on CPU".into())),
+        }
+    }
 }
 
 /// Get the best available compute device.

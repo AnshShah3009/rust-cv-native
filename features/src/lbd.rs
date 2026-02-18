@@ -40,7 +40,7 @@ impl Lbd {
         let (w, h) = image.dimensions();
 
         segments.par_iter().map(|seg| {
-            let mut desc = vec![0u8; 32]; // 256-bit descriptor
+            let mut packed = [0u8; 32]; // 256 bits directly packed
             
             // Vector of the line
             let dx = seg.x2 - seg.x1;
@@ -52,44 +52,39 @@ impl Lbd {
                 let nx = -dy / len;
                 let ny = dx / len;
                 
-                // Sample points along the line and across the normal
+                // Sample 32 points along the line, and at each point 8 bits of orthogonal comparison
                 for i in 0..32 {
-                    let mut bit_val = 0u8;
                     let t = i as f32 / 31.0;
                     let lx = seg.x1 + t * dx;
                     let ly = seg.y1 + t * dy;
                     
-                    // Sample slightly offset along normal
-                    let x_p = (lx + nx * 2.0).round() as i32;
-                    let y_p = (ly + ny * 2.0).round() as i32;
-                    let x_n = (lx - nx * 2.0).round() as i32;
-                    let y_n = (ly - ny * 2.0).round() as i32;
-                    
-                    if x_p >= 0 && x_p < w as i32 && y_p >= 0 && y_p < h as i32 &&
-                       x_n >= 0 && x_n < w as i32 && y_n >= 0 && y_n < h as i32 {
-                        let idx_p = y_p as usize * w as usize + x_p as usize;
-                        let idx_n = y_n as usize * w as usize + x_n as usize;
+                    let mut byte_val = 0u8;
+                    for bit in 0..8 {
+                        let offset = (bit as f32 - 3.5) * 1.5;
+                        let x_p = (lx + nx * offset).round() as i32;
+                        let y_p = (ly + ny * offset).round() as i32;
+                        let x_n = (lx - nx * offset).round() as i32;
+                        let y_n = (ly - ny * offset).round() as i32;
                         
-                        let g_p = (gx_raw[idx_p] as f32).abs() + (gy_raw[idx_p] as f32).abs();
-                        let g_n = (gx_raw[idx_n] as f32).abs() + (gy_raw[idx_n] as f32).abs();
-                        
-                        if g_p > g_n { bit_val = 1; }
+                        if x_p >= 0 && x_p < w as i32 && y_p >= 0 && y_p < h as i32 &&
+                           x_n >= 0 && x_n < w as i32 && y_n >= 0 && y_n < h as i32 {
+                            let idx_p = y_p as usize * w as usize + x_p as usize;
+                            let idx_n = y_n as usize * w as usize + x_n as usize;
+                            
+                            let g_p = (gx_raw[idx_p] as f32).abs() + (gy_raw[idx_p] as f32).abs();
+                            let g_n = (gx_raw[idx_n] as f32).abs() + (gy_raw[idx_n] as f32).abs();
+                            
+                            if g_p > g_n {
+                                byte_val |= 1 << bit;
+                            }
+                        }
                     }
-                    
-                    desc[i] = bit_val;
-                }
-            }
-            
-            // Pack bits into bytes
-            let mut packed = vec![0u8; 4];
-            for i in 0..32 {
-                if desc[i] > 0 {
-                    packed[i / 8] |= 1 << (i % 8);
+                    packed[i] = byte_val;
                 }
             }
             
             LineDescriptor {
-                data: packed,
+                data: packed.to_vec(),
                 segment: *seg,
             }
         }).collect()

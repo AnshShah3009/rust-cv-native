@@ -307,6 +307,11 @@ impl TaskScheduler {
             .unwrap_or_else(|| self.get_default_group())
     }
 
+    /// Convenience method to get the best device directly.
+    pub fn best_device(&self) -> ComputeDevice<'static> {
+        self.best_gpu_or_cpu().device()
+    }
+
     pub fn submit<F>(&self, group_name: &str, f: F) -> Result<()>
     where
         F: FnOnce() + Send + 'static,

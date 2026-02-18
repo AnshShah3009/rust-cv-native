@@ -3,55 +3,8 @@
 //! Convert disparity values to 3D depth and point clouds.
 
 use crate::{DisparityMap, StereoParams};
-use nalgebra::{Point2, Point3};
-
-/// 3D point cloud from stereo depth
-#[derive(Debug, Clone)]
-pub struct PointCloud {
-    pub points: Vec<Point3<f64>>,
-    pub colors: Option<Vec<(u8, u8, u8)>>,
-}
-
-impl PointCloud {
-    pub fn new() -> Self {
-        Self {
-            points: Vec::new(),
-            colors: None,
-        }
-    }
-
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            points: Vec::with_capacity(capacity),
-            colors: Some(Vec::with_capacity(capacity)),
-        }
-    }
-
-    pub fn push(&mut self, point: Point3<f64>) {
-        self.points.push(point);
-    }
-
-    pub fn push_with_color(&mut self, point: Point3<f64>, color: (u8, u8, u8)) {
-        self.points.push(point);
-        if let Some(ref mut colors) = self.colors {
-            colors.push(color);
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.points.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.points.is_empty()
-    }
-}
-
-impl Default for PointCloud {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+use nalgebra::{Point2, Point3, Vector3};
+use cv_core::PointCloudf64 as PointCloud;
 
 /// Compute depth map from disparity map
 pub fn disparity_to_depth(disparity: &DisparityMap, params: &StereoParams) -> Vec<Option<f64>> {
@@ -82,7 +35,8 @@ pub fn disparity_to_pointcloud(
     left_image: &image::GrayImage,
     params: &StereoParams,
 ) -> PointCloud {
-    let mut pointcloud = PointCloud::with_capacity((disparity.width * disparity.height) as usize);
+    let mut points = Vec::new();
+    let mut colors = Vec::new();
 
     for y in 0..disparity.height {
         for x in 0..disparity.width {
@@ -95,10 +49,6 @@ pub fn disparity_to_pointcloud(
 
             if let Some(depth) = params.disparity_to_depth(d as f64) {
                 // Compute 3D coordinates using pinhole camera model
-                // X = (x - cx) * Z / f
-                // Y = (y - cy) * Z / f
-                // Z = depth
-
                 let x_normalized = (x as f64 - params.cx) / params.focal_length;
                 let y_normalized = (y as f64 - params.cy) / params.focal_length;
 
@@ -106,16 +56,16 @@ pub fn disparity_to_pointcloud(
                 let y_3d = y_normalized * depth;
                 let z_3d = depth;
 
-                let point = Point3::new(x_3d, y_3d, z_3d);
+                points.push(Point3::new(x_3d, y_3d, z_3d));
 
-                // Get intensity as grayscale color
-                let intensity = left_image.get_pixel(x, y)[0];
-                pointcloud.push_with_color(point, (intensity, intensity, intensity));
+                // Get intensity as grayscale color (mapped to 0.0-1.0 Point3 for core PointCloud)
+                let intensity = left_image.get_pixel(x, y)[0] as f64 / 255.0;
+                colors.push(Point3::new(intensity, intensity, intensity));
             }
         }
     }
 
-    pointcloud
+    PointCloud::new(points).with_colors(colors)
 }
 
 /// Reproject 3D point to image coordinates
@@ -159,19 +109,23 @@ pub fn filter_pointcloud_by_depth(
     min_depth: f64,
     max_depth: f64,
 ) -> PointCloud {
-    let mut filtered = PointCloud::new();
+    let mut filtered_points = Vec::new();
+    let mut filtered_colors = Vec::new();
 
     for (i, point) in pointcloud.points.iter().enumerate() {
         let depth = point.z;
         if depth >= min_depth && depth <= max_depth {
+            filtered_points.push(*point);
             if let Some(ref colors) = pointcloud.colors {
-                filtered.push_with_color(*point, colors[i]);
-            } else {
-                filtered.push(*point);
+                filtered_colors.push(colors[i]);
             }
         }
     }
 
+    let mut filtered = PointCloud::new(filtered_points);
+    if !filtered_colors.is_empty() {
+        filtered = filtered.with_colors(filtered_colors);
+    }
     filtered
 }
 
@@ -219,7 +173,10 @@ pub fn export_to_ply(pointcloud: &PointCloud, filename: &str) -> std::io::Result
     // Write points
     for (i, point) in pointcloud.points.iter().enumerate() {
         if let Some(ref colors) = pointcloud.colors {
-            let (r, g, b) = colors[i];
+            let color = colors[i];
+            let r = (color.x * 255.0) as u8;
+            let g = (color.y * 255.0) as u8;
+            let b = (color.z * 255.0) as u8;
             writeln!(
                 file,
                 "{} {} {} {} {} {}",

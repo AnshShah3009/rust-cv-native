@@ -2,8 +2,7 @@ use faer::sparse::SparseColMat;
 pub use faer::sparse::Triplet;
 use nalgebra::DVector;
 use cv_hal::compute::ComputeDevice;
-use cv_hal::context::ComputeContext;
-use cv_core::Tensor;
+use cv_core::{Tensor, Storage};
 
 /// Sparse Matrix representation in CSR format for GPU optimization
 pub struct SparseMatrix {
@@ -52,24 +51,21 @@ impl SparseMatrix {
         let x_f32: Vec<f32> = x.iter().map(|&v| v as f32).collect();
         let values_f32: Vec<f32> = self.values.iter().map(|&v| v as f32).collect();
         
-        let x_tensor = Tensor::from_vec(x_f32, cv_core::TensorShape::new(1, x.len(), 1));
+        let x_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(x_f32, cv_core::TensorShape::new(1, x.len(), 1));
         
-        // If GPU, upload x
-        let result_tensor = match ctx {
+        // SpMV always returns a result tensor on the same device as input x
+        match ctx {
             ComputeDevice::Gpu(gpu) => {
                 let x_gpu = cv_hal::tensor_ext::TensorToGpu::to_gpu_ctx(&x_tensor, gpu).unwrap();
-                ctx.spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_gpu).unwrap()
+                let res_gpu = ctx.spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_gpu).unwrap();
+                let res_cpu = cv_hal::tensor_ext::TensorToCpu::to_cpu_ctx(&res_gpu, gpu).unwrap();
+                DVector::from_vec(res_cpu.as_slice().iter().map(|&v| v as f64).collect())
             },
-            _ => ctx.spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_tensor).unwrap(),
-        };
-
-        // Download result
-        let res_cpu = match ctx {
-            ComputeDevice::Gpu(gpu) => cv_hal::tensor_ext::TensorToCpu::to_cpu_ctx(&result_tensor, gpu).unwrap(),
-            _ => result_tensor,
-        };
-
-        DVector::from_vec(res_cpu.storage.as_slice().unwrap().iter().map(|&v| v as f64).collect())
+            ComputeDevice::Cpu(_cpu) => {
+                let res_cpu = ctx.spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_tensor).unwrap();
+                DVector::from_vec(res_cpu.as_slice().iter().map(|&v| v as f64).collect())
+            }
+        }
     }
 }
 

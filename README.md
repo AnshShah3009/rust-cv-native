@@ -12,7 +12,8 @@ A comprehensive native Rust computer vision library with full in-house implement
 - **3D** - Point clouds, ICP registration, triangulation
 - **Rendering** - Gaussian splatting, mesh processing
 - **Plot** - 2D/3D visualization (cv-plot)
-- **Video** - Kalman filtering, optical flow, tracking
+- **Video** - MOG2 background subtraction, Kalman filtering, optical flow, tracking
+- **Videoio** - Video capture (FFmpeg-next), platform-specific backends
 
 ## Architecture
 
@@ -26,11 +27,12 @@ rust-cv-native/
 ├── registration/  # ICP, global registration
 ├── 3d/            # Point clouds, triangulation
 ├── rendering/     # Gaussian splatting
-├── plot/         # Visualization
-├── video/        # Video processing
-├── hal/          # Hardware abstraction layer (CPU/GPU)
-├── python/       # Python bindings (PyO3)
-└── examples/     # Usage examples
+├── plot/          # Visualization
+├── video/         # Video processing (MOG2, optical flow)
+├── videoio/       # Video I/O (FFmpeg backend)
+├── hal/           # Hardware abstraction layer (CPU/GPU)
+├── python/        # Python bindings (PyO3)
+└── examples/      # Usage examples
 ```
 
 ## Installation

@@ -3,36 +3,85 @@
 //! RANSAC is used to robustly estimate geometric transformations
 //! (homography, fundamental matrix) from feature matches with outliers.
 
-use cv_core::Matches;
+use cv_core::{Matches, FeatureMatch, RobustModel, RobustConfig, Ransac};
 use nalgebra::{Matrix3, Vector3};
 
-/// RANSAC configuration
-pub struct RansacConfig {
-    pub threshold: f64,
-    pub max_iterations: usize,
-    pub confidence: f64,
-    pub min_inliers: usize,
+pub type RansacConfig = RobustConfig;
+
+#[derive(Clone, Debug)]
+pub struct MatchPair {
+    pub src: (f64, f64),
+    pub dst: (f64, f64),
 }
 
-impl Default for RansacConfig {
-    fn default() -> Self {
-        Self {
-            threshold: 3.0,
-            max_iterations: 1000,
-            confidence: 0.99,
-            min_inliers: 4,
+pub struct HomographyEstimator;
+
+impl RobustModel<MatchPair> for HomographyEstimator {
+    type Model = Matrix3<f64>;
+
+    fn min_sample_size(&self) -> usize { 4 }
+
+    fn estimate(&self, data: &[&MatchPair]) -> Option<Self::Model> {
+        let mut a = vec![0.0f64; 8 * 9];
+        for (i, m) in data.iter().enumerate() {
+            let (x1, y1) = m.src;
+            let (x2, y2) = m.dst;
+            let row1 = i * 2;
+            let row2 = i * 2 + 1;
+            a[row1 * 9 + 0] = -x1; a[row1 * 9 + 1] = -y1; a[row1 * 9 + 2] = -1.0;
+            a[row1 * 9 + 6] = x2 * x1; a[row1 * 9 + 7] = x2 * y1; a[row1 * 9 + 8] = x2;
+            a[row2 * 9 + 3] = -x1; a[row2 * 9 + 4] = -y1; a[row2 * 9 + 5] = -1.0;
+            a[row2 * 9 + 6] = y2 * x1; a[row2 * 9 + 7] = y2 * y1; a[row2 * 9 + 8] = y2;
+        }
+        solve_dlt_homography(&a)
+    }
+
+    fn compute_error(&self, model: &Self::Model, data: &MatchPair) -> f64 {
+        let p1 = Vector3::new(data.src.0, data.src.1, 1.0);
+        let p2_pred = model * p1;
+        if p2_pred[2].abs() > 1e-10 {
+            let x2_pred = p2_pred[0] / p2_pred[2];
+            let y2_pred = p2_pred[1] / p2_pred[2];
+            ((x2_pred - data.dst.0).powi(2) + (y2_pred - data.dst.1).powi(2)).sqrt()
+        } else {
+            f64::INFINITY
         }
     }
 }
 
-/// Estimation result containing model and inliers
-#[derive(Debug, Clone)]
-pub struct RansacResult {
-    pub model: Option<Matrix3<f64>>,
-    pub inliers: Vec<bool>,
-    pub num_inliers: usize,
-    pub residual: f64,
+pub struct FundamentalEstimator;
+
+impl RobustModel<MatchPair> for FundamentalEstimator {
+    type Model = Matrix3<f64>;
+
+    fn min_sample_size(&self) -> usize { 8 }
+
+    fn estimate(&self, data: &[&MatchPair]) -> Option<Self::Model> {
+        let mut a = vec![0.0f64; 8 * 9];
+        for (i, m) in data.iter().enumerate() {
+            let (x1, y1) = m.src;
+            let (x2, y2) = m.dst;
+            a[i * 9 + 0] = x2 * x1; a[i * 9 + 1] = x2 * y1; a[i * 9 + 2] = x2;
+            a[i * 9 + 3] = y2 * x1; a[i * 9 + 4] = y2 * y1; a[i * 9 + 5] = y2;
+            a[i * 9 + 6] = x1; a[i * 9 + 7] = y1; a[i * 9 + 8] = 1.0;
+        }
+        solve_dlt_fundamental(&a)
+    }
+
+    fn compute_error(&self, model: &Self::Model, data: &MatchPair) -> f64 {
+        let p1 = Vector3::new(data.src.0, data.src.1, 1.0);
+        let p2 = Vector3::new(data.dst.0, data.dst.1, 1.0);
+        let l = model * p1;
+        let denom = l[0].powi(2) + l[1].powi(2);
+        if denom > 1e-10 {
+            (p2.dot(&l)).abs() / denom.sqrt()
+        } else {
+            f64::INFINITY
+        }
+    }
 }
+
+pub use cv_core::robust::RobustResult as RansacResult;
 
 /// Estimate homography using RANSAC
 pub fn estimate_homography(
@@ -40,54 +89,14 @@ pub fn estimate_homography(
     src_points: &[(f64, f64)],
     dst_points: &[(f64, f64)],
     config: &RansacConfig,
-) -> RansacResult {
-    if matches.len() < 4 {
-        return RansacResult {
-            model: None,
-            inliers: vec![false; matches.len()],
-            num_inliers: 0,
-            residual: f64::INFINITY,
-        };
-    }
-
-    let mut best_result = RansacResult {
-        model: None,
-        inliers: vec![false; matches.len()],
-        num_inliers: 0,
-        residual: f64::INFINITY,
-    };
-
-    let mut rng = rand::thread_rng();
-
-    for _ in 0..config.max_iterations {
-        // Randomly sample 4 points
-        let sample_indices = random_sample(matches.len(), 4, &mut rng);
-
-        // Compute homography from sample
-        if let Some(h) = compute_homography_4pt(matches, src_points, dst_points, &sample_indices) {
-            // Count inliers
-            let (inliers, num_inliers, residual) =
-                count_inliers(matches, src_points, dst_points, &h, config.threshold);
-
-            if num_inliers > best_result.num_inliers
-                || (num_inliers == best_result.num_inliers && residual < best_result.residual)
-            {
-                best_result = RansacResult {
-                    model: Some(h),
-                    inliers,
-                    num_inliers,
-                    residual,
-                };
-
-                // Early termination if we have enough inliers
-                if num_inliers >= (config.confidence * matches.len() as f64) as usize {
-                    break;
-                }
-            }
-        }
-    }
-
-    best_result
+) -> RansacResult<Matrix3<f64>> {
+    let data: Vec<MatchPair> = matches.matches.iter().map(|m| MatchPair {
+        src: src_points[m.query_idx as usize],
+        dst: dst_points[m.train_idx as usize],
+    }).collect();
+    
+    let ransac = Ransac::new(config.clone());
+    ransac.run(&HomographyEstimator, &data)
 }
 
 /// Estimate fundamental matrix using RANSAC
@@ -96,47 +105,14 @@ pub fn estimate_fundamental(
     src_points: &[(f64, f64)],
     dst_points: &[(f64, f64)],
     config: &RansacConfig,
-) -> RansacResult {
-    if matches.len() < 8 {
-        return RansacResult {
-            model: None,
-            inliers: vec![false; matches.len()],
-            num_inliers: 0,
-            residual: f64::INFINITY,
-        };
-    }
-
-    let mut best_result = RansacResult {
-        model: None,
-        inliers: vec![false; matches.len()],
-        num_inliers: 0,
-        residual: f64::INFINITY,
-    };
-
-    let mut rng = rand::thread_rng();
-
-    for _ in 0..config.max_iterations {
-        // Randomly sample 8 points
-        let sample_indices = random_sample(matches.len(), 8, &mut rng);
-
-        // Compute fundamental matrix from sample
-        if let Some(f) = compute_fundamental_8pt(matches, src_points, dst_points, &sample_indices) {
-            // Count inliers using Sampson distance
-            let (inliers, num_inliers, residual) =
-                count_inliers_fundamental(matches, src_points, dst_points, &f, config.threshold);
-
-            if num_inliers > best_result.num_inliers {
-                best_result = RansacResult {
-                    model: Some(f),
-                    inliers,
-                    num_inliers,
-                    residual,
-                };
-            }
-        }
-    }
-
-    best_result
+) -> RansacResult<Matrix3<f64>> {
+    let data: Vec<MatchPair> = matches.matches.iter().map(|m| MatchPair {
+        src: src_points[m.query_idx as usize],
+        dst: dst_points[m.train_idx as usize],
+    }).collect();
+    
+    let ransac = Ransac::new(config.clone());
+    ransac.run(&FundamentalEstimator, &data)
 }
 
 /// Compute homography from 4 point correspondences using DLT
@@ -427,7 +403,7 @@ impl RansacMatcher {
         matches: &Matches,
         src_points: &[(f64, f64)],
         dst_points: &[(f64, f64)],
-    ) -> (Matches, RansacResult) {
+    ) -> (Matches, RansacResult<Matrix3<f64>>) {
         let result = if self.use_fundamental {
             estimate_fundamental(matches, src_points, dst_points, &self.config)
         } else {
@@ -479,7 +455,7 @@ mod tests {
             threshold: 15.0, // Higher threshold for translation
             max_iterations: 1000,
             confidence: 0.99,
-            min_inliers: 4,
+            min_sample_size: 4,
         };
 
         let result = estimate_homography(&matches, &src_points, &dst_points, &config);

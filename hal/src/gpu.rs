@@ -368,9 +368,14 @@ impl ComputeContext for GpuContext {
             let blurred_f32 = crate::gpu_kernels::convolve::gaussian_blur(self, &input_f32, sigma, k_size)?;
             
             // Convert back to u8
-            // TODO: Optimize this with a dedicated cast kernel if performance is an issue
             let blurred_u8 = blurred_f32.to_u8_ctx(self)?;
 
+            // Cleanup intermediate f32 buffers if they were created
+            // Note: to_f32_ctx and gaussian_blur might return pooled buffers.
+            // Since they return Tensors, we need to decide if Tensor owns the pooled buffer.
+            // In our current design, GpuStorage owns an Arc<Buffer>. 
+            // If we want to return GpuStorage buffers to pool, we need that Drop impl.
+            
             let result = unsafe { std::ptr::read(&blurred_u8 as *const _ as *const Tensor<u8, S>) };
             std::mem::forget(blurred_u8);
             Ok(result)
@@ -846,6 +851,16 @@ impl GpuContext {
             compilation_options: Default::default(),
             cache: None,
         })
+    }
+
+    /// Get a pooled buffer.
+    pub fn get_buffer(&self, size: u64, usage: wgpu::BufferUsages) -> wgpu::Buffer {
+        crate::gpu_kernels::buffer_utils::global_pool().get(&self.device, size, usage)
+    }
+
+    /// Return a buffer to the pool.
+    pub fn return_buffer(&self, buffer: wgpu::Buffer, usage: wgpu::BufferUsages) {
+        crate::gpu_kernels::buffer_utils::global_pool().return_buffer(buffer, usage)
     }
 }
 

@@ -4,6 +4,7 @@ use cv_core::{Tensor, storage::Storage};
 use cv_hal::compute::{ComputeDevice};
 use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
 use cv_runtime::orchestrator::{ResourceGroup, scheduler};
+use wide::*;
 
 use crate::convolve::{convolve_with_border_into_ctx, gaussian_blur_ctx, BorderMode, Kernel};
 
@@ -86,9 +87,9 @@ pub fn sobel_ex_ctx(
 
     let kx = if dx > 0 { deriv.as_slice() } else { smooth.as_slice() };
     let ky = if dy > 0 { deriv.as_slice() } else { smooth.as_slice() };
-    let kernel = kernel_from_1d(kx, ky);
     
-    convolve_with_border_into_ctx(src, &mut out, &kernel, border, group);
+    // Use separable convolution for performance
+    crate::convolve::separable_convolve_into_ctx(src, &mut out, kx, ky, border, group);
     apply_linear_transform(out, scale, delta)
 }
 
@@ -229,31 +230,112 @@ fn gradients_and_directions(src: &GrayImage) -> (Vec<f32>, Vec<u8>) {
             let r1 = &data[r1_idx..r1_idx + width];
             let r2 = &data[r2_idx..r2_idx + width];
 
-            for x in 1..width - 1 {
-                let p00 = r0[x - 1] as f32;
-                let p02 = r0[x + 1] as f32;
-                let p10 = r1[x - 1] as f32;
-                let p12 = r1[x + 1] as f32;
-                let p20 = r2[x - 1] as f32;
-                let p22 = r2[x + 1] as f32;
-                let p01 = r0[x] as f32;
-                let p21 = r2[x] as f32;
+            let mut x = 1;
+            
+            // SIMD Loop
+            while x + 8 < width - 1 {
+                // Load 3x10 block to cover 8 outputs (needs x-1 to x+8+1)
+                // We load 8-wide vectors shifted by -1, 0, 1
+                // Actually easier to load unaligned? f32x8 requires alignment? No, but load is from u8.
+                // We load u8 slices and convert.
+                
+                let load_f32x8 = |slice: &[u8]| -> f32x8 {
+                    let mut arr = [0.0f32; 8];
+                    for i in 0..8 { arr[i] = slice[i] as f32; }
+                    f32x8::from(arr)
+                };
+
+                let p00 = load_f32x8(&r0[x-1..]);
+                let p01 = load_f32x8(&r0[x..]);
+                let p02 = load_f32x8(&r0[x+1..]);
+                
+                let p10 = load_f32x8(&r1[x-1..]);
+                // p11 unused for gradients
+                let p12 = load_f32x8(&r1[x+1..]);
+                
+                let p20 = load_f32x8(&r2[x-1..]);
+                let p21 = load_f32x8(&r2[x..]);
+                let p22 = load_f32x8(&r2[x+1..]);
+
+                // Sobel
+                let gx = p02 - p00 + (p12 - p10) * 2.0 + p22 - p20;
+                let gy = p20 - p00 + (p21 - p01) * 2.0 + p22 - p02;
+
+                // Magnitude
+                let mag = (gx * gx + gy * gy).sqrt();
+                let mag_arr: [f32; 8] = mag.into();
+                mag_row[x..x+8].copy_from_slice(&mag_arr);
+
+                // Direction
+                // 0: |gy| <= |gx| * tan(22.5) => 0.4142
+                // 90: |gx| <= |gy| * 0.4142
+                // 45: sign(gx) == sign(gy)
+                // 135: else
+                
+                let abs_gx = gx.abs();
+                let abs_gy = gy.abs();
+                let tan_22_5 = 0.41421356;
+                
+                let is_0 = abs_gy.cmp_lt(abs_gx * tan_22_5);
+                let is_90 = abs_gx.cmp_lt(abs_gy * tan_22_5);
+                
+                // For diagonal check:
+                // sign bit check. f32x8 doesn't have direct sign access efficiently?
+                // gx * gy > 0 means same sign.
+                let same_sign = (gx * gy).cmp_gt(f32x8::ZERO);
+                
+                // Blend chain
+                // Default 135 (3)
+                // if same_sign -> 45 (1)
+                // if is_90 -> 90 (2)
+                // if is_0 -> 0 (0)
+                // Order matters? 0 and 90 take precedence over diagonals in ambiguous near-center cases?
+                // Logic:
+                // Region 0: [-22.5, 22.5] -> |y| < |x| * tan
+                // Region 90: [67.5, 112.5] -> |x| < |y| * cot(67.5) = |y| * tan(22.5)
+                // So is_0 and is_90 checks are correct and exclusive.
+                
+                // Values: 0=0, 1=45, 2=90, 3=135
+                let val_diag = same_sign.blend(f32x8::splat(1.0), f32x8::splat(3.0));
+                let val_90 = is_90.blend(f32x8::splat(2.0), val_diag);
+                let val_0 = is_0.blend(f32x8::splat(0.0), val_90);
+                
+                let dir_arr: [f32; 8] = val_0.into();
+                for i in 0..8 { dir_row[x+i] = dir_arr[i] as u8; }
+
+                x += 8;
+            }
+
+            // Scalar tail
+            for cx in x..width - 1 {
+                let p00 = r0[cx - 1] as f32;
+                let p02 = r0[cx + 1] as f32;
+                let p10 = r1[cx - 1] as f32;
+                let p12 = r1[cx + 1] as f32;
+                let p20 = r2[cx - 1] as f32;
+                let p22 = r2[cx + 1] as f32;
+                let p01 = r0[cx] as f32;
+                let p21 = r2[cx] as f32;
 
                 let gx = -p00 + p02 - 2.0 * p10 + 2.0 * p12 - p20 + p22;
                 let gy = -p00 - 2.0 * p01 - p02 + p20 + 2.0 * p21 + p22;
 
-                mag_row[x] = (gx * gx + gy * gy).sqrt();
+                mag_row[cx] = (gx * gx + gy * gy).sqrt();
 
-                let angle = gy.atan2(gx).to_degrees().rem_euclid(180.0);
-                dir_row[x] = if !(22.5..157.5).contains(&angle) {
-                    0
-                } else if angle < 67.5 {
-                    1
-                } else if angle < 112.5 {
-                    2
+                // Scalar direction logic (consistent with SIMD)
+                let abs_gx = gx.abs();
+                let abs_gy = gy.abs();
+                let tan_22_5 = 0.41421356;
+                
+                if abs_gy <= abs_gx * tan_22_5 {
+                    dir_row[cx] = 0;
+                } else if abs_gx <= abs_gy * tan_22_5 {
+                    dir_row[cx] = 2;
+                } else if gx * gy > 0.0 {
+                    dir_row[cx] = 1;
                 } else {
-                    3
-                };
+                    dir_row[cx] = 3;
+                }
             }
         });
 

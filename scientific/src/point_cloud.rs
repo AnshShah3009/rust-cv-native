@@ -571,6 +571,44 @@ pub fn remove_radius_outliers(
     )
 }
 
+use cv_core::{RobustModel, RobustConfig, Ransac};
+
+pub struct PlaneEstimator;
+
+impl RobustModel<Point3<f32>> for PlaneEstimator {
+    type Model = [f32; 4];
+
+    fn min_sample_size(&self) -> usize {
+        3
+    }
+
+    fn estimate(&self, data: &[&Point3<f32>]) -> Option<Self::Model> {
+        let p1 = data[0];
+        let p2 = data[1];
+        let p3 = data[2];
+
+        let v1 = p2 - p1;
+        let v2 = p3 - p1;
+        let normal = v1.cross(&v2).normalize();
+
+        if normal.x.is_nan() || normal.y.is_nan() || normal.z.is_nan() {
+            return None;
+        }
+
+        let d = -normal.dot(&p1.coords);
+        Some([normal.x, normal.y, normal.z, d])
+    }
+
+    fn compute_error(&self, model: &Self::Model, data: &Point3<f32>) -> f64 {
+        let [a, b, c, d] = *model;
+        let denom = (a * a + b * b + c * c).sqrt();
+        if denom < 1e-12 {
+            return f64::INFINITY;
+        }
+        ((a * data.x + b * data.y + c * data.z + d).abs() / denom) as f64
+    }
+}
+
 /// Segment a plane using RANSAC.
 /// Returns (a, b, c, d) plane model and list of inlier indices.
 /// Plane equation: ax + by + cz + d = 0.
@@ -584,53 +622,25 @@ pub fn segment_plane(
         return (None, Vec::new());
     }
 
-    // Parallelize iterations
-    let best = (0..num_iterations)
-        .into_par_iter()
-        .map(|_| {
-            let mut rng = rand::rng();
-            // Sample random points
-            let sample_indices: Vec<usize> = (0..pc.points.len()).sample(&mut rng, ransac_n);
+    let config = RobustConfig {
+        threshold: distance_threshold as f64,
+        max_iterations: num_iterations,
+        confidence: 0.99,
+        min_sample_size: ransac_n,
+    };
 
-            let p1 = pc.points[sample_indices[0]];
-            let p2 = pc.points[sample_indices[1]];
-            let p3 = pc.points[sample_indices[2]];
+    let ransac = Ransac::new(config);
+    let res = ransac.run(&PlaneEstimator, &pc.points);
 
-            let v1 = p2 - p1;
-            let v2 = p3 - p1;
-            let normal = v1.cross(&v2).normalize();
+    let inlier_indices: Vec<usize> = res
+        .inliers
+        .iter()
+        .enumerate()
+        .filter(|(_, &is_inlier)| is_inlier)
+        .map(|(i, _)| i)
+        .collect();
 
-            if normal.x.is_nan() || normal.y.is_nan() || normal.z.is_nan() {
-                return (None, Vec::new());
-            }
-
-            let d = -normal.dot(&p1.coords);
-            let a = normal.x;
-            let b = normal.y;
-            let c = normal.z;
-
-            // Count inliers
-            let mut current_inliers = Vec::new();
-            for (i, p) in pc.points.iter().enumerate() {
-                let dist = (a * p.x + b * p.y + c * p.z + d).abs() / (a * a + b * b + c * c).sqrt();
-                if dist < distance_threshold {
-                    current_inliers.push(i);
-                }
-            }
-            (Some([a, b, c, d]), current_inliers)
-        })
-        .reduce(
-            || (None, Vec::new()),
-            |a, b| {
-                if b.1.len() > a.1.len() {
-                    b
-                } else {
-                    a
-                }
-            },
-        );
-
-    best
+    (res.model, inlier_indices)
 }
 
 /// DBSCAN clustering.

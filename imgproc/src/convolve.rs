@@ -361,39 +361,43 @@ pub fn separable_convolve_into(
     border: BorderMode,
 ) {
     let group = scheduler().get_default_group();
-    separable_convolve_into_ctx(image, out, kernel_1d, border, &group)
+    separable_convolve_into_ctx(image, out, kernel_1d, kernel_1d, border, &group)
 }
 
 pub fn separable_convolve_into_ctx(
     image: &GrayImage,
     out: &mut GrayImage,
-    kernel_1d: &[f32],
+    kx: &[f32],
+    ky: &[f32],
     border: BorderMode,
     group: &ResourceGroup,
 ) {
-    assert!(kernel_1d.len() % 2 == 1, "1D kernel size must be odd");
+    assert!(kx.len() % 2 == 1, "kx size must be odd");
+    assert!(ky.len() % 2 == 1, "ky size must be odd");
+    
     if out.width() != image.width() || out.height() != image.height() {
         *out = GrayImage::new(image.width(), image.height());
     }
 
     let width = image.width() as usize;
     let height = image.height() as usize;
-    let radius = kernel_1d.len() / 2;
-    let k_len = kernel_1d.len();
+    let rx = kx.len() / 2;
+    let ry = ky.len() / 2;
     let src = image.as_raw();
 
     let buffer_pool = cv_core::BufferPool::global();
     let mut tmp_vec = buffer_pool.get(width * height * 4);
     let tmp_addr = tmp_vec.as_mut_ptr() as usize;
 
+    // Horizontal Pass (using kx)
     group.run(|| {
         let tmp_slice = unsafe { std::slice::from_raw_parts_mut(tmp_addr as *mut f32, width * height) };
         tmp_slice.par_chunks_mut(width).enumerate().for_each(|(y, row_out)| {
             let row_offset = y * width;
-            let padded_width = width + 2 * radius;
+            let padded_width = width + 2 * rx;
             let mut padded_row = vec![0.0f32; padded_width];
             for i in 0..padded_width {
-                let src_x = (i as isize) - (radius as isize);
+                let src_x = (i as isize) - (rx as isize);
                 padded_row[i] = match map_coord(src_x, width, border) {
                     Some(ix) => src[row_offset + ix] as f32,
                     None => match border {
@@ -402,19 +406,20 @@ pub fn separable_convolve_into_ctx(
                     },
                 };
             }
-            convolve_row_1d(&padded_row, row_out, kernel_1d, radius);
+            convolve_row_1d(&padded_row, row_out, kx, rx);
         });
     });
 
+    // Vertical Pass (using ky)
     group.run(|| {
         let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_addr as *const f32, width * height) };
         out.as_mut().par_chunks_mut(width).enumerate().for_each(|(y, row_out)| {
             for x in (0..width).step_by(8) {
                  if x + 8 <= width {
                     let mut sum_v = f32x8::ZERO;
-                    for k in 0..k_len {
-                        let w_v = f32x8::splat(kernel_1d[k]);
-                        let sy_base = (y as isize) + (k as isize) - (radius as isize);
+                    for k in 0..ky.len() {
+                        let w_v = f32x8::splat(ky[k]);
+                        let sy_base = (y as isize) + (k as isize) - (ry as isize);
                         let target_y = map_coord(sy_base, height, border);
                         let mut vals = [0.0f32; 8];
                         if let Some(iy) = target_y {
@@ -430,8 +435,8 @@ pub fn separable_convolve_into_ctx(
                  } else {
                      for cx in x..width {
                          let mut sum = 0.0;
-                         for k in 0..k_len {
-                            let sy = (y as isize) + (k as isize) - (radius as isize);
+                         for k in 0..ky.len() {
+                            let sy = (y as isize) + (k as isize) - (ry as isize);
                             let val = match map_coord(sy, height, border) {
                                 Some(iy) => tmp_slice[iy * width + cx],
                                 None => match border {
@@ -439,7 +444,7 @@ pub fn separable_convolve_into_ctx(
                                     _ => 0.0,
                                 },
                             };
-                            sum += val * kernel_1d[k];
+                            sum += val * ky[k];
                          }
                          row_out[cx] = sum.clamp(0.0, 255.0) as u8;
                      }
@@ -481,7 +486,7 @@ pub fn gaussian_blur_ctx_into(
 ) {
     let size = ((sigma * 6.0).ceil() as usize) | 1;
     let kernel_1d = gaussian_kernel_1d(sigma, size);
-    separable_convolve_into_ctx(image, out, &kernel_1d, border, group);
+    separable_convolve_into_ctx(image, out, &kernel_1d, &kernel_1d, border, group);
 }
 
 fn gaussian_blur_with_border_into_ctx_into(
@@ -493,7 +498,7 @@ fn gaussian_blur_with_border_into_ctx_into(
 ) {
     let size = ((sigma * 6.0).ceil() as usize) | 1;
     let kernel_1d = gaussian_kernel_1d(sigma, size);
-    separable_convolve_into_ctx(image, out, &kernel_1d, border, group);
+    separable_convolve_into_ctx(image, out, &kernel_1d, &kernel_1d, border, group);
 }
 
 pub fn gaussian_blur(image: &GrayImage, sigma: f32) -> GrayImage {

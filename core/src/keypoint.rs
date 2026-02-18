@@ -59,7 +59,8 @@ impl Default for KeyPoint {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct KeyPointF32 {
     pub x: f32,
     pub y: f32,
@@ -68,6 +69,7 @@ pub struct KeyPointF32 {
     pub response: f32,
     pub octave: i32,
     pub class_id: i32,
+    pub padding: i32,
 }
 
 impl From<KeyPoint> for KeyPointF32 {
@@ -80,11 +82,13 @@ impl From<KeyPoint> for KeyPointF32 {
             response: kp.response as f32,
             octave: kp.octave,
             class_id: kp.class_id,
+            padding: 0,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct FeatureMatch {
     pub query_idx: i32,
     pub train_idx: i32,

@@ -10,18 +10,18 @@ struct Params {
 @group(0) @binding(1) var<storage, read_write> output_data: array<u32>;
 @group(0) @binding(2) var<uniform> params: Params;
 
-fn get_u8(idx: u32) -> u32 {
-    let u32_idx = idx / 4u;
-    let shift = (idx % 4u) * 8u;
-    return (input_data[u32_idx] >> shift) & 0xFFu;
+fn get_u8(idx: u32) -> f32 {
+    let u32_idx = idx >> 2u;
+    let shift = (idx & 3u) << 3u;
+    return f32((input_data[u32_idx] >> shift) & 0xFFu);
 }
 
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let x_u32 = global_id.x; // Thread processes 4 horizontal pixels
-    let y = global_id.y;
+    let x_u32 = global_id.x;
+    let y_dst = global_id.y;
     
-    if (x_u32 * 4u >= params.dst_w || y >= params.dst_h) {
+    if (x_u32 * 4u >= params.dst_w || y_dst >= params.dst_h) {
         return;
     }
 
@@ -30,15 +30,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var res_combined = 0u;
     for (var i = 0u; i < 4u; i++) {
-        let x = x_u32 * 4u + i;
-        if (x >= params.dst_w) { break; }
+        let x_dst = x_u32 * 4u + i;
+        if (x_dst >= params.dst_w) { break; }
 
-        let src_x = u32(f32(x) * scale_x);
-        let src_y = u32(f32(y) * scale_y);
+        let src_x_f = (f32(x_dst) + 0.5) * scale_x - 0.5;
+        let src_y_f = (f32(y_dst) + 0.5) * scale_y - 0.5;
         
-        let val = get_u8(src_y * params.src_w + src_x);
-        res_combined = res_combined | ((val & 0xFFu) << (i * 8u));
+        let x0 = u32(max(0.0, floor(src_x_f)));
+        let y0 = u32(max(0.0, floor(src_y_f)));
+        let x1 = min(params.src_w - 1u, x0 + 1u);
+        let y1 = min(params.src_h - 1u, y0 + 1u);
+        
+        let dx = src_x_f - f32(x0);
+        let dy = src_y_f - f32(y0);
+        
+        let p00 = get_u8(y0 * params.src_w + x0);
+        let p10 = get_u8(y0 * params.src_w + x1);
+        let p01 = get_u8(y1 * params.src_w + x0);
+        let p11 = get_u8(y1 * params.src_w + x1);
+        
+        let val_f = mix(mix(p00, p10, dx), mix(p01, p11, dx), dy);
+        let val = u32(clamp(val_f + 0.5, 0.0, 255.0));
+        
+        res_combined = res_combined | (val << (i * 8u));
     }
 
-    output_data[y * ((params.dst_w + 3u) / 4u) + x_u32] = res_combined;
+    output_data[y_dst * ((params.dst_w + 3u) / 4u) + x_u32] = res_combined;
 }

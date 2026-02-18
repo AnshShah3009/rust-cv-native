@@ -31,9 +31,13 @@ The workspace follows a layered architecture with clear dependencies:
 ┌─────────────────────────────────────────────────────────────────┐
 │                      PROCESSING LAYER                            │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────┐ │
-│  │ cv-imgproc  │  │  cv-3d      │  │cv-calib3d   │  │cv-photo │ │
-│  │ (2D Image)  │  │ (3D/Mesh)   │  │(Calibration)│  │(Stitch) │ │
+│  │ cv-imgproc  │  │  cv-3d      │  │cv-calib3d   │  │cv-video │ │
+│  │ (2D Image)  │  │ (3D/Mesh)   │  │(Calibration)│  │ (MOG2)  │ │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────┘ │
+│  ┌───────────────┐ ┌─────────────┐  ┌─────────────┐             │
+│  │cv-registration│ │   cv-plot   │  │  cv-photo   │             │
+│  │(ICP/Global)   │ │(Vis/Chart)  │  │ (Stitch)    │             │
+│  └───────────────┘ └─────────────┘  └─────────────┘             │
 └─────────────────────────────────────────────────────────────────┘
                                 │
         ┌───────────────────────┼───────────────────────┐
@@ -53,7 +57,7 @@ The workspace follows a layered architecture with clear dependencies:
 │                      CORE LAYER (Foundation)                     │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────┐ │
 │  │   cv-core   │  │   cv-io     │  │ cv-videoio  │  │cv-dnn   │ │
-│  │ (Types/     │  │ (File I/O)  │  │ (Capture)   │  │(ONNX)   │ │
+│  │ (Types/     │  │ (File I/O)  │  │ (FFmpeg)    │  │(ONNX)   │ │
 │  │  PointCloud)│  │             │  │             │  │         │ │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────┘ │
 └─────────────────────────────────────────────────────────────────┘
@@ -64,11 +68,10 @@ The workspace follows a layered architecture with clear dependencies:
 | Crate | # Dependents | Role |
 |-------|--------------|------|
 | **cv-core** | 18 | Foundation types (PointCloud, Image, etc.) |
-| **cv-hal** | 6 | Hardware abstraction (CPU/GPU backends) |
+| **cv-hal** | 7 | Hardware abstraction (CPU/GPU backends) |
+| **cv-videoio** | 2 | Video capture (FFmpeg-next) |
+| **cv-video** | 2 | Background subtraction, Optical Flow |
 | **cv-imgproc** | 6 | Image processing algorithms |
-| **cv-runtime** | 3 | Memory management, task scheduling |
-| **cv-features** | 2 | Feature detection (SIFT, ORB, etc.) |
-| **cv-calib3d** | 2 | Camera calibration, PnP |
 
 ## Dependency Rules
 

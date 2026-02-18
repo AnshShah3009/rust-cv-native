@@ -11,6 +11,8 @@ image = { workspace = true }
 rayon = { workspace = true }
 wide = { workspace = true }
 thiserror = { workspace = true }
+rand = { workspace = true }
+bytemuck = { version = "1.21.0", features = ["derive"] }
 
 [features]
 default = []

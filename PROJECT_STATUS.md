@@ -26,24 +26,41 @@ Building a **native Rust computer vision library** as a complete replacement for
 
 ---
 
-## Current Status: Phase 12 - Python Bindings Expansion (February 16, 2026)
+## Current Status: Phase 13 - Core Consolidation and Feature Hardening (February 18, 2026)
 
-### ✅ Completed: Threading and Reliability Hardening (February 17, 2026)
+### ✅ Completed: Video I/O and Native Codecs
+**Location:** `cv-videoio`
+- Switched from V4L2 skeleton to **FFmpeg-next** (v7.1) integration.
+- Implemented `PyVideoCapture` for native Python video decoding.
+- Resolved build system issues related to system headers in CI.
 
-**Location:** `core/src/runtime.rs`, `runtime/src/orchestrator.rs`, `hal/src/gpu_kernels/mod.rs`
+### ✅ Completed: Background Subtraction Refactor
+**Location:** `cv-video`, `cv-hal`
+- Implemented **MOG2 (Mixture of Gaussians)** with full GPU acceleration.
+- **Interleaved Storage:** Refactored pixel models to `[H, W, N_MIXTURES, 3]` to resolve parallel borrow checker conflicts.
+- Verified CPU/GPU numerical parity for background masks.
 
-- **Safety Pass:**
-  - Eliminated divide-by-zero panics in `ResourceGroup` startup by validating core affinity lists.
-  - Replaced all public `todo!()` stubs in `cv-hal` with proper `Result`-based error returns (`NotSupported`).
-  - Hardened sparse matrix CSR conversion with bounds validation and overflow checks.
-- **Reliability:**
-  - Removed `.unwrap()` on Mutex/RwLock across all core crates; added `ConcurrencyError` for lock poisoning recovery.
-  - Refactored `BufferPool` to use a **size-bucketed** strategy (64KB, 1MB, 16MB) for significantly better memory reuse.
-  - Updated `GpuContext::new` to return `Result` with detailed initialization diagnostics.
-- **Scheduler Improvements:**
-  - Added **CPU Oversubscription Tracking**: The scheduler now tracks total allocated threads across all groups and warns if they exceed physical core counts.
-  - Prevented accidental resource group overwrites by requiring explicit unique names.
-  - Standardized on `thiserror` for all crates (`cv-core`, `cv-hal`, `cv-runtime`, `cv-3d`).
+### ✅ Completed: Feature Descriptor Fixes
+**Location:** `cv-features`
+- Fixed **LBD (Line Binary Descriptor)** bit-packing; expanded from 32-bit stub to full **256-bit** (32-byte) implementation.
+- Optimized line gradient sampling with Rayon parallel iterators.
+
+### ✅ Completed: PointCloud Unification
+**Location:** `cv-core`, `cv-stereo`
+- Eliminated redundant `PointCloud` definitions.
+- Standardized on `cv_core::PointCloud<T>` (aliased to `PointCloudf32/f64`).
+- Updated `cv-stereo` depth estimation to utilize core types.
+
+### ✅ Completed: CPU HAL Expansion
+**Location:** `cv-hal`
+- Implemented **CPU PointCloud Normals** estimation using `rstar` KD-trees and PCA.
+- Provides fallback for systems without compatible wgpu adapters.
+
+### ✅ Completed: RANSAC Centralization
+**Location:** `cv-core`, `cv-features`, `cv-calib3d`, `cv-registration`
+- Implemented generic **RANSAC engine** and `RobustModel` trait in `cv-core`.
+- Consolidated redundant RANSAC loops from three crates into a unified implementation.
+- Standardized robust estimation results and configurations across the workspace.
 
 ### ✅ Completed: Python Bindings for calib3d and stereo
 

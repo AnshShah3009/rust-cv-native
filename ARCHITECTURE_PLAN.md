@@ -2,59 +2,41 @@
 
 ## 1. Core Data Structures (`cv-core`)
 
-### Current State
-- `Tensor` and `ImageBuffer` are tightly coupled to CPU memory (`Vec<T>`).
-- No abstraction for data residing on GPU or other accelerators.
+### Status: Implemented
+- `Tensor<T, S: Storage<T>>` refactor is complete.
+- `CpuStorage<T>` and `GpuStorage<T>` (in `cv-hal`) are operational.
+- Type-safe hardware affinity: `to_cpu()` and `to_gpu_ctx(gpu)` provide explicit data migration.
 
-### Proposal: `Storage` Trait
-Refactor `Tensor<T>` to `Tensor<T, S: Storage<T>>`.
+### Future: Memory Alignment
+- Ensure `GpuStorage` follows WGSL 16-byte alignment rules for uniforms.
+- Implement zero-copy `as_slice` for CPU pinned memory if supported by backend.
 
-```rust
-pub trait Storage<T> {
-    fn as_slice(&self) -> &[T];
-    fn as_mut_slice(&mut self) -> &mut [T];
-    fn device(&self) -> DeviceType;
-    // Future: buffer() -> &wgpu::Buffer
-}
+## 2. SIMD Support (`cv-imgproc`, `cv-hal`)
 
-pub struct CpuStorage<T>(Vec<T>);
-pub struct GpuStorage<T>(wgpu::Buffer); // Future
-```
-
-## 2. SIMD Support (`cv-imgproc`)
-
-### Current State
-- Operations rely on LLVM auto-vectorization.
-- No explicit use of SIMD intrinsics.
-
-### Proposal: `wide` Crate Integration
-- Use the `wide` crate for portable SIMD (SSE, AVX, NEON, WASM).
-- **Target:** Color conversion (RGB->Gray) and Convolution filters.
+### Status: Operational
+- `wide` crate integrated for color conversion, core filters, and descriptors.
+- **Implemented:** SIMD acceleration for `FAST` detector, `Sobel`, `Gaussian Blur`, and `Canny` (magnitude + quantized directions) on CPU.
+- **Optimized:** `imgproc` filters now leverage asymmetric separable convolution for improved performance.
 
 ## 3. Hardware Abstraction (`cv-hal`)
 
-### Current State
-- `ComputeBackend` is a metadata trait.
-- GPU kernels are exposed as standalone functions in `hal/src/gpu_kernels`.
+### Status: Implemented
+- `ComputeDevice` enum provides a unified dispatch for CPU and GPU.
+- `ComputeContext` trait governs operation availability across backends.
+- **Implemented:** Global GPU Scan (multi-pass), Global GPU Radix Sort, and `icp_reduction` GPU kernels.
+- **Optimized:** `mog2_update`, `pointcloud_normals` (CPU fallback), and `sobel`/`gaussian_blur` (separable CPU implementation).
 
-### Proposal: `ComputeContext`
-Define a unified trait for operations:
+## 4. Redundancy Consolidation
 
-```rust
-trait ComputeContext {
-    fn transform(&self, input: &Tensor, matrix: &Matrix4) -> Result<Tensor>;
-    fn filter_2d(&self, input: &Tensor, kernel: &Tensor) -> Result<Tensor>;
-}
-```
+### Generic RANSAC Engine
+- **Status: Completed**
+- **Details:** Redundant RANSAC loops have been replaced by a generic implementation in `cv-core::robust` that uses the `RobustModel` trait.
+- **Used by:** `cv-features` (homography, fundamental), `cv-calib3d` (PnP), and `cv-registration` (global).
 
-## 4. Batching Strategy
-
-### GPU Batching
-- **Current:** One dispatch per operation.
-- **Proposed:** `BatchExecutor`.
-    - Collects commands (e.g., "transform this point cloud", "filter this image").
-    - Submits them in a single `queue.submit()`.
-    - Uses `indirect_dispatch` for variable-sized workloads if possible.
+### PointCloud Unification
+- **Status: Completed**
+- **Details:** Redundant `PointCloud` definitions in `cv-stereo` and `cv-3d` have been consolidated into `cv_core::PointCloud`.
+- **Optimization:** Added CPU fallback for normals estimation (via `rstar` and PCA) when GPU is unavailable.
 
 ## 5. Large Scale Acceleration & Resource Management
 

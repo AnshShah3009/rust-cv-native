@@ -173,15 +173,15 @@ pub fn registration_icp_point_to_plane_ctx(
     let mut final_iterations = 0;
 
     // Convert point clouds to tensors for GPU processing
-    let source_tensor = Tensor::from_vec(
+    let source_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(
         source.points.iter().flat_map(|p| [p.x, p.y, p.z, 1.0]).collect(),
         cv_core::TensorShape::new(1, source.points.len(), 4)
     );
-    let target_tensor = Tensor::from_vec(
+    let target_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(
         target.points.iter().flat_map(|p| [p.x, p.y, p.z, 1.0]).collect(),
         cv_core::TensorShape::new(1, target.points.len(), 4)
     );
-    let target_normals_tensor = Tensor::from_vec(
+    let target_normals_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(
         target.normals.as_ref().unwrap().iter().flat_map(|n| [n.x, n.y, n.z, 0.0]).collect(),
         cv_core::TensorShape::new(1, target.points.len(), 4)
     );
@@ -209,7 +209,7 @@ pub fn registration_icp_point_to_plane_ctx(
         let correspondences: Vec<(u32, u32)> = correspondences_raw.iter().map(|&(s, t, _)| (s as u32, t as u32)).collect();
 
         // Accumulate Normal Equations on device
-        let (ata, atb) = ctx.icp_accumulate(&s_gpu, &t_gpu, &n_gpu, &correspondences, &transformation).ok()?;
+        let (ata, atb): (nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>) = ctx.icp_accumulate(&s_gpu, &t_gpu, &n_gpu, &correspondences, &transformation).ok()?;
 
         // Solve for update on CPU (Matrix6 is small)
         if let Some(ata_inv) = ata.try_inverse() {

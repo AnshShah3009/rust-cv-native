@@ -1,14 +1,6 @@
-//! GPU-accelerated Conjugate Gradient solver for sparse SPD systems.
-//!
-//! This implements the CG algorithm using wgpu compute shaders for:
-//! - Sparse Matrix-Vector multiply (SpMV)
-//! - Vector dot product
-//! - Vector AXPY (y = alpha*x + y)
-//!
-//! Performance target: 2-50x faster than dense CPU solve for large systems.
-
 use crate::sparse::{LinearSolver, SparseMatrix};
 use nalgebra::DVector;
+use cv_hal::compute::ComputeDevice;
 
 /// Maximum iterations before declaring non-convergence.
 const MAX_ITERATIONS: usize = 1000;
@@ -17,17 +9,6 @@ const MAX_ITERATIONS: usize = 1000;
 const DEFAULT_TOLERANCE: f64 = 1e-10;
 
 /// GPU-accelerated Conjugate Gradient solver.
-///
-/// Uses the standard CG algorithm for SPD matrices:
-/// 1. r₀ = b - A*x₀
-/// 2. p₀ = r₀
-/// 3. For k = 0, 1, 2, ...
-///    a. αₖ = (rₖ·rₖ) / (pₖ·A·pₖ)
-///    b. xₖ₊₁ = xₖ + αₖ·pₖ
-///    c. rₖ₊₁ = rₖ - αₖ·A·pₖ
-///    d. βₖ = (rₖ₊₁·rₖ₊₁) / (rₖ·rₖ)
-///    e. pₖ₊₁ = rₖ₊₁ + βₖ·pₖ
-///    f. Check convergence: ||rₖ₊₁|| < tol
 pub struct GpuCgSolver {
     pub tolerance: f64,
     pub max_iterations: usize,
@@ -105,17 +86,23 @@ impl GpuCgSolver {
     }
 }
 
-/// CPU sparse matrix-vector multiply: y = A * x
+/// CPU sparse matrix-vector multiply: y = A * x (CSR format)
 fn spmv_cpu(a: &SparseMatrix, x: &DVector<f64>) -> DVector<f64> {
     let mut y = DVector::zeros(a.rows);
-    for triplet in &a.triplets {
-        y[triplet.row] += triplet.val * x[triplet.col];
+    for i in 0..a.rows {
+        let row_start = a.row_ptr[i] as usize;
+        let row_end = a.row_ptr[i+1] as usize;
+        let mut sum = 0.0;
+        for j in row_start..row_end {
+            sum += a.values[j] * x[a.col_indices[j] as usize];
+        }
+        y[i] = sum;
     }
     y
 }
 
 impl LinearSolver for GpuCgSolver {
-    fn solve(&self, a: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String> {
+    fn solve(&self, _ctx: &ComputeDevice, a: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String> {
         // For now, use CPU fallback
         // GPU implementation will use the SpMV and vector_ops WGSL shaders
         // TODO: Implement GPU dispatch when GpuContext is available
@@ -132,31 +119,29 @@ mod tests {
     fn test_cg_solver_diagonal() {
         // Solve: [2 0 0; 0 3 0; 0 0 4] * x = [4; 9; 16]
         // Expected: x = [2; 3; 4]
-        let a = SparseMatrix {
-            rows: 3,
-            cols: 3,
-            triplets: vec![
-                Triplet {
-                    row: 0,
-                    col: 0,
-                    val: 2.0,
-                },
-                Triplet {
-                    row: 1,
-                    col: 1,
-                    val: 3.0,
-                },
-                Triplet {
-                    row: 2,
-                    col: 2,
-                    val: 4.0,
-                },
-            ],
-        };
+        let triplets = vec![
+            Triplet {
+                row: 0,
+                col: 0,
+                val: 2.0,
+            },
+            Triplet {
+                row: 1,
+                col: 1,
+                val: 3.0,
+            },
+            Triplet {
+                row: 2,
+                col: 2,
+                val: 4.0,
+            },
+        ];
+        let a = SparseMatrix::from_triplets(3, 3, &triplets);
         let b = DVector::from_vec(vec![4.0, 9.0, 16.0]);
 
         let solver = GpuCgSolver::new();
-        let x = solver.solve(&a, &b).unwrap();
+        let ctx = ComputeDevice::Cpu;
+        let x = solver.solve(&ctx, &a, &b).unwrap();
 
         assert!((x[0] - 2.0).abs() < 1e-6, "x[0] = {}, expected 2.0", x[0]);
         assert!((x[1] - 3.0).abs() < 1e-6, "x[1] = {}, expected 3.0", x[1]);
@@ -167,36 +152,34 @@ mod tests {
     fn test_cg_solver_spd() {
         // Solve: [4 1; 1 3] * x = [1; 2]
         // This is SPD (eigenvalues > 0)
-        let a = SparseMatrix {
-            rows: 2,
-            cols: 2,
-            triplets: vec![
-                Triplet {
-                    row: 0,
-                    col: 0,
-                    val: 4.0,
-                },
-                Triplet {
-                    row: 0,
-                    col: 1,
-                    val: 1.0,
-                },
-                Triplet {
-                    row: 1,
-                    col: 0,
-                    val: 1.0,
-                },
-                Triplet {
-                    row: 1,
-                    col: 1,
-                    val: 3.0,
-                },
-            ],
-        };
+        let triplets = vec![
+            Triplet {
+                row: 0,
+                col: 0,
+                val: 4.0,
+            },
+            Triplet {
+                row: 0,
+                col: 1,
+                val: 1.0,
+            },
+            Triplet {
+                row: 1,
+                col: 0,
+                val: 1.0,
+            },
+            Triplet {
+                row: 1,
+                col: 1,
+                val: 3.0,
+            },
+        ];
+        let a = SparseMatrix::from_triplets(2, 2, &triplets);
         let b = DVector::from_vec(vec![1.0, 2.0]);
 
         let solver = GpuCgSolver::new();
-        let x = solver.solve(&a, &b).unwrap();
+        let ctx = ComputeDevice::Cpu;
+        let x = solver.solve(&ctx, &a, &b).unwrap();
 
         // Verify A*x ≈ b
         let ax = spmv_cpu(&a, &x);
@@ -235,15 +218,12 @@ mod tests {
                 });
             }
         }
-        let a = SparseMatrix {
-            rows: n,
-            cols: n,
-            triplets,
-        };
+        let a = SparseMatrix::from_triplets(n, n, &triplets);
         let b = DVector::from_vec(vec![1.0; n]);
 
         let solver = GpuCgSolver::new();
-        let x = solver.solve(&a, &b).unwrap();
+        let ctx = ComputeDevice::Cpu;
+        let x = solver.solve(&ctx, &a, &b).unwrap();
 
         // Verify A*x ≈ b
         let ax = spmv_cpu(&a, &x);

@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use crate::Result;
 use cv_hal::gpu::GpuContext;
+use cv_hal::compute::ComputeDevice;
 use wgpu::BufferUsages;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +36,11 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
             .map_err(|_| crate::Error::ConcurrencyError("UnifiedBuffer host_data poisoned".to_string()))
     }
 
-    pub fn sync_to_device(&mut self, ctx: &GpuContext) -> Result<()> {
+    pub fn sync_to_device_ctx(&mut self, ctx: &GpuContext) -> Result<()> {
+        self.sync_to_device(&ComputeDevice::Gpu(ctx))
+    }
+
+    pub fn sync_to_device(&mut self, device: &ComputeDevice) -> Result<()> {
         if self.location == BufferLocation::Device || self.location == BufferLocation::Both {
             return Ok(());
         }
@@ -44,37 +49,37 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
             .map_err(|_| crate::Error::ConcurrencyError("UnifiedBuffer host_data poisoned".to_string()))?;
 
         let size = (self.len * std::mem::size_of::<T>()) as u64;
+        let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
         
         let buffer = if let Some(ref b) = self.device_data {
             if b.size() >= size {
                 b
             } else {
-                let new_b = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("UnifiedBuffer (resized)"),
-                    size,
-                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
-                    mapped_at_creation: false,
-                });
+                // Return old buffer to pool if it was pooled?
+                // For now just create new one from pool
+                let new_b = device.get_buffer(size, usages)?;
                 self.device_data = Some(new_b);
                 self.device_data.as_ref().unwrap()
             }
         } else {
-            let new_b = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("UnifiedBuffer"),
-                size,
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            });
+            let new_b = device.get_buffer(size, usages)?;
             self.device_data = Some(new_b);
             self.device_data.as_ref().unwrap()
         };
 
-        ctx.queue.write_buffer(buffer, 0, bytemuck::cast_slice(&host_guard));
+        if let ComputeDevice::Gpu(gpu) = device {
+            gpu.queue.write_buffer(buffer, 0, bytemuck::cast_slice(&host_guard));
+        }
+        
         self.location = BufferLocation::Both;
         Ok(())
     }
 
-    pub async fn sync_to_host(&mut self, ctx: &GpuContext) -> Result<()> {
+    pub async fn sync_to_host_ctx(&mut self, ctx: &GpuContext) -> Result<()> {
+        self.sync_to_host(&ComputeDevice::Gpu(ctx)).await
+    }
+
+    pub async fn sync_to_host(&mut self, device: &ComputeDevice) -> Result<()> {
         if self.location == BufferLocation::Host || self.location == BufferLocation::Both {
             return Ok(());
         }
@@ -83,19 +88,34 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
             .ok_or_else(|| crate::Error::MemoryError("No device buffer to sync from".to_string()))?;
 
         let size = self.len * std::mem::size_of::<T>();
-        let data: Vec<T> = cv_hal::gpu_kernels::buffer_utils::read_buffer(
-            ctx.device.clone(),
-            &ctx.queue,
-            buffer,
-            0,
-            size,
-        ).await?;
+        
+        let data: Vec<T> = match device {
+            ComputeDevice::Gpu(gpu) => {
+                cv_hal::gpu_kernels::buffer_utils::read_buffer(
+                    gpu.device.clone(),
+                    &gpu.queue,
+                    buffer,
+                    0,
+                    size,
+                ).await?
+            }
+            ComputeDevice::Cpu(_) => return Err(crate::Error::MemoryError("Cannot sync to host from CPU device".into())),
+        };
 
         let mut host_guard = self.host_data.lock()
             .map_err(|_| crate::Error::ConcurrencyError("UnifiedBuffer host_data poisoned".to_string()))?;
         *host_guard = data;
         
         self.location = BufferLocation::Both;
+        Ok(())
+    }
+
+    /// Return the GPU buffer to the pool.
+    pub fn release(&mut self, device: &ComputeDevice) -> Result<()> {
+        if let Some(buffer) = self.device_data.take() {
+            let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
+            device.return_buffer(buffer, usages)?;
+        }
         Ok(())
     }
 

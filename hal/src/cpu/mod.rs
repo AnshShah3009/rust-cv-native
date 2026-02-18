@@ -73,12 +73,66 @@ impl ComputeBackend for CpuBackend {
     }
 }
 
+impl CpuBackend {
+    fn convolve_separable_u8_to_u8(
+        &self,
+        src: &[u8],
+        dst: &mut [u8],
+        w: usize,
+        h: usize,
+        kx: &[f32],
+        ky: &[f32],
+    ) {
+        let rx = kx.len() / 2;
+        let ry = ky.len() / 2;
+        
+        let pool = cv_core::BufferPool::global();
+        let mut intermediate_vec = pool.get(w * h * 4);
+        let intermediate_ptr = intermediate_vec.as_mut_ptr() as *mut f32;
+        let intermediate = unsafe { std::slice::from_raw_parts_mut(intermediate_ptr, w * h) };
+
+        // Horizontal pass
+        intermediate.par_chunks_mut(w).enumerate().for_each(|(y, row_inter)| {
+            let row_src = &src[y * w .. (y + 1) * w];
+            for x in 0..w {
+                let mut sum = 0.0f32;
+                for i in 0..kx.len() {
+                    let sx = (x as isize + i as isize - rx as isize).clamp(0, w as isize - 1) as usize;
+                    sum += row_src[sx] as f32 * kx[i];
+                }
+                row_inter[x] = sum;
+            }
+        });
+
+        // Vertical pass
+        dst.par_chunks_mut(w).enumerate().for_each(|(y, row_dst)| {
+            for x in 0..w {
+                let mut sum = 0.0f32;
+                for j in 0..ky.len() {
+                    let sy = (y as isize + j as isize - ry as isize).clamp(0, h as isize - 1) as usize;
+                    sum += intermediate[sy * w + x] * ky[j];
+                }
+                row_dst[x] = sum.abs().min(255.0) as u8;
+            }
+        });
+
+        pool.return_buffer(intermediate_vec);
+    }
+}
+
 impl ComputeContext for CpuBackend {
+
     fn backend_type(&self) -> BackendType {
+
         BackendType::Cpu
+
     }
 
+
+
     fn device_id(&self) -> DeviceId {
+
+
         self.device_id
     }
 
@@ -97,42 +151,24 @@ impl ComputeContext for CpuBackend {
 
         let (h, w) = input.shape.hw();
         let (kh, kw) = kernel.shape.hw();
-        let (cx, cy) = (kw / 2, kh / 2);
         
         let mut output_storage = S::new(input.shape.len(), 0.0);
-        
-        {
-            let out_slice = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
-            
-            out_slice.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
-                for x in 0..w {
-                    let mut sum = 0.0;
-                    for j in 0..kh {
-                        for i in 0..kw {
-                            let src_y = y as isize + j as isize - cy as isize;
-                            let src_x = x as isize + i as isize - cx as isize;
-                            
-                            let val = if src_y >= 0 && src_y < h as isize && src_x >= 0 && src_x < w as isize {
-                                src[src_y as usize * w + src_x as usize]
-                            } else {
-                                match border_mode {
-                                    BorderMode::Constant(v) => v,
-                                    BorderMode::Replicate => {
-                                        let c = src_x.clamp(0, w as isize - 1) as usize;
-                                        let r = src_y.clamp(0, h as isize - 1) as usize;
-                                        src[r * w + c]
-                                    }
-                                    _ => 0.0,
-                                }
-                            };
-                            
-                            sum += val * k_data[j * kw + i];
-                        }
+        let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+
+        // Naive implementation for now, but parallelized
+        dst.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            for x in 0..w {
+                let mut sum = 0.0f32;
+                for ky in 0..kh {
+                    for kx in 0..kw {
+                        let sy = (y as isize + ky as isize - (kh / 2) as isize).clamp(0, h as isize - 1) as usize;
+                        let sx = (x as isize + kx as isize - (kw / 2) as isize).clamp(0, w as isize - 1) as usize;
+                        sum += src[sy * w + sx] * k_data[ky * kw + kx];
                     }
-                    row_out[x] = sum;
                 }
-            });
-        }
+                row[x] = sum;
+            }
+        });
 
         Ok(Tensor {
             storage: output_storage,
@@ -140,6 +176,43 @@ impl ComputeContext for CpuBackend {
             dtype: input.dtype,
             _phantom: std::marker::PhantomData,
         })
+    }
+
+    fn sobel<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        dx: i32,
+        dy: i32,
+        ksize: usize,
+    ) -> Result<(Tensor<u8, S>, Tensor<u8, S>)> {
+        let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
+        let (h, w) = input.shape.hw();
+        
+        let mut gx_storage = S::new(input.shape.len(), 0);
+        let mut gy_storage = S::new(input.shape.len(), 0);
+        let gx_slice = gx_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Gx output not on CPU".into()))?;
+        let gy_slice = gy_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Gy output not on CPU".into()))?;
+
+        // Sobel is separable:
+        // Gx = [1 2 1]^T * [-1 0 1]
+        // Gy = [-1 0 1]^T * [1 2 1]
+        let (kx_deriv, kx_smooth) = match ksize {
+            3 => (vec![-1.0, 0.0, 1.0], vec![1.0, 2.0, 1.0]),
+            5 => (vec![-1.0, -2.0, 0.0, 2.0, 1.0], vec![1.0, 4.0, 6.0, 4.0, 1.0]),
+            _ => return Err(crate::Error::NotSupported(format!("Sobel ksize={} not supported on CPU", ksize))),
+        };
+
+        if dx > 0 {
+            self.convolve_separable_u8_to_u8(src, gx_slice, w, h, &kx_deriv, &kx_smooth);
+        }
+        if dy > 0 {
+            self.convolve_separable_u8_to_u8(src, gy_slice, w, h, &kx_smooth, &kx_deriv);
+        }
+
+        Ok((
+            Tensor { storage: gx_storage, shape: input.shape, dtype: input.dtype, _phantom: std::marker::PhantomData },
+            Tensor { storage: gy_storage, shape: input.shape, dtype: input.dtype, _phantom: std::marker::PhantomData }
+        ))
     }
 
     fn dispatch<S: Storage<u8> + 'static>(
@@ -218,63 +291,6 @@ impl ComputeContext for CpuBackend {
             dtype: input.dtype,
             _phantom: std::marker::PhantomData,
         })
-    }
-
-    fn sobel<S: Storage<u8> + 'static>(
-        &self,
-        input: &Tensor<u8, S>,
-        _dx: i32,
-        _dy: i32,
-        ksize: usize,
-    ) -> Result<(Tensor<u8, S>, Tensor<u8, S>)> {
-        let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
-        let (h, w) = input.shape.hw();
-        let mut gx_storage = S::new(input.shape.len(), 0);
-        let mut gy_storage = S::new(input.shape.len(), 0);
-        let gx_slice = gx_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Gx output not on CPU".into()))?;
-        let gy_slice = gy_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Gy output not on CPU".into()))?;
-
-        let (kx, ky) = if ksize == 3 {
-            (
-                vec![-1.0, 0.0, 1.0, -2.0, 0.0, 2.0, -1.0, 0.0, 1.0],
-                vec![-1.0, -2.0, -1.0, 0.0, 0.0, 0.0, 1.0, 2.0, 1.0]
-            )
-        } else {
-            return Err(crate::Error::NotSupported("Only ksize=3 supported for CPU sobel stub".into()));
-        };
-
-        gx_slice.par_chunks_mut(w).enumerate().for_each(|(y, row_gx)| {
-            for x in 0..w {
-                let mut sum_x = 0.0f32;
-                for j in 0..3 {
-                    for i in 0..3 {
-                        let sy = (y as isize + j as isize - 1).clamp(0, h as isize - 1) as usize;
-                        let sx = (x as isize + i as isize - 1).clamp(0, w as isize - 1) as usize;
-                        sum_x += src[sy * w + sx] as f32 * kx[j * 3 + i];
-                    }
-                }
-                row_gx[x] = sum_x.abs().min(255.0) as u8;
-            }
-        });
-
-        gy_slice.par_chunks_mut(w).enumerate().for_each(|(y, row_gy)| {
-            for x in 0..w {
-                let mut sum_y = 0.0f32;
-                for j in 0..3 {
-                    for i in 0..3 {
-                        let sy = (y as isize + j as isize - 1).clamp(0, h as isize - 1) as usize;
-                        let sx = (x as isize + i as isize - 1).clamp(0, w as isize - 1) as usize;
-                        sum_y += src[sy * w + sx] as f32 * ky[j * 3 + i];
-                    }
-                }
-                row_gy[x] = sum_y.abs().min(255.0) as u8;
-            }
-        });
-
-        Ok((
-            Tensor { storage: gx_storage, shape: input.shape, dtype: input.dtype, _phantom: std::marker::PhantomData },
-            Tensor { storage: gy_storage, shape: input.shape, dtype: input.dtype, _phantom: std::marker::PhantomData }
-        ))
     }
 
     fn morphology<S: Storage<u8> + 'static>(
@@ -582,10 +598,90 @@ impl ComputeContext for CpuBackend {
 
     fn pointcloud_normals<S: Storage<f32> + 'static>(
         &self,
-        _points: &Tensor<f32, S>,
-        _k_neighbors: u32,
+        points: &Tensor<f32, S>,
+        k_neighbors: u32,
     ) -> Result<Tensor<f32, S>> {
-        Err(crate::Error::NotSupported("CPU pointcloud_normals pending implementation".into()))
+        use nalgebra::{Matrix3, Vector3};
+        
+        let src = points.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Points not on CPU".into()))?;
+        let num_points = points.shape.height;
+        let mut normals_storage = S::new(num_points * 4, 0.0);
+        let dst = normals_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+
+        // Simple CPU neighborhood PCA implementation
+        // 1. Build spatial index (using a simple flat search for now or a proper crate)
+        // Since we want high performance, let's use a basic spatial grid or KD-tree if available.
+        // For now, we'll implement a straightforward parallel neighborhood search.
+        
+        let k = k_neighbors as usize;
+        let pts: Vec<Vector3<f32>> = (0..num_points).map(|i| {
+            Vector3::new(src[i * 4], src[i * 4 + 1], src[i * 4 + 2])
+        }).collect();
+
+        // Use a KD-tree for efficient search
+        let tree = rstar::RTree::bulk_load(
+            (0..num_points).map(|i| [src[i * 4], src[i * 4 + 1], src[i * 4 + 2], i as f32]).collect::<Vec<[f32; 4]>>()
+        );
+
+        dst.par_chunks_mut(4).enumerate().for_each(|(i, normal_out)| {
+            let p = pts[i];
+            
+            // Find neighbors
+            let mut neighbors = tree.nearest_neighbor_iter(&[p.x, p.y, p.z, 0.0])
+                .take(k)
+                .map(|neighbor| Vector3::new(neighbor[0], neighbor[1], neighbor[2]))
+                .collect::<Vec<_>>();
+
+            if neighbors.len() < 3 {
+                normal_out[0] = 0.0;
+                normal_out[1] = 0.0;
+                normal_out[2] = 1.0;
+                normal_out[3] = 0.0;
+                return;
+            }
+
+            // Compute centroid
+            let centroid = neighbors.iter().sum::<Vector3<f32>>() / neighbors.len() as f32;
+
+            // Compute covariance matrix
+            let mut cov = Matrix3::zeros();
+            for q in neighbors {
+                let diff = q - centroid;
+                cov += diff * diff.transpose();
+            }
+
+            // Solve for eigenvalues/eigenvectors
+            let eig = cov.symmetric_eigen();
+            let mut min_idx = 0;
+            let mut min_val = eig.eigenvalues[0];
+            for j in 1..3 {
+                if eig.eigenvalues[j] < min_val {
+                    min_val = eig.eigenvalues[j];
+                    min_idx = j;
+                }
+            }
+
+            let normal = eig.eigenvectors.column(min_idx);
+            
+            // Flip normal towards origin (standard heuristic)
+            if normal.dot(&(-p)) < 0.0 {
+                normal_out[0] = -normal.x;
+                normal_out[1] = -normal.y;
+                normal_out[2] = -normal.z;
+            } else {
+                normal_out[0] = normal.x;
+                normal_out[1] = normal.y;
+                normal_out[2] = normal.z;
+            }
+            normal_out[3] = 0.0;
+        });
+
+        Ok(Tensor {
+            storage: normals_storage,
+            shape: points.shape,
+            dtype: points.dtype,
+            _phantom: std::marker::PhantomData,
+        })
     }
 
     fn tsdf_integrate<S: Storage<f32> + 'static>(
@@ -774,39 +870,56 @@ impl ComputeContext for CpuBackend {
                 let high = p.saturating_add(threshold);
                 let low = p.saturating_sub(threshold);
 
-                // Bresenham circle radius 3
+                // High-speed early exit test: check 1, 9, 5, 13
+                let p1 = src[(y - 3) * w + x];
+                let p9 = src[(y + 3) * w + x];
+                let mut count = 0;
+                if p1 > high { count += 1; } else if p1 < low { count += 1; }
+                if p9 > high { count += 1; } else if p9 < low { count += 1; }
+                if count < 1 { continue; }
+
+                let p5 = src[y * w + x + 3];
+                let p13 = src[y * w + x - 3];
+                if p5 > high { count += 1; } else if p5 < low { count += 1; }
+                if p13 > high { count += 1; } else if p13 < low { count += 1; }
+                if count < 3 { continue; }
+
+                // Full 16-pixel circle
                 let offsets = [
                     (0, -3), (1, -3), (2, -2), (3, -1), (3, 0), (3, 1), (2, 2), (1, 3),
                     (0, 3), (-1, 3), (-2, 2), (-3, 1), (-3, 0), (-3, -1), (-2, -2), (-1, -3)
                 ];
 
-                let mut brighter = 0u32;
-                let mut darker = 0u32;
                 let mut vals = [0u8; 16];
-
                 for (i, (dx, dy)) in offsets.iter().enumerate() {
-                    let v = src[((y as i32 + dy) as usize) * w + (x as i32 + dx) as usize];
-                    vals[i] = v;
-                    if v > high { brighter += 1; }
-                    else if v < low { darker += 1; }
+                    vals[i] = src[((y as i32 + dy) as usize) * w + (x as i32 + dx) as usize];
                 }
 
-                if brighter >= 9 || darker >= 9 {
-                    // Check contiguous
-                    if has_9_contiguous(&vals, high, low) {
-                        // Compute score (simple version: sum of abs diff)
-                        let mut score = 0u32;
-                        for &v in &vals {
-                            score += (v as i32 - p as i32).abs() as u32;
-                        }
-                        row_out[x] = (score / 16).min(255) as u8;
+                if has_9_contiguous(&vals, high, low) {
+                    let mut score = 0u32;
+                    for &v in &vals {
+                        score += (v as i32 - p as i32).abs() as u32;
                     }
+                    row_out[x] = (score / 16).min(255) as u8;
                 }
             }
         });
 
         if non_max_suppression {
-            // TODO: Parallel NMS on score map
+            // Non-max suppression (3x3 neighborhood)
+            let scores = dst.to_vec();
+            dst.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
+                if y < 1 || y >= h - 1 { return; }
+                for x in 1..w - 1 {
+                    let s = scores[y * w + x];
+                    if s == 0 { continue; }
+                    if s < scores[(y - 1) * w + x - 1] || s < scores[(y - 1) * w + x] || s < scores[(y - 1) * w + x + 1] ||
+                       s < scores[y * w + x - 1]       || s < scores[y * w + x + 1]       ||
+                       s < scores[(y + 1) * w + x - 1] || s < scores[(y + 1) * w + x] || s < scores[(y + 1) * w + x + 1] {
+                        row_out[x] = 0;
+                    }
+                }
+            });
         }
 
         Ok(Tensor {
@@ -828,47 +941,12 @@ impl ComputeContext for CpuBackend {
         let mut output_storage = S::new(h * w, 0);
         let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
-        // 1D Kernel
-        let mut kernel = vec![0.0f32; k_size];
-        let radius = k_size / 2;
-        let mut sum = 0.0;
-        for i in 0..k_size {
-            let x = i as f32 - radius as f32;
-            kernel[i] = (-(x * x) / (2.0 * sigma * sigma)).exp();
-            sum += kernel[i];
-        }
-        for i in 0..k_size { kernel[i] /= sum; }
-
-        // Horizontal pass
-        let mut tmp = vec![0.0f32; h * w];
-        tmp.par_chunks_mut(w).enumerate().for_each(|(y, row_tmp)| {
-            for x in 0..w {
-                let mut val = 0.0;
-                for i in 0..k_size {
-                    let kx = x as i32 + i as i32 - radius as i32;
-                    let cl_kx = kx.clamp(0, w as i32 - 1) as usize;
-                    val += src[y * w + cl_kx] as f32 * kernel[i];
-                }
-                row_tmp[x] = val;
-            }
-        });
-
-        // Vertical pass
-        dst.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
-            for x in 0..w {
-                let mut val = 0.0;
-                for i in 0..k_size {
-                    let ky = y as i32 + i as i32 - radius as i32;
-                    let cl_ky = ky.clamp(0, h as i32 - 1) as usize;
-                    val += tmp[cl_ky * w + x] * kernel[i];
-                }
-                row_out[x] = val.round().clamp(0.0, 255.0) as u8;
-            }
-        });
+        let kernel = gaussian_kernel_1d(sigma, k_size);
+        self.convolve_separable_u8_to_u8(src, dst, w, h, &kernel, &kernel);
 
         Ok(Tensor {
             storage: output_storage,
-            shape: input.shape,
+            shape: TensorShape::new(1, h, w),
             dtype: input.dtype,
             _phantom: std::marker::PhantomData,
         })

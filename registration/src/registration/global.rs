@@ -147,6 +147,28 @@ fn weight_spfh(
     fpfh
 }
 
+use cv_core::{RobustModel, RobustConfig, Ransac};
+
+pub struct GlobalRegistrationEstimator<'a> {
+    source: &'a PointCloud,
+    target: &'a PointCloud,
+}
+
+impl<'a> RobustModel<(usize, usize, f32)> for GlobalRegistrationEstimator<'a> {
+    type Model = Matrix4<f32>;
+    fn min_sample_size(&self) -> usize { 3 }
+    fn estimate(&self, data: &[&(usize, usize, f32)]) -> Option<Self::Model> {
+        let correspondences: Vec<(usize, usize, f32)> = data.iter().map(|&&c| c).collect();
+        compute_transformation_from_correspondences(self.source, self.target, &correspondences)
+    }
+    fn compute_error(&self, model: &Self::Model, data: &(usize, usize, f32)) -> f64 {
+        let src_point = self.source.points[data.0];
+        let tgt_point = self.target.points[data.1];
+        let transformed = model.transform_point(&src_point);
+        (transformed - tgt_point).norm() as f64
+    }
+}
+
 /// Global registration using RANSAC
 pub fn registration_ransac_based_on_feature_matching(
     source: &PointCloud,
@@ -157,85 +179,41 @@ pub fn registration_ransac_based_on_feature_matching(
     ransac_n: usize,
     max_iterations: usize,
 ) -> Option<GlobalRegistrationResult> {
-    // Simplified: use brute force for feature matching
-    // Find correspondences
+    // Find correspondences (Brute force)
     let mut correspondences: Vec<(usize, usize, f32)> = Vec::new();
     for (i, source_feature) in source_features.iter().enumerate() {
         let mut min_dist = f32::MAX;
         let mut min_idx = 0;
-
         for (j, target_feature) in target_features.iter().enumerate() {
-            let dist = source_feature
-                .histogram
-                .iter()
-                .zip(target_feature.histogram.iter())
-                .map(|(a, b)| (a - b).powi(2))
-                .sum::<f32>()
-                .sqrt();
-
+            let dist = source_feature.histogram.iter().zip(target_feature.histogram.iter())
+                .map(|(a, b)| (a - b).powi(2)).sum::<f32>().sqrt();
             if dist < min_dist {
                 min_dist = dist;
                 min_idx = j;
             }
         }
-
         if min_dist < max_correspondence_distance {
             correspondences.push((i, min_idx, min_dist));
         }
     }
 
-    // Sort by distance and keep top matches
     correspondences.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
     let top_correspondences: Vec<_> = correspondences.into_iter().take(1000).collect();
 
-    if top_correspondences.len() < ransac_n {
-        return None;
-    }
+    if top_correspondences.len() < ransac_n { return None; }
 
-    // RANSAC loop
-    let mut best_inliers = Vec::new();
-    let mut best_transformation = Matrix4::identity();
+    let config = RobustConfig {
+        threshold: max_correspondence_distance as f64,
+        max_iterations,
+        confidence: 0.99,
+        min_sample_size: ransac_n,
+    };
 
-    for _ in 0..max_iterations {
-        // Sample random correspondences
-        let sample_indices = random_sample(ransac_n, top_correspondences.len());
-        let sample: Vec<_> = sample_indices
-            .iter()
-            .map(|&i| top_correspondences[i])
-            .collect();
+    let estimator = GlobalRegistrationEstimator { source, target };
+    let ransac = Ransac::new(config);
+    let res = ransac.run(&estimator, &top_correspondences);
 
-        // Compute transformation from sample
-        if let Some(transformation) =
-            compute_transformation_from_correspondences(source, target, &sample)
-        {
-            // Count inliers
-            let inliers: Vec<_> = top_correspondences
-                .iter()
-                .filter(|&&(src_idx, tgt_idx, _)| {
-                    let src_point = source.points[src_idx];
-                    let tgt_point = target.points[tgt_idx];
-                    let transformed = transformation.transform_point(&src_point);
-                    let dist = (transformed - tgt_point).norm();
-                    dist < max_correspondence_distance
-                })
-                .copied()
-                .collect();
-
-            if inliers.len() > best_inliers.len() {
-                best_inliers = inliers;
-                best_transformation = transformation;
-            }
-        }
-    }
-
-    if best_inliers.is_empty() {
-        return None;
-    }
-
-    // Refine with all inliers (recompute transformation)
-    let final_transformation =
-        compute_transformation_from_correspondences(source, target, &best_inliers)
-            .unwrap_or(best_transformation);
+    let final_transformation = res.model?;
 
     // Compute fitness and RMSE
     let (fitness, rmse) = evaluate_registration(
@@ -245,11 +223,16 @@ pub fn registration_ransac_based_on_feature_matching(
         max_correspondence_distance,
     );
 
+    let inlier_correspondences = top_correspondences.iter().zip(res.inliers.iter())
+        .filter(|(_, &inlier)| inlier)
+        .map(|(c, _)| (c.0, c.1))
+        .collect();
+
     Some(GlobalRegistrationResult {
         transformation: final_transformation,
         fitness,
         inlier_rmse: rmse,
-        correspondences: best_inliers.iter().map(|&(s, t, _)| (s, t)).collect(),
+        correspondences: inlier_correspondences,
     })
 }
 
