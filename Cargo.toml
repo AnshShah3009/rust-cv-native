@@ -30,6 +30,10 @@ gpu = ["cv-stereo/gpu", "cv-features/gpu"]
 [[bench]]
 name = "cv_benchmarks"
 harness = false
+
+[[bench]]
+name = "acceleration"
+harness = false
 path = "benches/cv_benchmarks.rs"
 
 [[bench]]
@@ -59,6 +63,7 @@ members = [
     "python",
     "viewer",
     "io",
+    "objdetect",
     "3d", "rendering", "registration", "plot",
 ]
 exclude = ["examples"]
@@ -78,6 +83,7 @@ criterion = { version = "0.5", default-features = false, features = ["rayon", "c
 core_affinity = "0.8"
 ndarray = "0.15"
 tokio = "1.43"
+ffmpeg-next = "7.1"
 
 [profile.release]
 opt-level = 3

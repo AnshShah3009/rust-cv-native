@@ -1,7 +1,7 @@
 use crate::convolve::BorderMode;
 use image::GrayImage;
 use rayon::prelude::*;
-use cv_core::{Tensor, TensorShape, storage::Storage};
+use cv_core::{TensorShape, storage::Storage};
 use cv_hal::compute::{ComputeDevice};
 use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
 use cv_hal::context::MorphologyType as HalMorphType;
@@ -225,7 +225,7 @@ pub fn morphology_ctx(
     match typ {
         HalMorphType::Dilate => dilate_with_border_into(src, &mut out, kernel, iterations, _border),
         HalMorphType::Erode => erode_with_border_into(src, &mut out, kernel, iterations, _border),
-        _ => {} // Open/Close handled via recursive calls elsewhere or not implemented here
+        _ => {} 
     }
     out
 }
@@ -239,8 +239,8 @@ fn morphology_gpu(
 ) -> cv_hal::Result<GrayImage> {
     use cv_hal::context::ComputeContext;
     
-    let input_tensor = Tensor::from_vec(src.as_raw().to_vec(), TensorShape::new(1, src.height() as usize, src.width() as usize));
-    let input_gpu = input_tensor.to_gpu()?;
+    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), TensorShape::new(1, src.height() as usize, src.width() as usize));
+    let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
     
     // Convert (i32, i32) kernel to Tensor<u8> mask
     let (min_kx, max_kx, min_ky, max_ky) = kernel.iter().fold((0, 0, 0, 0), |(mix, max, miy, may), &(x, y)| {
@@ -256,10 +256,11 @@ fn morphology_gpu(
         let ky = (y as isize + cy as isize) as usize;
         k_data[ky * kw + kx] = 1;
     }
-    let kernel_tensor = Tensor::from_vec(k_data, TensorShape::new(1, kh, kw));
+    let kernel_tensor = cv_core::CpuTensor::from_vec(k_data, TensorShape::new(1, kh, kw));
+    let kernel_gpu = kernel_tensor.to_gpu_ctx(gpu)?;
     
-    let output_gpu = gpu.morphology(&input_gpu, typ, &kernel_tensor, iterations)?;
-    let output_cpu = output_gpu.to_cpu()?;
+    let output_gpu = gpu.morphology(&input_gpu, typ, &kernel_gpu, iterations)?;
+    let output_cpu = output_gpu.to_cpu_ctx(gpu)?;
     
     let data = output_cpu.storage.as_slice().unwrap().to_vec();
     GrayImage::from_raw(src.width(), src.height(), data)

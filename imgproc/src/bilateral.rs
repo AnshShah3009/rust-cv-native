@@ -3,7 +3,7 @@
 //! Edge-preserving smoothing filter that uses both spatial and range (intensity) distance.
 
 use rayon::prelude::*;
-use rayon::ThreadPool;
+use cv_runtime::orchestrator::{ResourceGroup, scheduler};
 
 /// Bilateral filter parameters
 #[derive(Debug, Clone)]
@@ -51,17 +51,18 @@ pub fn bilateral_filter_depth(
     height: u32,
     params: BilateralFilterParams,
 ) -> Vec<f32> {
-    bilateral_filter_depth_in_pool(depth, width, height, params, None)
+    let group = scheduler().get_group("default").unwrap().expect("default group");
+    bilateral_filter_depth_ctx(depth, width, height, params, &group)
 }
 
-pub fn bilateral_filter_depth_in_pool(
+pub fn bilateral_filter_depth_ctx(
     depth: &[f32],
     width: u32,
     height: u32,
     params: BilateralFilterParams,
-    pool: Option<&ThreadPool>,
+    group: &ResourceGroup,
 ) -> Vec<f32> {
-    let run = || {
+    group.run(|| {
         let kernel_size = params.kernel_size;
         let half_kernel = kernel_size / 2;
         let sigma_space_sq = 2.0 * params.sigma_space * params.sigma_space;
@@ -123,13 +124,7 @@ pub fn bilateral_filter_depth_in_pool(
             });
 
         output
-    };
-
-    if let Some(p) = pool {
-        p.install(run)
-    } else {
-        run()
-    }
+    })
 }
 
 /// Apply bilateral filter to RGB image
@@ -139,17 +134,18 @@ pub fn bilateral_filter_rgb(
     height: u32,
     params: BilateralFilterParams,
 ) -> Vec<u8> {
-    bilateral_filter_rgb_in_pool(image, width, height, params, None)
+    let group = scheduler().get_group("default").unwrap().expect("default group");
+    bilateral_filter_rgb_ctx(image, width, height, params, &group)
 }
 
-pub fn bilateral_filter_rgb_in_pool(
+pub fn bilateral_filter_rgb_ctx(
     image: &[u8],
     width: u32,
     height: u32,
     params: BilateralFilterParams,
-    pool: Option<&ThreadPool>,
+    group: &ResourceGroup,
 ) -> Vec<u8> {
-    let run = || {
+    group.run(|| {
         let kernel_size = params.kernel_size;
         let half_kernel = kernel_size / 2;
         let sigma_space_sq = 2.0 * params.sigma_space * params.sigma_space;
@@ -219,13 +215,7 @@ pub fn bilateral_filter_rgb_in_pool(
         });
 
         output
-    };
-
-    if let Some(p) = pool {
-        p.install(run)
-    } else {
-        run()
-    }
+    })
 }
 
 /// Joint bilateral filter (uses guidance image for edge detection)
@@ -236,18 +226,19 @@ pub fn joint_bilateral_filter(
     height: u32,
     params: BilateralFilterParams,
 ) -> Vec<f32> {
-    joint_bilateral_filter_in_pool(depth, guidance, width, height, params, None)
+    let group = scheduler().get_group("default").unwrap().expect("default group");
+    joint_bilateral_filter_ctx(depth, guidance, width, height, params, &group)
 }
 
-pub fn joint_bilateral_filter_in_pool(
+pub fn joint_bilateral_filter_ctx(
     depth: &[f32],
     guidance: &[u8],
     width: u32,
     height: u32,
     params: BilateralFilterParams,
-    pool: Option<&ThreadPool>,
+    group: &ResourceGroup,
 ) -> Vec<f32> {
-    let run = || {
+    group.run(|| {
         let kernel_size = params.kernel_size;
         let half_kernel = kernel_size / 2;
         let sigma_space_sq = 2.0 * params.sigma_space * params.sigma_space;
@@ -327,11 +318,5 @@ pub fn joint_bilateral_filter_in_pool(
             });
 
         output
-    };
-
-    if let Some(p) = pool {
-        p.install(run)
-    } else {
-        run()
-    }
+    })
 }

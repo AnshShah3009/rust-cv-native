@@ -236,7 +236,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0348a1c054491f4bfe6ab86a7b6ab1e44e45d899005de92f58b3df180b36ddaf"
 dependencies = [
  "clipboard-win",
- "image 0.25.9",
+ "image",
  "log",
  "objc2 0.6.3",
  "objc2-app-kit 0.3.2",
@@ -584,6 +584,24 @@ dependencies = [
  "shlex",
  "syn 2.0.115",
  "which",
+]
+
+[[package]]
+name = "bindgen"
+version = "0.70.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f49d8fed880d473ea71efb9bf597651e77201bdd4893efe54c9e5d65ae04ce6f"
+dependencies = [
+ "bitflags 2.11.0",
+ "cexpr",
+ "clang-sys",
+ "itertools 0.11.0",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "rustc-hash 1.1.0",
+ "shlex",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -1229,7 +1247,8 @@ version = "0.1.0"
 dependencies = [
  "cv-core",
  "cv-imgproc",
- "image 0.25.9",
+ "cv-runtime",
+ "image",
  "log",
  "nalgebra",
  "rand 0.8.5",
@@ -1243,7 +1262,7 @@ dependencies = [
 name = "cv-core"
 version = "0.1.0"
 dependencies = [
- "image 0.25.9",
+ "image",
  "nalgebra",
  "rayon",
  "thiserror 2.0.18",
@@ -1255,7 +1274,10 @@ name = "cv-dnn"
 version = "0.1.0"
 dependencies = [
  "cv-core",
- "image 0.25.9",
+ "cv-hal",
+ "cv-imgproc",
+ "cv-runtime",
+ "image",
  "ort",
  "thiserror 2.0.18",
 ]
@@ -1268,7 +1290,8 @@ dependencies = [
  "cv-core",
  "cv-hal",
  "cv-imgproc",
- "image 0.25.9",
+ "cv-runtime",
+ "image",
  "nalgebra",
  "pollster 0.3.0",
  "rand 0.8.5",
@@ -1301,7 +1324,7 @@ dependencies = [
  "cv-core",
  "cv-hal",
  "cv-runtime",
- "image 0.25.9",
+ "image",
  "nalgebra",
  "rayon",
  "thiserror 2.0.18",
@@ -1315,6 +1338,18 @@ dependencies = [
  "cv-3d",
  "cv-core",
  "cv-runtime",
+ "nalgebra",
+ "rayon",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cv-objdetect"
+version = "0.1.0"
+dependencies = [
+ "cv-core",
+ "cv-imgproc",
+ "image",
  "nalgebra",
  "rayon",
  "thiserror 2.0.18",
@@ -1336,7 +1371,7 @@ version = "0.1.0"
 dependencies = [
  "cv-core",
  "cv-imgproc",
- "image 0.25.9",
+ "image",
  "thiserror 2.0.18",
 ]
 
@@ -1378,7 +1413,7 @@ dependencies = [
  "cv-slam",
  "cv-stereo",
  "geo 0.28.0",
- "image 0.25.9",
+ "image",
  "nalgebra",
  "ndarray 0.15.6",
  "numpy",
@@ -1447,7 +1482,10 @@ name = "cv-sfm"
 version = "0.1.0"
 dependencies = [
  "cv-core",
+ "cv-optimize",
+ "cv-runtime",
  "nalgebra",
+ "rayon",
  "thiserror 2.0.18",
 ]
 
@@ -1459,8 +1497,9 @@ dependencies = [
  "cv-core",
  "cv-features",
  "cv-hal",
+ "cv-runtime",
  "cv-sfm",
- "image 0.25.9",
+ "image",
  "nalgebra",
  "thiserror 2.0.18",
 ]
@@ -1475,7 +1514,7 @@ dependencies = [
  "cv-core",
  "cv-hal",
  "cv-imgproc",
- "image 0.25.9",
+ "image",
  "nalgebra",
  "rayon",
  "serde",
@@ -1493,7 +1532,7 @@ dependencies = [
  "cv-core",
  "cv-hal",
  "cv-imgproc",
- "image 0.25.9",
+ "image",
  "nalgebra",
  "rayon",
  "thiserror 2.0.18",
@@ -1504,9 +1543,10 @@ name = "cv-videoio"
 version = "0.1.0"
 dependencies = [
  "cv-core",
- "image 0.24.9",
+ "ffmpeg-next",
+ "image",
  "log",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "v4l",
 ]
 
@@ -1656,7 +1696,7 @@ dependencies = [
  "glow",
  "glutin",
  "glutin-winit",
- "image 0.25.9",
+ "image",
  "js-sys",
  "log",
  "objc2 0.5.2",
@@ -2030,6 +2070,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
 dependencies = [
  "simd-adler32",
+]
+
+[[package]]
+name = "ffmpeg-next"
+version = "7.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da02698288e0275e442a47fc12ca26d50daf0d48b15398ba5906f20ac2e2a9f9"
+dependencies = [
+ "bitflags 2.11.0",
+ "ffmpeg-sys-next",
+ "libc",
+]
+
+[[package]]
+name = "ffmpeg-sys-next"
+version = "7.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9e9c75ebd4463de9d8998fb134ba26347fe5faee62fabf0a4b4d41bd500b4ad"
+dependencies = [
+ "bindgen 0.70.1",
+ "cc",
+ "libc",
+ "num_cpus",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -2482,16 +2547,6 @@ dependencies = [
 
 [[package]]
 name = "gif"
-version = "0.13.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ae047235e33e2829703574b54fdec96bfbad892062d97fed2f76022287de61b"
-dependencies = [
- "color_quant",
- "weezl",
-]
-
-[[package]]
-name = "gif"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5df2ba84018d80c213569363bdcd0c64e6933c67fe4c1d60ecf822971a3c35e"
@@ -2913,24 +2968,6 @@ dependencies = [
 
 [[package]]
 name = "image"
-version = "0.24.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5690139d2f55868e080017335e4b94cb7414274c74f1669c84fb5feba2c9f69d"
-dependencies = [
- "bytemuck",
- "byteorder",
- "color_quant",
- "exr",
- "gif 0.13.3",
- "jpeg-decoder",
- "num-traits",
- "png 0.17.16",
- "qoi",
- "tiff 0.9.1",
-]
-
-[[package]]
-name = "image"
 version = "0.25.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6506c6c10786659413faa717ceebcb8f70731c0a60cbae39795fdf114519c1a"
@@ -2939,16 +2976,16 @@ dependencies = [
  "byteorder-lite",
  "color_quant",
  "exr",
- "gif 0.14.1",
+ "gif",
  "image-webp",
  "moxcms",
  "num-traits",
- "png 0.18.1",
+ "png",
  "qoi",
  "ravif",
  "rayon",
  "rgb",
- "tiff 0.10.3",
+ "tiff",
  "zune-core 0.5.1",
  "zune-jpeg 0.5.12",
 ]
@@ -3086,15 +3123,6 @@ checksum = "9afb3de4395d6b3e67a780b6de64b51c978ecf11cb9a462c66be7d4ca9039d33"
 dependencies = [
  "getrandom 0.3.4",
  "libc",
-]
-
-[[package]]
-name = "jpeg-decoder"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
-dependencies = [
- "rayon",
 ]
 
 [[package]]
@@ -4385,19 +4413,6 @@ dependencies = [
 
 [[package]]
 name = "png"
-version = "0.17.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82151a2fc869e011c153adc57cf2789ccb8d9906ce52c0b39a6b5697749d7526"
-dependencies = [
- "bitflags 1.3.2",
- "crc32fast",
- "fdeflate",
- "flate2",
- "miniz_oxide",
-]
-
-[[package]]
-name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61"
@@ -5012,7 +5027,7 @@ dependencies = [
  "cv-stereo",
  "cv-video",
  "futures",
- "image 0.25.9",
+ "image",
  "nalgebra",
  "rayon",
  "tokio",
@@ -5606,17 +5621,6 @@ dependencies = [
 
 [[package]]
 name = "tiff"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba1310fcea54c6a9a4fd1aad794ecc02c31682f6bfbecdf460bf19533eed1e3e"
-dependencies = [
- "flate2",
- "jpeg-decoder",
- "weezl",
-]
-
-[[package]]
-name = "tiff"
 version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af9605de7fee8d9551863fd692cce7637f548dbd9db9180fcc07ccc6d26c336f"
@@ -5950,7 +5954,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6779878362b9bacadc7893eac76abe69612e8837ef746573c4a5239daf11990b"
 dependencies = [
- "bindgen",
+ "bindgen 0.65.1",
 ]
 
 [[package]]

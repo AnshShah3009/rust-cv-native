@@ -5,5 +5,8 @@ edition = "2021"
 
 [dependencies]
 cv-core = { path = "../core" }
+cv-runtime = { path = "../runtime" }
+cv-optimize = { path = "../optimize" }
 nalgebra = { workspace = true }
+rayon = { workspace = true }
 thiserror = { workspace = true }

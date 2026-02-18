@@ -17,10 +17,6 @@ pub enum CalibError {
     #[error("Image error: {0}")]
     Image(#[from] image::ImageError),
 }
-use cv_core::{CameraExtrinsics, CameraIntrinsics, Distortion};
-use image::GrayImage;
-use nalgebra::{Matrix3, Matrix3x4, Matrix4, Point2, Point3, Rotation3, Vector3};
-use std::path::Path;
 
 // Module declarations
 pub mod distortion;

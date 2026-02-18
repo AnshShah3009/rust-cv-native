@@ -9,7 +9,7 @@ use crate::project_points_with_distortion;
 use crate::solve_pnp_refine;
 use cv_core::{CameraExtrinsics, CameraIntrinsics, Distortion};
 use image::GrayImage;
-use nalgebra::{DMatrix, Matrix3, Point2, Point3, Vector3};
+use nalgebra::{DMatrix, Matrix3, Point2, Point3};
 use std::path::Path;
 use rayon::prelude::*;
 

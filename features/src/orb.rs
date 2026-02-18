@@ -7,9 +7,9 @@ use crate::descriptor::{Descriptor, DescriptorExtractor, Descriptors};
 use crate::fast::fast_detect;
 use cv_core::{KeyPoint, KeyPoints, Tensor, storage::Storage};
 use cv_hal::compute::ComputeDevice;
-use cv_hal::context::ComputeContext;
 use cv_hal::tensor_ext::TensorToCpu;
 use image::GrayImage;
+use rayon::prelude::*;
 
 /// ORB feature detector and descriptor
 pub struct Orb {
@@ -141,12 +141,12 @@ impl Orb {
         KeyPoints { keypoints: all_keypoints }
     }
 
-    /// Compute orientations for keypoints using intensity centroid
+    /// Compute orientations for keypoints using intensity centroid (Parallelized)
     pub fn compute_orientations(&self, image: &GrayImage, keypoints: &mut KeyPoints) {
         let patch_size = self.patch_size as i32;
         let half_patch = patch_size / 2;
 
-        for kp in &mut keypoints.keypoints {
+        keypoints.keypoints.par_iter_mut().for_each(|kp| {
             let x = kp.x as i32;
             let y = kp.y as i32;
 
@@ -168,7 +168,12 @@ impl Orb {
 
             let angle = m01.atan2(m10);
             kp.angle = angle.to_degrees();
-        }
+        });
+    }
+
+    /// Compute orientations using a specific resource group
+    pub fn compute_orientations_ctx(&self, image: &GrayImage, keypoints: &mut KeyPoints, group: &cv_runtime::orchestrator::ResourceGroup) {
+        group.run(|| self.compute_orientations(image, keypoints));
     }
 }
 
@@ -210,6 +215,45 @@ fn extract_keypoints_from_score_map<S: Storage<u8> + 'static>(ctx: &ComputeDevic
     }
     
     KeyPoints { keypoints: kps }
+}
+
+pub fn detect_and_compute_ctx<S: Storage<u8> + 'static>(
+    orb: &Orb,
+    ctx: &cv_hal::compute::ComputeDevice,
+    group: &cv_runtime::orchestrator::ResourceGroup,
+    image: &Tensor<u8, S>,
+) -> (KeyPoints, Descriptors) {
+    let mut keypoints = orb.detect_ctx(ctx, image);
+    
+    // orientations still need CPU GrayImage for now
+    let cpu_img_tensor = convert_to_cpu_image(ctx, image);
+    let (h, w) = cpu_img_tensor.shape.hw();
+    let gray = image::GrayImage::from_raw(w as u32, h as u32, cpu_img_tensor.storage.as_slice().unwrap().to_vec()).unwrap();
+    
+    orb.compute_orientations_ctx(&gray, &mut keypoints, group);
+    let descriptors = orb.extract(&gray, &keypoints);
+    (keypoints, descriptors)
+}
+
+fn convert_to_cpu_image<S: Storage<u8> + 'static>(ctx: &ComputeDevice, tensor: &Tensor<u8, S>) -> Tensor<u8, cv_core::storage::CpuStorage<u8>> {
+    use std::any::TypeId;
+    use cv_core::storage::CpuStorage;
+    use cv_hal::storage::GpuStorage;
+    use cv_hal::tensor_ext::TensorToCpu;
+
+    if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
+        let input_ptr = tensor as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+        let input_gpu = unsafe { &*input_ptr };
+        let gpu_ctx = match ctx {
+            ComputeDevice::Gpu(g) => g,
+            _ => panic!("Logic error"),
+        };
+        input_gpu.to_cpu_ctx(gpu_ctx).unwrap()
+    } else {
+        let input_ptr = tensor as *const Tensor<u8, S> as *const Tensor<u8, CpuStorage<u8>>;
+        let input_cpu = unsafe { &*input_ptr };
+        input_cpu.clone()
+    }
 }
 
 impl DescriptorExtractor for Orb {

@@ -8,6 +8,7 @@ use image::GrayImage;
 pub mod optical_flow;
 pub mod tracking;
 pub mod kalman;
+pub mod mog2;
 
 pub use optical_flow::*;
 pub use tracking::*;

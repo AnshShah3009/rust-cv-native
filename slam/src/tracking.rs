@@ -1,9 +1,10 @@
 use cv_calib3d::solve_pnp_ransac;
 use cv_core::{CameraExtrinsics, CameraIntrinsics, KeyPoints, Tensor, storage::Storage};
-use cv_features::{DescriptorExtractor, Descriptors, Orb};
+use cv_features::{DescriptorExtractor, Descriptors, Orb, detect_and_compute_ctx};
 use cv_hal::compute::ComputeDevice;
-use cv_hal::tensor_ext::TensorToCpu;
+use cv_runtime::orchestrator::ResourceGroup;
 use nalgebra::Point2;
+use std::sync::Arc;
 
 pub struct Frame<S: Storage<u8> + 'static> {
     pub image: Tensor<u8, S>,
@@ -12,18 +13,18 @@ pub struct Frame<S: Storage<u8> + 'static> {
     pub pose: CameraExtrinsics,
 }
 
-pub struct Tracker<'a> {
-    pub device: &'a ComputeDevice<'a>,
+pub struct Tracker {
+    pub group: Arc<ResourceGroup>,
     pub current_frame: Option<Frame<cv_core::storage::CpuStorage<u8>>>,
     pub last_frame: Option<Frame<cv_core::storage::CpuStorage<u8>>>,
     pub intrinsics: CameraIntrinsics,
     pub detector: Orb,
 }
 
-impl<'a> Tracker<'a> {
-    pub fn new(device: &'a ComputeDevice<'a>, intrinsics: CameraIntrinsics) -> Self {
+impl Tracker {
+    pub fn new(group: Arc<ResourceGroup>, intrinsics: CameraIntrinsics) -> Self {
         Self {
-            device,
+            group,
             current_frame: None,
             last_frame: None,
             intrinsics,
@@ -37,16 +38,12 @@ impl<'a> Tracker<'a> {
         map: &crate::mapping::Map,
     ) -> Result<(CameraExtrinsics, Vec<usize>), String> {
         use cv_core::storage::CpuStorage;
-        let mut keypoints = self.detector.detect_ctx(self.device, image);
+        let device = self.group.device();
         
-        // Convert to CPU for orientations/descriptors (patch-based)
-        let cpu_img_tensor: Tensor<u8, CpuStorage<u8>> = convert_to_cpu(self.device, image);
+        let (keypoints, descriptors) = detect_and_compute_ctx(&self.detector, &device, &self.group, image);
 
-        let (h, w) = cpu_img_tensor.shape.hw();
-        let gray = image::GrayImage::from_raw(w as u32, h as u32, cpu_img_tensor.storage.as_slice().unwrap().to_vec()).unwrap();
-        
-        self.detector.compute_orientations(&gray, &mut keypoints);
-        let descriptors = self.detector.extract(&gray, &keypoints);
+        // Convert to CPU for long-term storage and frame-to-frame matching if needed
+        let cpu_img_tensor = convert_to_cpu(&device, image);
 
         let mut frame = Frame {
             image: cpu_img_tensor,
@@ -71,7 +68,8 @@ impl<'a> Tracker<'a> {
                 cv_core::TensorShape::new(1, frame.descriptors.len(), 32)
             );
 
-            let matches = self.device.match_descriptors(&query_desc_tensor, &map_desc_tensor, 0.7)
+            // Use accelerated matching via the device
+            let matches = device.match_descriptors(&query_desc_tensor, &map_desc_tensor, 0.7)
                 .map_err(|e| e.to_string())?;
 
             if matches.len() >= 10 {
@@ -121,6 +119,7 @@ fn convert_to_cpu<S: Storage<u8> + 'static>(device: &ComputeDevice, tensor: &Ten
     use std::any::TypeId;
     use cv_core::storage::CpuStorage;
     use cv_hal::storage::GpuStorage;
+    use cv_hal::tensor_ext::TensorToCpu;
 
     if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
         let input_ptr = tensor as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;

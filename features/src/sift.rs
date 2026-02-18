@@ -137,7 +137,7 @@ impl Sift {
         ctx: &ComputeDevice,
         image: &Tensor<u8, S>,
     ) -> (KeyPoints, Descriptors) {
-        let (mut keypoints, gaussian_pyramid) = self.detect_and_refine(ctx, image);
+        let (keypoints, gaussian_pyramid) = self.detect_and_refine(ctx, image);
         
         let mut all_descriptors = Vec::new();
         let mut valid_keypoints = Vec::new();

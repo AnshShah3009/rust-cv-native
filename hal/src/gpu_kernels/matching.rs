@@ -3,8 +3,6 @@ use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
 use wgpu::util::DeviceExt;
-use std::marker::PhantomData;
-use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

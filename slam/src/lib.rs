@@ -1,5 +1,6 @@
 pub mod mapping;
 pub mod tracking;
+pub mod pose_graph;
 pub mod kalman;
 
 use cv_core::{CameraExtrinsics, CameraIntrinsics, Tensor, storage::CpuStorage};

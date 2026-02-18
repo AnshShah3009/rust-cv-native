@@ -1,4 +1,4 @@
-use cv_core::{Tensor, TensorShape};
+use cv_core::Tensor;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;

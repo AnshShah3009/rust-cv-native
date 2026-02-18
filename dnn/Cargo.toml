@@ -5,6 +5,9 @@ edition = "2021"
 
 [dependencies]
 cv-core = { path = "../core" }
+cv-hal = { path = "../hal" }
+cv-runtime = { path = "../runtime" }
+cv-imgproc = { path = "../imgproc" }
 image = { workspace = true }
 ort = { workspace = true }
 thiserror = { workspace = true }

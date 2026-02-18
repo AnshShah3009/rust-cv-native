@@ -2,7 +2,7 @@ use std::default::Default;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::marker::PhantomData;
-use crate::storage::{Storage, CpuStorage, DeviceType};
+use crate::storage::{Storage, CpuStorage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataType {
@@ -74,13 +74,24 @@ pub struct Tensor<T: Clone + Copy, S: Storage<T> = CpuStorage<T>> {
     pub _phantom: PhantomData<T>,
 }
 
+pub type CpuTensor<T> = Tensor<T, CpuStorage<T>>;
+
 impl<T: Clone + Copy + fmt::Debug, S: Storage<T>> Tensor<T, S> {
     pub fn from_vec(data: Vec<T>, shape: TensorShape) -> Self {
         assert_eq!(data.len(), shape.len(), "Data size mismatch with shape");
+        let dtype = match std::any::type_name::<T>() {
+            "u8" => DataType::U8,
+            "u16" => DataType::U16,
+            "u32" => DataType::U32,
+            "i32" => DataType::I32,
+            "f32" => DataType::F32,
+            "f64" => DataType::F64,
+            _ => DataType::F32,
+        };
         Self {
             storage: S::from_vec(data),
             shape,
-            dtype: DataType::F32,
+            dtype,
             _phantom: PhantomData,
         }
     }

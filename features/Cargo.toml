@@ -9,6 +9,7 @@ description = "Feature detection and description algorithms"
 cv-core = { path = "../core" }
 cv-imgproc = { path = "../imgproc" }
 cv-hal = { path = "../hal" }
+cv-runtime = { path = "../runtime" }
 nalgebra = { workspace = true }
 rayon = { workspace = true }
 image = { workspace = true }

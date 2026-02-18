@@ -5,6 +5,7 @@ pub mod convolve;
 pub mod edges;
 pub mod geometry;
 pub mod histogram;
+pub mod hough;
 pub mod local_threshold;
 pub mod morph;
 pub mod resize;

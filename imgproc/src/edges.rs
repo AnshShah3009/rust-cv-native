@@ -3,10 +3,9 @@ use rayon::prelude::*;
 use cv_core::{Tensor, storage::Storage};
 use cv_hal::compute::{ComputeDevice};
 use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
-use cv_hal::context::ComputeContext;
 use cv_runtime::orchestrator::{ResourceGroup, scheduler};
 
-use crate::convolve::{convolve_with_border_into_in_pool, gaussian_blur_with_border_in_pool, BorderMode, Kernel, Pool};
+use crate::convolve::{convolve_with_border_into_ctx, gaussian_blur_ctx, BorderMode, Kernel};
 
 fn sobel_kernels_1d(ksize: usize) -> Option<(Vec<f32>, Vec<f32>)> {
     match ksize {
@@ -54,7 +53,7 @@ pub fn sobel_ex(
     delta: f32,
     border: BorderMode,
 ) -> GrayImage {
-    let group = scheduler().get_group("default").unwrap().unwrap();
+    let group = scheduler().best_gpu_or_cpu();
     sobel_ex_ctx(src, dx, dy, ksize, scale, delta, border, &group)
 }
 
@@ -80,7 +79,17 @@ pub fn sobel_ex_ctx(
         }
     }
     
-    sobel_ex_in_pool(src, dx, dy, ksize, scale, delta, border, Some(Pool::Group(group)))
+    let mut out = GrayImage::new(src.width(), src.height());
+    let (deriv, smooth) = sobel_kernels_1d(ksize).unwrap_or_else(|| {
+        (vec![-1.0, 0.0, 1.0], vec![1.0, 2.0, 1.0])
+    });
+
+    let kx = if dx > 0 { deriv.as_slice() } else { smooth.as_slice() };
+    let ky = if dy > 0 { deriv.as_slice() } else { smooth.as_slice() };
+    let kernel = kernel_from_1d(kx, ky);
+    
+    convolve_with_border_into_ctx(src, &mut out, &kernel, border, group);
+    apply_linear_transform(out, scale, delta)
 }
 
 fn sobel_gpu(
@@ -88,8 +97,9 @@ fn sobel_gpu(
     src: &GrayImage,
     ksize: usize,
 ) -> cv_hal::Result<(GrayImage, GrayImage)> {
-    let input_tensor = Tensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize));
-    let input_gpu = input_tensor.to_gpu()?;
+    use cv_hal::context::ComputeContext;
+    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize));
+    let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
     
     let (gx_gpu, gy_gpu) = gpu.sobel(&input_gpu, 1, 1, ksize)?;
     
@@ -105,37 +115,6 @@ fn sobel_gpu(
     Ok((gx, gy))
 }
 
-pub fn sobel_ex_in_pool<'a>(
-    src: &GrayImage,
-    dx: i32,
-    dy: i32,
-    ksize: usize,
-    scale: f32,
-    delta: f32,
-    border: BorderMode,
-    pool: Option<Pool<'a>>,
-) -> GrayImage {
-    let run = || {
-        let (deriv, smooth) = sobel_kernels_1d(ksize).unwrap_or_else(|| {
-            (vec![-1.0, 0.0, 1.0], vec![1.0, 2.0, 1.0])
-        });
-
-        let kx = if dx > 0 { deriv.as_slice() } else { smooth.as_slice() };
-        let ky = if dy > 0 { deriv.as_slice() } else { smooth.as_slice() };
-        let kernel = kernel_from_1d(kx, ky);
-        
-        let mut out = GrayImage::new(src.width(), src.height());
-        convolve_with_border_into_in_pool(src, &mut out, &kernel, border, None as Option<Pool>);
-        apply_linear_transform(out, scale, delta)
-    };
-
-    if let Some(p) = pool {
-        p.install(run)
-    } else {
-        run()
-    }
-}
-
 pub fn scharr_ex(
     src: &GrayImage,
     dx: i32,
@@ -144,7 +123,7 @@ pub fn scharr_ex(
     delta: f32,
     border: BorderMode,
 ) -> GrayImage {
-    let group = scheduler().get_group("default").unwrap().unwrap();
+    let group = scheduler().best_gpu_or_cpu();
     scharr_ex_ctx(src, dx, dy, scale, delta, border, &group)
 }
 
@@ -157,54 +136,21 @@ pub fn scharr_ex_ctx(
     border: BorderMode,
     group: &ResourceGroup,
 ) -> GrayImage {
-    scharr_ex_in_pool(src, dx, dy, scale, delta, border, Some(Pool::Group(group)))
-}
-
-pub fn scharr_ex_in_pool<'a>(
-    src: &GrayImage,
-    dx: i32,
-    dy: i32,
-    scale: f32,
-    delta: f32,
-    border: BorderMode,
-    pool: Option<Pool<'a>>,
-) -> GrayImage {
-    let run = || {
-        let (deriv, smooth) = scharr_kernels_1d();
-        let kx = if dx > 0 { deriv.as_slice() } else { smooth.as_slice() };
-        let ky = if dy > 0 { deriv.as_slice() } else { smooth.as_slice() };
-        let kernel = kernel_from_1d(kx, ky);
-        
-        let mut out = GrayImage::new(src.width(), src.height());
-        convolve_with_border_into_in_pool(src, &mut out, &kernel, border, None as Option<Pool>);
-        apply_linear_transform(out, scale, delta)
-    };
-
-    if let Some(p) = pool {
-        p.install(run)
-    } else {
-        run()
-    }
+    let mut out = GrayImage::new(src.width(), src.height());
+    let (deriv, smooth) = scharr_kernels_1d();
+    let kx = if dx > 0 { deriv.as_slice() } else { smooth.as_slice() };
+    let ky = if dy > 0 { deriv.as_slice() } else { smooth.as_slice() };
+    let kernel = kernel_from_1d(kx, ky);
+    
+    convolve_with_border_into_ctx(src, &mut out, &kernel, border, group);
+    apply_linear_transform(out, scale, delta)
 }
 
 pub fn sobel_with_border(src: &GrayImage, border: BorderMode) -> (GrayImage, GrayImage) {
-    let group = scheduler().get_group("default").unwrap().unwrap();
+    let group = scheduler().get_default_group();
     let gx = sobel_ex_ctx(src, 1, 0, 3, 1.0, 0.0, border, &group);
     let gy = sobel_ex_ctx(src, 0, 1, 3, 1.0, 0.0, border, &group);
     (gx, gy)
-}
-
-pub fn sobel_with_border_in_pool<'a>(src: &GrayImage, border: BorderMode, pool: Option<Pool<'a>>) -> (GrayImage, GrayImage) {
-    let run = || {
-        let gx = sobel_ex_in_pool(src, 1, 0, 3, 1.0, 0.0, border, None as Option<Pool>);
-        let gy = sobel_ex_in_pool(src, 0, 1, 3, 1.0, 0.0, border, None as Option<Pool>);
-        (gx, gy)
-    };
-    if let Some(p) = pool {
-        p.install(run)
-    } else {
-        run()
-    }
 }
 
 pub fn sobel(src: &GrayImage) -> (GrayImage, GrayImage) {
@@ -212,23 +158,10 @@ pub fn sobel(src: &GrayImage) -> (GrayImage, GrayImage) {
 }
 
 pub fn scharr_with_border(src: &GrayImage, border: BorderMode) -> (GrayImage, GrayImage) {
-    let group = scheduler().get_group("default").unwrap().unwrap();
+    let group = scheduler().get_default_group();
     let gx = scharr_ex_ctx(src, 1, 0, 1.0, 0.0, border, &group);
     let gy = scharr_ex_ctx(src, 0, 1, 1.0, 0.0, border, &group);
     (gx, gy)
-}
-
-pub fn scharr_with_border_in_pool<'a>(src: &GrayImage, border: BorderMode, pool: Option<Pool<'a>>) -> (GrayImage, GrayImage) {
-    let run = || {
-        let gx = scharr_ex_in_pool(src, 1, 0, 1.0, 0.0, border, None as Option<Pool>);
-        let gy = scharr_ex_in_pool(src, 0, 1, 1.0, 0.0, border, None as Option<Pool>);
-        (gx, gy)
-    };
-    if let Some(p) = pool {
-        p.install(run)
-    } else {
-        run()
-    }
 }
 
 pub fn scharr(src: &GrayImage) -> (GrayImage, GrayImage) {
@@ -236,11 +169,12 @@ pub fn scharr(src: &GrayImage) -> (GrayImage, GrayImage) {
 }
 
 pub fn sobel_magnitude(gx: &GrayImage, gy: &GrayImage) -> GrayImage {
-    sobel_magnitude_in_pool(gx, gy, None as Option<Pool>)
+    let group = scheduler().get_default_group();
+    sobel_magnitude_ctx(gx, gy, &group)
 }
 
-pub fn sobel_magnitude_in_pool<'a>(gx: &GrayImage, gy: &GrayImage, pool: Option<Pool<'a>>) -> GrayImage {
-    let run = || {
+pub fn sobel_magnitude_ctx(gx: &GrayImage, gy: &GrayImage, group: &ResourceGroup) -> GrayImage {
+    group.run(|| {
         let width = gx.width();
         let height = gx.height();
         let count = (width * height) as usize;
@@ -258,30 +192,19 @@ pub fn sobel_magnitude_in_pool<'a>(gx: &GrayImage, gy: &GrayImage, pool: Option<
             });
 
         GrayImage::from_raw(width, height, output).unwrap()
-    };
-    if let Some(p) = pool {
-        p.install(run)
-    } else {
-        run()
-    }
+    })
 }
 
 pub fn laplacian(src: &GrayImage) -> GrayImage {
-    laplacian_in_pool(src, None as Option<Pool>)
+    let group = scheduler().get_default_group();
+    laplacian_ctx(src, &group)
 }
 
-pub fn laplacian_in_pool<'a>(src: &GrayImage, pool: Option<Pool<'a>>) -> GrayImage {
-    let run = || {
-        let kernel = Kernel::from_slice(&[0.0, 1.0, 0.0, 1.0, -4.0, 1.0, 0.0, 1.0, 0.0], 3, 3);
-        let mut out = GrayImage::new(src.width(), src.height());
-        convolve_with_border_into_in_pool(src, &mut out, &kernel, BorderMode::Replicate, None as Option<Pool>);
-        out
-    };
-    if let Some(p) = pool {
-        p.install(run)
-    } else {
-        run()
-    }
+pub fn laplacian_ctx(src: &GrayImage, group: &ResourceGroup) -> GrayImage {
+    let kernel = Kernel::from_slice(&[0.0, 1.0, 0.0, 1.0, -4.0, 1.0, 0.0, 1.0, 0.0], 3, 3);
+    let mut out = GrayImage::new(src.width(), src.height());
+    convolve_with_border_into_ctx(src, &mut out, &kernel, BorderMode::Replicate, group);
+    out
 }
 
 fn gradients_and_directions(src: &GrayImage) -> (Vec<f32>, Vec<u8>) {
@@ -412,36 +335,22 @@ fn hysteresis(width: usize, height: usize, nms: &[f32], low: f32, high: f32) -> 
 }
 
 pub fn canny(src: &GrayImage, low_threshold: u8, high_threshold: u8) -> GrayImage {
-    let group = scheduler().get_group("default").unwrap().unwrap();
+    let group = scheduler().get_default_group();
     canny_ctx(src, low_threshold, high_threshold, &group)
 }
 
 pub fn canny_ctx(src: &GrayImage, low_threshold: u8, high_threshold: u8, group: &ResourceGroup) -> GrayImage {
-    canny_in_pool(src, low_threshold, high_threshold, Some(Pool::Group(group)))
-}
-
-pub fn canny_in_pool<'a>(
-    src: &GrayImage, 
-    low_threshold: u8, 
-    high_threshold: u8, 
-    pool: Option<Pool<'a>>
-) -> GrayImage {
-    let run = || {
-        let blurred = gaussian_blur_with_border_in_pool(src, 1.0, BorderMode::Reflect101, None as Option<Pool>);
-        let width = blurred.width() as usize;
-        let height = blurred.height() as usize;
+    let blurred = gaussian_blur_ctx(src, 1.0, BorderMode::Reflect101, group);
+    let width = blurred.width() as usize;
+    let height = blurred.height() as usize;
+    
+    group.run(|| {
         let (mag, dir) = gradients_and_directions(&blurred);
         let nms = non_max_suppression(width, height, &mag, &dir);
         let low = low_threshold as f32;
         let high = high_threshold.max(low_threshold) as f32;
         hysteresis(width, height, &nms, low, high)
-    };
-
-    if let Some(p) = pool {
-        p.install(run)
-    } else {
-        run()
-    }
+    })
 }
 
 #[cfg(test)]
