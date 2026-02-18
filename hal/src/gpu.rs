@@ -331,6 +331,31 @@ impl ComputeContext for GpuContext {
         }
     }
 
+    fn optical_flow_lk<S: Storage<f32> + 'static>(
+        &self,
+        prev_pyramid: &[Tensor<f32, S>],
+        next_pyramid: &[Tensor<f32, S>],
+        points: &[[f32; 2]],
+        window_size: usize,
+        max_iters: u32,
+    ) -> crate::Result<Vec<[f32; 2]>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            // unsafe cast slice of tensors
+            let prev_ptr = prev_pyramid.as_ptr() as *const Tensor<f32, GpuStorage<f32>>;
+            let prev_gpu = unsafe { std::slice::from_raw_parts(prev_ptr, prev_pyramid.len()) };
+
+            let next_ptr = next_pyramid.as_ptr() as *const Tensor<f32, GpuStorage<f32>>;
+            let next_gpu = unsafe { std::slice::from_raw_parts(next_ptr, next_pyramid.len()) };
+
+            crate::gpu_kernels::optical_flow::lucas_kanade(self, prev_gpu, next_gpu, points, window_size, max_iters)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
     fn cvt_color<S: Storage<u8> + 'static>(
         &self,
         input: &Tensor<u8, S>,
