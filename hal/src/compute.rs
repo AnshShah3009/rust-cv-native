@@ -1,6 +1,6 @@
 use crate::gpu::GpuContext;
 use crate::cpu::CpuBackend;
-use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType};
+use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType, ColorConversion};
 use crate::Result;
 use cv_core::{Tensor, storage::Storage};
 use std::sync::OnceLock;
@@ -159,6 +159,53 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.tsdf_integrate(depth_image, camera_pose, intrinsics, tsdf_volume, weight_volume, voxel_size, truncation),
             ComputeDevice::Gpu(gpu) => gpu.tsdf_integrate(depth_image, camera_pose, intrinsics, tsdf_volume, weight_volume, voxel_size, truncation),
+        }
+    }
+
+    pub fn cvt_color<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        code: ColorConversion,
+    ) -> Result<Tensor<u8, S>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.cvt_color(input, code),
+            ComputeDevice::Gpu(gpu) => gpu.cvt_color(input, code),
+        }
+    }
+
+    pub fn resize<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        new_shape: (usize, usize),
+    ) -> Result<Tensor<u8, S>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.resize(input, new_shape),
+            ComputeDevice::Gpu(gpu) => gpu.resize(input, new_shape),
+        }
+    }
+
+    pub fn bilateral_filter<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        d: i32,
+        sigma_color: f32,
+        sigma_space: f32,
+    ) -> Result<Tensor<u8, S>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.bilateral_filter(input, d, sigma_color, sigma_space),
+            ComputeDevice::Gpu(gpu) => gpu.bilateral_filter(input, d, sigma_color, sigma_space),
+        }
+    }
+
+    pub fn fast_detect<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        threshold: u8,
+        non_max_suppression: bool,
+    ) -> Result<Tensor<u8, S>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.fast_detect(input, threshold, non_max_suppression),
+            ComputeDevice::Gpu(gpu) => gpu.fast_detect(input, threshold, non_max_suppression),
         }
     }
 }

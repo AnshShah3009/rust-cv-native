@@ -1,5 +1,5 @@
 use crate::{BackendType, Capability, ComputeBackend, DeviceId, QueueId, QueueType, Result};
-use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType};
+use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType, ColorConversion};
 use cv_core::{Tensor, storage::Storage, TensorShape};
 use rayon::prelude::*;
 use wide::*;
@@ -487,7 +487,6 @@ impl ComputeContext for CpuBackend {
 
                 let r2 = cv_core::RotatedRect::new(data[idx2 * 6], data[idx2 * 6 + 1], data[idx2 * 6 + 2], data[idx2 * 6 + 3], data[idx2 * 6 + 4]);
                 
-                // Rotated IOU implementation (stub/simple version)
                 if rotated_iou(&r1, &r2) > iou_threshold {
                     suppressed[idx2] = true;
                 }
@@ -538,10 +537,32 @@ impl ComputeContext for CpuBackend {
 
     fn pointcloud_transform<S: Storage<f32> + 'static>(
         &self,
-        _points: &Tensor<f32, S>,
-        _transform: &[[f32; 4]; 4],
+        points: &Tensor<f32, S>,
+        transform: &[[f32; 4]; 4],
     ) -> Result<Tensor<f32, S>> {
-        Err(crate::Error::NotSupported("CPU pointcloud_transform pending implementation".into()))
+        let src = points.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Points not on CPU".into()))?;
+        let num_points = points.shape.height;
+        let mut output_storage = S::new(num_points * 4, 0.0);
+        let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+
+        dst.par_chunks_mut(4).enumerate().for_each(|(i, point_out)| {
+            let px = src[i * 4];
+            let py = src[i * 4 + 1];
+            let pz = src[i * 4 + 2];
+            let pw = src[i * 4 + 3];
+
+            point_out[0] = transform[0][0] * px + transform[0][1] * py + transform[0][2] * pz + transform[0][3] * pw;
+            point_out[1] = transform[1][0] * px + transform[1][1] * py + transform[1][2] * pz + transform[1][3] * pw;
+            point_out[2] = transform[2][0] * px + transform[2][1] * py + transform[2][2] * pz + transform[2][3] * pw;
+            point_out[3] = transform[3][0] * px + transform[3][1] * py + transform[3][2] * pz + transform[3][3] * pw;
+        });
+
+        Ok(Tensor {
+            storage: output_storage,
+            shape: points.shape,
+            dtype: points.dtype,
+            _phantom: std::marker::PhantomData,
+        })
     }
 
     fn pointcloud_normals<S: Storage<f32> + 'static>(
@@ -564,6 +585,240 @@ impl ComputeContext for CpuBackend {
     ) -> Result<()> {
         Err(crate::Error::NotSupported("CPU tsdf_integrate pending implementation".into()))
     }
+
+    fn cvt_color<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        code: ColorConversion,
+    ) -> Result<Tensor<u8, S>> {
+        let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
+        let (h, w) = input.shape.hw();
+        let c = input.shape.channels;
+
+        match code {
+            ColorConversion::RgbToGray | ColorConversion::BgrToGray => {
+                if c != 3 {
+                    return Err(crate::Error::InvalidInput("RgbToGray requires 3 channels".into()));
+                }
+                let mut output_storage = S::new(h * w, 0);
+                let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+                
+                dst.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
+                    for x in 0..w {
+                        let base = (y * w + x) * 3;
+                        let (r, g, b) = if code == ColorConversion::RgbToGray {
+                            (src[base], src[base + 1], src[base + 2])
+                        } else {
+                            (src[base + 2], src[base + 1], src[base])
+                        };
+                        // Standard luminance formula
+                        row_out[x] = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) as u8;
+                    }
+                });
+
+                Ok(Tensor {
+                    storage: output_storage,
+                    shape: TensorShape::new(1, h, w),
+                    dtype: input.dtype,
+                    _phantom: std::marker::PhantomData,
+                })
+            }
+            ColorConversion::GrayToRgb => {
+                if c != 1 {
+                    return Err(crate::Error::InvalidInput("GrayToRgb requires 1 channel".into()));
+                }
+                let mut output_storage = S::new(h * w * 3, 0);
+                let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+
+                dst.par_chunks_mut(w * 3).enumerate().for_each(|(y, row_out)| {
+                    for x in 0..w {
+                        let val = src[y * w + x];
+                        row_out[x * 3] = val;
+                        row_out[x * 3 + 1] = val;
+                        row_out[x * 3 + 2] = val;
+                    }
+                });
+
+                Ok(Tensor {
+                    storage: output_storage,
+                    shape: TensorShape::new(3, h, w),
+                    dtype: input.dtype,
+                    _phantom: std::marker::PhantomData,
+                })
+            }
+        }
+    }
+
+    fn resize<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        new_shape: (usize, usize),
+    ) -> Result<Tensor<u8, S>> {
+        let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
+        let (h, w) = input.shape.hw();
+        let c = input.shape.channels;
+        let (nw, nh) = new_shape;
+
+        let mut output_storage = S::new(nw * nh * c, 0);
+        let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+
+        let scale_x = w as f32 / nw as f32;
+        let scale_y = h as f32 / nh as f32;
+
+        dst.par_chunks_mut(nw * c).enumerate().for_each(|(y, row_out)| {
+            for x in 0..nw {
+                let src_x = (x as f32 * scale_x).min(w as f32 - 1.0);
+                let src_y = (y as f32 * scale_y).min(h as f32 - 1.0);
+                
+                // Nearest neighbor for now (can expand to bilinear)
+                let sx = src_x as usize;
+                let sy = src_y as usize;
+                
+                for ch in 0..c {
+                    row_out[x * c + ch] = src[(sy * w + sx) * c + ch];
+                }
+            }
+        });
+
+        Ok(Tensor {
+            storage: output_storage,
+            shape: TensorShape::new(c, nh, nw),
+            dtype: input.dtype,
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    fn bilateral_filter<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        d: i32,
+        sigma_color: f32,
+        sigma_space: f32,
+    ) -> Result<Tensor<u8, S>> {
+        let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
+        let (h, w) = input.shape.hw();
+        let c = input.shape.channels;
+        if c != 1 {
+            return Err(crate::Error::NotSupported("Bilateral filter currently only for grayscale".into()));
+        }
+
+        let mut output_storage = S::new(h * w, 0);
+        let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+
+        let radius = if d <= 0 { (sigma_space * 1.5).ceil() as i32 } else { d / 2 };
+        let color_coeff = -0.5 / (sigma_color * sigma_color);
+        let space_coeff = -0.5 / (sigma_space * sigma_space);
+
+        dst.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
+            for x in 0..w {
+                let center_val = src[y * w + x] as f32;
+                let mut sum = 0.0;
+                let mut norm = 0.0;
+
+                for j in -radius..=radius {
+                    for i in -radius..=radius {
+                        let sy = (y as i32 + j).clamp(0, h as i32 - 1) as usize;
+                        let sx = (x as i32 + i).clamp(0, w as i32 - 1) as usize;
+                        
+                        let val = src[sy * w + sx] as f32;
+                        let dist_sq = (i * i + j * j) as f32;
+                        let range_sq = (val - center_val).powi(2);
+                        
+                        let weight = (dist_sq * space_coeff + range_sq * color_coeff).exp();
+                        sum += val * weight;
+                        norm += weight;
+                    }
+                }
+                row_out[x] = (sum / norm) as u8;
+            }
+        });
+
+        Ok(Tensor {
+            storage: output_storage,
+            shape: input.shape,
+            dtype: input.dtype,
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    fn fast_detect<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        threshold: u8,
+        non_max_suppression: bool,
+    ) -> Result<Tensor<u8, S>> {
+        let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
+        let (h, w) = input.shape.hw();
+        let mut output_storage = S::new(h * w, 0);
+        let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+
+        dst.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
+            if y < 3 || y >= h - 3 { return; }
+            for x in 3..w - 3 {
+                let p = src[y * w + x];
+                let high = p.saturating_add(threshold);
+                let low = p.saturating_sub(threshold);
+
+                // Bresenham circle radius 3
+                let offsets = [
+                    (0, -3), (1, -3), (2, -2), (3, -1), (3, 0), (3, 1), (2, 2), (1, 3),
+                    (0, 3), (-1, 3), (-2, 2), (-3, 1), (-3, 0), (-3, -1), (-2, -2), (-1, -3)
+                ];
+
+                let mut brighter = 0u32;
+                let mut darker = 0u32;
+                let mut vals = [0u8; 16];
+
+                for (i, (dx, dy)) in offsets.iter().enumerate() {
+                    let v = src[((y as i32 + dy) as usize) * w + (x as i32 + dx) as usize];
+                    vals[i] = v;
+                    if v > high { brighter += 1; }
+                    else if v < low { darker += 1; }
+                }
+
+                if brighter >= 9 || darker >= 9 {
+                    // Check contiguous
+                    if has_9_contiguous(&vals, high, low) {
+                        // Compute score (simple version: sum of abs diff)
+                        let mut score = 0u32;
+                        for &v in &vals {
+                            score += (v as i32 - p as i32).abs() as u32;
+                        }
+                        row_out[x] = (score / 16).min(255) as u8;
+                    }
+                }
+            }
+        });
+
+        if non_max_suppression {
+            // TODO: Parallel NMS on score map
+        }
+
+        Ok(Tensor {
+            storage: output_storage,
+            shape: TensorShape::new(1, h, w),
+            dtype: input.dtype,
+            _phantom: std::marker::PhantomData,
+        })
+    }
+}
+
+fn has_9_contiguous(vals: &[u8; 16], high: u8, low: u8) -> bool {
+    let mut b_mask = 0u32;
+    let mut d_mask = 0u32;
+    for i in 0..16 {
+        if vals[i] > high { b_mask |= 1 << i; }
+        if vals[i] < low { d_mask |= 1 << i; }
+    }
+    
+    let b_mask_ext = b_mask | (b_mask << 16);
+    let d_mask_ext = d_mask | (d_mask << 16);
+    
+    for i in 0..16 {
+        if (b_mask_ext >> i) & 0x1FF == 0x1FF { return true; }
+        if (d_mask_ext >> i) & 0x1FF == 0x1FF { return true; }
+    }
+    false
 }
 
 impl CpuBackend {
@@ -656,4 +911,3 @@ fn intersect(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> [f32; 2] {
     }
     [(b2 * c1 - b1 * c2) / det, (a1 * c2 - a2 * c1) / det]
 }
-

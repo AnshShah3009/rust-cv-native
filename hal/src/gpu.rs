@@ -1,7 +1,7 @@
 use wgpu::{Device, Queue, Instance, RequestAdapterOptions, PowerPreference, Backends};
 use std::sync::{Arc, OnceLock};
 use futures::executor::block_on;
-use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType};
+use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType, ColorConversion};
 use crate::{DeviceId, BackendType};
 use cv_core::{Tensor, storage::Storage};
 
@@ -202,18 +202,47 @@ impl ComputeContext for GpuContext {
 
     fn pointcloud_transform<S: Storage<f32> + 'static>(
         &self,
-        _points: &Tensor<f32, S>,
-        _transform: &[[f32; 4]; 4],
+        points: &Tensor<f32, S>,
+        transform: &[[f32; 4]; 4],
     ) -> crate::Result<Tensor<f32, S>> {
-        Err(crate::Error::NotSupported("GPU pointcloud_transform pending implementation".into()))
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+        use nalgebra::{Matrix4, Vector3};
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let input_ptr = points as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            let result_gpu = crate::gpu_kernels::pointcloud::transform_points(self, input_gpu, transform)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<f32, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
     }
 
     fn pointcloud_normals<S: Storage<f32> + 'static>(
         &self,
-        _points: &Tensor<f32, S>,
-        _k_neighbors: u32,
+        points: &Tensor<f32, S>,
+        k_neighbors: u32,
     ) -> crate::Result<Tensor<f32, S>> {
-        Err(crate::Error::NotSupported("GPU pointcloud_normals pending implementation".into()))
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let input_ptr = points as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            let result_gpu = crate::gpu_kernels::pointcloud::compute_normals(self, input_gpu, k_neighbors)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<f32, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
     }
 
     fn tsdf_integrate<S: Storage<f32> + 'static>(
@@ -227,6 +256,83 @@ impl ComputeContext for GpuContext {
         _truncation: f32,
     ) -> crate::Result<()> {
         Err(crate::Error::NotSupported("GPU tsdf_integrate pending implementation".into()))
+    }
+
+    fn cvt_color<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        code: ColorConversion,
+    ) -> crate::Result<Tensor<u8, S>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
+            let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            let result_gpu = crate::gpu_kernels::color::cvt_color(self, input_gpu, code)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<u8, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn resize<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        new_shape: (usize, usize),
+    ) -> crate::Result<Tensor<u8, S>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
+            let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            let result_gpu = crate::gpu_kernels::resize::resize(self, input_gpu, new_shape)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<u8, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn bilateral_filter<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        d: i32,
+        sigma_color: f32,
+        sigma_space: f32,
+    ) -> crate::Result<Tensor<u8, S>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
+            let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            let result_gpu = crate::gpu_kernels::bilateral::bilateral_filter(self, input_gpu, d, sigma_color, sigma_space)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<u8, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn fast_detect<S: Storage<u8> + 'static>(
+        &self,
+        _input: &Tensor<u8, S>,
+        _threshold: u8,
+        _non_max_suppression: bool,
+    ) -> crate::Result<Tensor<u8, S>> {
+        Err(crate::Error::NotSupported("GPU FAST pending implementation".into()))
     }
 }
 

@@ -46,6 +46,10 @@ pub mod threshold;
 pub mod sobel;
 pub mod morphology;
 pub mod nms;
+pub mod pointcloud;
+pub mod color;
+pub mod resize;
+pub mod bilateral;
 
 /// Shader compilation utilities
 pub mod shaders {
@@ -282,7 +286,7 @@ pub mod buffer_utils {
     }
 
     /// Download data from GPU buffer
-    pub async fn read_buffer<T: bytemuck::Pod>(
+    pub async fn read_buffer<T: bytemuck::Pod + std::fmt::Debug>(
         device: Arc<Device>,
         queue: &wgpu::Queue,
         buffer: &Buffer,
@@ -327,6 +331,12 @@ pub mod buffer_utils {
 
         let data = slice.get_mapped_range();
         let result = bytemuck::cast_slice(&data).to_vec();
+        
+        // DEBUG: Check first few bytes
+        if !result.is_empty() {
+            println!("  DEBUG read_buffer[0..4]: {:?}", &result[..4.min(result.len())]);
+        }
+
         drop(data);
         staging_buffer.unmap();
 

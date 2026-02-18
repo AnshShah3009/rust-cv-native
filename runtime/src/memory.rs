@@ -17,7 +17,7 @@ pub struct UnifiedBuffer<T> {
     len: usize,
 }
 
-impl<T: bytemuck::Pod + Clone + Default + Send + 'static> UnifiedBuffer<T> {
+impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> UnifiedBuffer<T> {
     pub fn new(len: usize) -> Self {
         Self {
             host_data: Arc::new(Mutex::new(vec![T::default(); len])),

@@ -134,6 +134,45 @@ pub trait ComputeContext: Send + Sync {
         voxel_size: f32,
         truncation: f32,
     ) -> Result<()>;
+
+    /// Color space conversion
+    fn cvt_color<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        code: ColorConversion,
+    ) -> Result<Tensor<u8, S>>;
+
+    /// Resize an image
+    fn resize<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        new_shape: (usize, usize),
+    ) -> Result<Tensor<u8, S>>;
+
+    /// Bilateral Filter
+    fn bilateral_filter<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        d: i32,
+        sigma_color: f32,
+        sigma_space: f32,
+    ) -> Result<Tensor<u8, S>>;
+
+    /// FAST Keypoint Detection
+    /// Returns a score map (1 channel, same size as input)
+    fn fast_detect<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        threshold: u8,
+        non_max_suppression: bool,
+    ) -> Result<Tensor<u8, S>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorConversion {
+    RgbToGray,
+    BgrToGray,
+    GrayToRgb,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
