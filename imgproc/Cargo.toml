@@ -13,6 +13,7 @@ image = { workspace = true }
 rayon = { workspace = true }
 nalgebra = { workspace = true }
 wide = { workspace = true }
+rand = { workspace = true }
 
 thiserror = "2.0"
 

@@ -11,6 +11,8 @@ pub mod hog;
 pub mod akaze;
 pub mod gftt;
 pub mod sift;
+pub mod lbd;
+pub mod line_matcher;
 
 pub use brief::*;
 pub use descriptor::*;
@@ -25,6 +27,9 @@ pub use hog::*;
 pub use akaze::*;
 pub use gftt::*;
 pub use sift::*;
+pub use lbd::*;
+pub use line_matcher::*;
+pub use cv_imgproc::hough;
 
 pub use cv_core::{KeyPoint, KeyPoints};
 use image::GrayImage;

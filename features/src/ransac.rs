@@ -193,16 +193,19 @@ fn compute_homography_4pt(
     Some(h)
 }
 
-/// Solve DLT for homography using simple approach
-fn solve_dlt_homography(_a: &[f64]) -> Option<Matrix3<f64>> {
-    // Simple implementation: use the last column as solution
-    // This is a simplified version - real implementation should use SVD
-
-    // For now, return an identity-like matrix
-    // This is a placeholder - proper SVD-based solution needed
-    let h = Matrix3::new(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
-
-    Some(h)
+/// Solve DLT for homography using SVD
+fn solve_dlt_homography(a: &[f64]) -> Option<Matrix3<f64>> {
+    let mut matrix = nalgebra::DMatrix::from_row_slice(8, 9, a);
+    let svd = matrix.svd(false, true);
+    
+    let v_t = svd.v_t?;
+    let h_vec = v_t.row(8);
+    
+    Some(Matrix3::new(
+        h_vec[0], h_vec[1], h_vec[2],
+        h_vec[3], h_vec[4], h_vec[5],
+        h_vec[6], h_vec[7], h_vec[8],
+    ))
 }
 
 /// Compute fundamental matrix from 8 point correspondences
@@ -248,12 +251,25 @@ fn compute_fundamental_8pt(
     Some(f)
 }
 
-/// Solve DLT for fundamental matrix
-fn solve_dlt_fundamental(_a: &[f64]) -> Option<Matrix3<f64>> {
-    // Placeholder implementation
-    let f = Matrix3::new(0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0);
-
-    Some(f)
+/// Solve DLT for fundamental matrix using SVD
+fn solve_dlt_fundamental(a: &[f64]) -> Option<Matrix3<f64>> {
+    let mut matrix = nalgebra::DMatrix::from_row_slice(8, 9, a);
+    let svd = matrix.svd(false, true);
+    
+    let v_t = svd.v_t?;
+    let f_vec = v_t.row(8);
+    
+    let f = Matrix3::new(
+        f_vec[0], f_vec[1], f_vec[2],
+        f_vec[3], f_vec[4], f_vec[5],
+        f_vec[6], f_vec[7], f_vec[8],
+    );
+    
+    // Enforce rank-2 constraint for Fundamental matrix
+    let mut svd_f = f.svd(true, true);
+    svd_f.singular_values[2] = 0.0;
+    
+    Some(svd_f.recompose().ok()?)
 }
 
 /// Count inliers for homography

@@ -84,6 +84,7 @@ core_affinity = "0.8"
 ndarray = "0.15"
 tokio = "1.43"
 ffmpeg-next = "7.1"
+rand = "0.8"
 
 [profile.release]
 opt-level = 3

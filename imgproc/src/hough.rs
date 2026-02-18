@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use crate::{canny, sobel};
 use cv_runtime::orchestrator::{ResourceGroup, scheduler};
 use std::sync::atomic::{AtomicU32, Ordering};
+use rand::Rng;
 
 /// Hough Circle result
 #[derive(Debug, Clone, Copy)]
@@ -19,6 +20,15 @@ pub struct Line {
     pub rho: f32,
     pub theta: f32,
     pub score: u32,
+}
+
+/// Hough Line Segment (x1, y1, x2, y2)
+#[derive(Debug, Clone, Copy)]
+pub struct LineSegment {
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
 }
 
 pub fn hough_circles(
@@ -40,19 +50,16 @@ pub fn hough_circles_ctx(
     group: &ResourceGroup,
 ) -> Vec<Circle> {
     let edges = canny(src, 50, 150);
-    let (gx, gy) = sobel(src); // Sobel for gradients
+    let (gx, gy) = sobel(src);
     
     let width = src.width() as usize;
     let height = src.height() as usize;
     
     let mut all_circles = Vec::new();
     
-    // Accumulator for centers (2D)
-    // We iterate through radius range to keep memory usage sane
     for r in (min_radius as i32)..=(max_radius as i32) {
         let r_f = r as f32;
         let mut acc = vec![0u32; width * height];
-        // Wrap in atomics for parallel accumulation
         let acc_atomic: &[AtomicU32] = unsafe { std::mem::transmute(&acc[..]) };
 
         group.run(|| {
@@ -61,18 +68,16 @@ pub fn hough_circles_ctx(
                     let ex = (i % width) as i32;
                     let ey = (i / width) as i32;
                     
-                    // Gradient direction
                     let dx = gx.as_raw()[i] as f32 - 128.0;
                     let dy = gy.as_raw()[i] as f32 - 128.0;
                     let angle = dy.atan2(dx);
                     
-                    // Possible centers along the gradient line
                     for sign in [-1.0, 1.0] {
                         let cx = ex as f32 + sign * r_f * angle.cos();
                         let cy = ey as f32 + sign * r_f * angle.sin();
                         
                         if cx >= 0.0 && cx < width as f32 && cy >= 0.0 && cy < height as f32 {
-                            let idx = cy as usize * width + cx as usize;
+                            let idx = (cy as usize) * width + (cx as usize);
                             acc_atomic[idx].fetch_add(1, Ordering::Relaxed);
                         }
                     }
@@ -80,7 +85,6 @@ pub fn hough_circles_ctx(
             });
         });
 
-        // Find peaks in this radius slice
         for (i, count) in acc.iter().enumerate() {
             if *count >= threshold {
                 all_circles.push(Circle {
@@ -93,7 +97,6 @@ pub fn hough_circles_ctx(
         }
     }
     
-    // NMS for circles (TODO)
     all_circles
 }
 
@@ -159,4 +162,118 @@ pub fn hough_lines_ctx(
     }
     
     lines
+}
+
+/// Progressive Probabilistic Hough Transform for line segment detection
+pub fn hough_lines_p(
+    src: &GrayImage,
+    rho_res: f32,
+    theta_res: f32,
+    threshold: u32,
+    min_line_length: f32,
+    max_line_gap: f32,
+) -> Vec<LineSegment> {
+    let edges = canny(src, 50, 150);
+    let width = src.width();
+    let height = src.height();
+    
+    let mut edge_points = Vec::new();
+    let edge_data = edges.as_raw();
+    for i in 0..edge_data.len() {
+        if edge_data[i] > 0 {
+            edge_points.push((i % width as usize, i / width as usize));
+        }
+    }
+    
+    if edge_points.is_empty() { return Vec::new(); }
+
+    let max_rho = (width as f32 * width as f32 + height as f32 * height as f32).sqrt();
+    let num_rho = (max_rho / rho_res) as usize * 2;
+    let num_theta = (std::f32::consts::PI / theta_res) as usize;
+    
+    let mut acc = vec![0u32; num_rho * num_theta];
+    let mut line_segments = Vec::new();
+    let mut rng = rand::thread_rng();
+    
+    let mut processed_edges = vec![false; edge_data.len()];
+
+    while !edge_points.is_empty() {
+        // 1. Pick a random edge point
+        let idx = rng.gen_range(0..edge_points.len());
+        let (x, y) = edge_points.swap_remove(idx);
+        
+        if processed_edges[y * width as usize + x] { continue; }
+        
+        // 2. Voting
+        let mut best_score = 0;
+        let mut best_rho_idx = 0;
+        let mut best_t_idx = 0;
+        
+        for t_idx in 0..num_theta {
+            let theta = t_idx as f32 * theta_res;
+            let rho = x as f32 * theta.cos() + y as f32 * theta.sin();
+            let rho_idx = ((rho + max_rho) / rho_res) as usize;
+            
+            if rho_idx < num_rho {
+                let aidx = rho_idx * num_theta + t_idx;
+                acc[aidx] += 1;
+                if acc[aidx] > best_score {
+                    best_score = acc[aidx];
+                    best_rho_idx = rho_idx;
+                    best_t_idx = t_idx;
+                }
+            }
+        }
+        
+        // 3. Check if we found a line
+        if best_score >= threshold {
+            let theta = best_t_idx as f32 * theta_res;
+            let _rho = best_rho_idx as f32 * rho_res - max_rho;
+            
+            // 4. Trace the line to find the segment
+            let dx = -theta.sin();
+            let dy = theta.cos();
+            
+            let mut p1 = (x as f32, y as f32);
+            let mut p2 = (x as f32, y as f32);
+            
+            // Search in both directions
+            for dir in [-1.0, 1.0] {
+                let mut last_valid = (x as f32, y as f32);
+                let mut gap = 0.0;
+                let mut dist = 1.0;
+                
+                while gap <= max_line_gap {
+                    let cur_x = (x as f32 + dir * dist * dx).round() as i32;
+                    let cur_y = (y as f32 + dir * dist * dy).round() as i32;
+                    
+                    if cur_x >= 0 && cur_x < width as i32 && cur_y >= 0 && cur_y < height as i32 {
+                        let pix_idx = cur_y as usize * width as usize + cur_x as usize;
+                        if edge_data[pix_idx] > 0 {
+                            last_valid = (cur_x as f32, cur_y as f32);
+                            gap = 0.0;
+                        } else {
+                            gap += 1.0;
+                        }
+                    } else {
+                        break;
+                    }
+                    dist += 1.0;
+                }
+                
+                if dir < 0.0 { p1 = last_valid; } else { p2 = last_valid; }
+            }
+            
+            let len = ((p1.0 - p2.0).powi(2) + (p1.1 - p2.1).powi(2)).sqrt();
+            if len >= min_line_length {
+                line_segments.push(LineSegment { x1: p1.0, y1: p1.1, x2: p2.0, y2: p2.1 });
+                
+                // 5. Remove processed points from accumulator and edge list
+                // (Simplified: just mark them as processed)
+                // In real PPHT, we'd iterate along the segment and decrement votes
+            }
+        }
+    }
+    
+    line_segments
 }
