@@ -2,7 +2,6 @@
 //!
 //! Robust descriptor for object detection, particularly pedestrians.
 
-use cv_core::{Tensor, TensorShape};
 use cv_imgproc::sobel;
 use image::GrayImage;
 use rayon::prelude::*;

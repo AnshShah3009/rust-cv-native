@@ -259,6 +259,29 @@ pub trait ComputeContext: Send + Sync {
         values: &[f32],
         x: &Tensor<f32, S>,
     ) -> Result<Tensor<f32, S>>;
+
+    fn mog2_update<S1: Storage<f32> + 'static, S2: Storage<u32> + 'static>(
+        &self,
+        frame: &Tensor<f32, S1>,
+        model: &mut Tensor<f32, S1>,
+        mask: &mut Tensor<u32, S2>,
+        params: &Mog2Params,
+    ) -> Result<()>;
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Mog2Params {
+    pub width: u32,
+    pub height: u32,
+    pub n_mixtures: u32,
+    pub alpha: f32,
+    pub var_threshold: f32,
+    pub background_ratio: f32,
+    pub var_init: f32,
+    pub var_min: f32,
+    pub var_max: f32,
+    pub _padding: [u32; 3], // Align to 16 bytes for WGSL
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

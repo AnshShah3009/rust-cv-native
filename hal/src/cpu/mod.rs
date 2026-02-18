@@ -1316,6 +1316,94 @@ impl ComputeContext for CpuBackend {
             _phantom: std::marker::PhantomData,
         })
     }
+
+    fn mog2_update<S1: Storage<f32> + 'static, S2: Storage<u32> + 'static>(
+        &self,
+        frame: &Tensor<f32, S1>,
+        model: &mut Tensor<f32, S1>,
+        mask: &mut Tensor<u32, S2>,
+        params: &crate::context::Mog2Params,
+    ) -> crate::Result<()> {
+        let frame_data = frame.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Frame not on CPU".into()))?;
+        let model_data: &mut [f32] = model.storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Model not on CPU".into()))?;
+        let mask_data: &mut [u32] = mask.storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Mask not on CPU".into()))?;
+        
+        let width = params.width as usize;
+        let height = params.height as usize;
+        let n_mixtures = params.n_mixtures as usize;
+        let alpha = params.alpha;
+        let var_threshold = params.var_threshold;
+        let background_ratio = params.background_ratio;
+        let var_init = params.var_init;
+        let var_min = params.var_min;
+        let var_max = params.var_max;
+
+        mask_data.par_chunks_mut(width)
+            .zip(model_data.par_chunks_mut(width * n_mixtures * 3))
+            .enumerate()
+            .for_each(|(y, (mask_row, model_row))| {
+                for x in 0..width {
+                    let pixel = frame_data[y * width + x];
+                    let pix_model = &mut model_row[x * n_mixtures * 3 .. (x + 1) * n_mixtures * 3];
+                    
+                    let mut fit_idx = None;
+                    let mut foreground = true;
+                    let mut total_weight = 0.0;
+
+                    for m in 0..n_mixtures {
+                        let m_base = m * 3;
+                        let weight = pix_model[m_base + 0];
+                        let mean = pix_model[m_base + 1];
+                        let var = pix_model[m_base + 2];
+
+                        if weight < 1e-5 { continue; }
+
+                        let diff = pixel - mean;
+                        if diff * diff < var_threshold * var {
+                            fit_idx = Some(m);
+                            if total_weight < background_ratio {
+                                foreground = false;
+                            }
+                            break;
+                        }
+                        total_weight += weight;
+                    }
+
+                    mask_row[x] = if foreground { 255u32 } else { 0u32 };
+
+                    if let Some(idx) = fit_idx {
+                        for m in 0..n_mixtures {
+                            let m_base = m * 3;
+                            if m == idx {
+                                let w_val = pix_model[m_base + 0];
+                                let alpha_m = alpha / w_val.max(1e-5);
+                                pix_model[m_base + 0] += alpha * (1.0 - w_val);
+                                let diff = pixel - pix_model[m_base + 1];
+                                pix_model[m_base + 1] += alpha_m * diff;
+                                let new_var: f32 = pix_model[m_base + 2] + alpha_m * (diff * diff - pix_model[m_base + 2]);
+                                pix_model[m_base + 2] = new_var.clamp(var_min, var_max);
+                            } else {
+                                pix_model[m_base + 0] *= 1.0 - alpha;
+                            }
+                        }
+                    } else {
+                        let mut min_w_idx = 0;
+                        let mut min_w = 2.0;
+                        for m in 0..n_mixtures {
+                            if pix_model[m * 3] < min_w {
+                                min_w = pix_model[m * 3];
+                                min_w_idx = m;
+                            }
+                        }
+                        let m_base = min_w_idx * 3;
+                        pix_model[m_base + 0] = alpha;
+                        pix_model[m_base + 1] = pixel;
+                        pix_model[m_base + 2] = var_init;
+                    }
+                }
+            });
+        Ok(())
+    }
 }
 
 fn get_val_cpu(src: &[f32], w: usize, h: usize, x: i32, y: i32) -> f32 {

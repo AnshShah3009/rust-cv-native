@@ -346,6 +346,19 @@ impl<'a> ComputeDevice<'a> {
             ComputeDevice::Gpu(gpu) => gpu.spmv(row_ptr, col_indices, values, x),
         }
     }
+
+    pub fn mog2_update<S1: Storage<f32> + 'static, S2: Storage<u32> + 'static>(
+        &self,
+        frame: &Tensor<f32, S1>,
+        model: &mut Tensor<f32, S1>,
+        mask: &mut Tensor<u32, S2>,
+        params: &crate::context::Mog2Params,
+    ) -> Result<()> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.mog2_update(frame, model, mask, params),
+            ComputeDevice::Gpu(gpu) => gpu.mog2_update(frame, model, mask, params),
+        }
+    }
 }
 
 /// Get the best available compute device.

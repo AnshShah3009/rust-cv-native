@@ -677,6 +677,60 @@ impl ComputeContext for GpuContext {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
     }
+
+    fn mog2_update<S1: Storage<f32> + 'static, S2: Storage<u32> + 'static>(
+        &self,
+        frame: &Tensor<f32, S1>,
+        model: &mut Tensor<f32, S1>,
+        mask: &mut Tensor<u32, S2>,
+        params: &crate::context::Mog2Params,
+    ) -> crate::Result<()> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+        use wgpu::util::DeviceExt;
+
+        if TypeId::of::<S1>() == TypeId::of::<GpuStorage<f32>>() && TypeId::of::<S2>() == TypeId::of::<GpuStorage<u32>>() {
+            let frame_ptr = frame as *const Tensor<f32, S1> as *const Tensor<f32, GpuStorage<f32>>;
+            let model_ptr = model as *mut Tensor<f32, S1> as *mut Tensor<f32, GpuStorage<f32>>;
+            let mask_ptr = mask as *mut Tensor<u32, S2> as *mut Tensor<u32, GpuStorage<u32>>;
+            
+            let frame_gpu = unsafe { &*frame_ptr };
+            let model_gpu = unsafe { &mut *model_ptr };
+            let mask_gpu = unsafe { &mut *mask_ptr };
+
+            let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("MOG2 Params"),
+                contents: bytemuck::cast_slice(&[*params]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+
+            let shader_source = include_str!("../shaders/mog2_update.wgsl");
+            let pipeline = self.create_compute_pipeline(shader_source, "main");
+
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("MOG2 Bind Group"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: frame_gpu.storage.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: model_gpu.storage.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: mask_gpu.storage.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+                ],
+            });
+
+            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups((params.width + 15) / 16, (params.height + 15) / 16, 1);
+            }
+            self.submit(encoder);
+            Ok(())
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
 }
 
 impl GpuContext {
