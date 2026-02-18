@@ -2,21 +2,21 @@ use cv_3d::PointCloud;
 use cv_calib3d::{
     find_chessboard_corners as rust_find_chessboard_corners, project_points as rust_project_points,
     solve_pnp_ransac as rust_solve_pnp_ransac,
+    pnp::solve_pnp_refine as rust_solve_pnp_refine,
 };
-use cv_core::CameraExtrinsics;
-use cv_core::CameraIntrinsics;
-use cv_core::Distortion as RustDistortion;
-use cv_core::Rect as RustRect;
+use cv_core::{CameraExtrinsics, CameraIntrinsics, Distortion as RustDistortion, Rect as RustRect, Tensor, TensorShape, storage::CpuStorage};
 use cv_registration::{registration_icp_point_to_plane, GlobalRegistrationResult, ICPResult};
 use cv_scientific::geometry::vectorized_iou as rust_vectorized_iou;
 use cv_scientific::point_cloud::{
     estimate_normals as sci_estimate_normals, orient_normals as sci_orient_normals,
 };
 use cv_stereo::{compute_validity_mask, DisparityMap, StereoParams};
+use cv_features::{Akaze as RustAkaze, AkazeParams as RustAkazeParams};
+use cv_videoio::{VideoCapture as RustVideoCapture};
 use geo::Area;
 use nalgebra::{Matrix4, Point3, Vector3};
 #[allow(deprecated)]
-use numpy::{IntoPyArray, PyArray2, PyArrayMethods, PyUntypedArrayMethods};
+use numpy::{IntoPyArray, PyArray2, PyArrayMethods, PyUntypedArrayMethods, PyArray3};
 use pyo3::prelude::*;
 
 #[pyclass]
@@ -158,25 +158,6 @@ impl PySpatialIndex {
 
     pub fn nearest(&self, x: f64, y: f64) -> Option<usize> {
         self.inner.nearest(x, y)
-    }
-}
-
-#[pyclass]
-pub struct PyPointCloud {
-    pub inner: PointCloud,
-}
-
-#[pymethods]
-impl PyPointCloud {
-    #[new]
-    pub fn new() -> Self {
-        Self {
-            inner: PointCloud::new(Vec::new()),
-        }
-    }
-
-    pub fn num_points(&self) -> usize {
-        self.inner.points.len()
     }
 }
 
@@ -489,7 +470,6 @@ impl PySlam {
     pub fn new(device: &PyComputeDevice, fx: f64, fy: f64, cx: f64, cy: f64, width: u32, height: u32) -> Self {
         let intrinsics = CameraIntrinsics::new(fx, fy, cx, cy, width, height);
         let slam = unsafe {
-            // Safety: device lives as long as PySlam because we hold it in _device
             let d_ptr = &device.inner as *const _;
             cv_slam::Slam::new(&*d_ptr, intrinsics)
         };
@@ -498,7 +478,7 @@ impl PySlam {
             _device: Some(PyComputeDevice {
                 inner: unsafe { std::mem::transmute_copy(&device.inner) },
                 _cpu: None,
-                _gpu: None, // This is just a shell to keep lifetime, real context is in the passed 'device'
+                _gpu: None,
             }),
         }
     }
@@ -520,26 +500,84 @@ impl PySlam {
     }
 }
 
-#[pyfunction]
-fn orb_detect_accelerated(
-    device: &PyComputeDevice,
-    image: &PyTensor,
-    n_features: usize,
-) -> Vec<PyKeyPoint> {
-    use cv_core::storage::CpuStorage;
-    let shape = cv_core::TensorShape::new(image.shape[0], image.shape[1], image.shape[2]);
-    let tensor: cv_core::Tensor<u8, CpuStorage<u8>> = cv_core::Tensor::from_vec(image.data.clone(), shape);
-    
-    let orb = cv_features::Orb::new().with_n_features(n_features);
-    let kps = orb.detect_ctx(&device.inner, &tensor);
-    
-    kps.keypoints.iter().map(|kp| PyKeyPoint {
-        x: kp.x as f32,
-        y: kp.y as f32,
-        size: kp.size as f32,
-        angle: kp.angle as f32,
-        response: kp.response as f32,
-    }).collect()
+#[pyclass]
+pub struct PyAkaze {
+    inner: RustAkaze,
+}
+
+#[pymethods]
+impl PyAkaze {
+    #[new]
+    #[pyo3(signature = (n_octaves=4, n_sublevels=4, threshold=0.001))]
+    pub fn new(n_octaves: usize, n_sublevels: usize, threshold: f32) -> Self {
+        let params = RustAkazeParams {
+            n_octaves,
+            n_sublevels,
+            threshold,
+            ..Default::default()
+        };
+        Self { inner: RustAkaze::new(params) }
+    }
+
+    pub fn detect_and_compute(&self, device: &PyComputeDevice, image: &PyTensor) -> (Vec<PyKeyPoint>, Bound<'_, PyArray2<u8>>) {
+        let shape = TensorShape::new(image.shape[0], image.shape[1], image.shape[2]);
+        let tensor: Tensor<u8, CpuStorage<u8>> = Tensor::from_vec(image.data.clone(), shape);
+        
+        let (kps, descs) = self.inner.detect_and_compute_ctx(&device.inner, &tensor);
+        
+        let py_kps: Vec<PyKeyPoint> = kps.keypoints.iter().map(|kp| PyKeyPoint {
+            x: kp.x as f32,
+            y: kp.y as f32,
+            size: kp.size as f32,
+            angle: kp.angle as f32,
+            response: kp.response as f32,
+        }).collect();
+
+        let n_descs = descs.descriptors.len();
+        let desc_size = if n_descs > 0 { descs.descriptors[0].data.len() } else { 0 };
+        
+        Python::with_gil(|py| {
+            let py_descs = PyArray2::zeros_bound(py, [n_descs, desc_size], false);
+            unsafe {
+                let res_ptr = py_descs.as_slice_mut().unwrap();
+                for (i, d) in descs.descriptors.iter().enumerate() {
+                    res_ptr[i * desc_size .. (i + 1) * desc_size].copy_from_slice(&d.data);
+                }
+            }
+            (py_kps, py_descs)
+        })
+    }
+}
+
+#[pyclass]
+pub struct PyVideoCapture {
+    inner: RustVideoCapture,
+}
+
+#[pymethods]
+impl PyVideoCapture {
+    #[new]
+    pub fn new(path: &str) -> PyResult<Self> {
+        let inner = RustVideoCapture::from_file(path)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    pub fn read(&mut self, py: Python<'_>) -> PyResult<Option<Bound<'_, PyArray3<u8>>>> {
+        match self.inner.read() {
+            Ok(Some(frame)) => {
+                let (h, w, c) = (frame.height, frame.width, frame.channels);
+                let py_array = PyArray3::zeros_bound(py, [h, w, c], false);
+                unsafe {
+                    let res_ptr = py_array.as_slice_mut().unwrap();
+                    res_ptr.copy_from_slice(&frame.data);
+                }
+                Ok(Some(py_array))
+            },
+            Ok(None) => Ok(None),
+            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string())),
+        }
+    }
 }
 
 #[pyfunction]
@@ -550,131 +588,16 @@ fn gaussian_blur<'py>(
 ) -> PyResult<Bound<'py, PyArray2<u8>>> {
     let input_view = input.readonly();
     let shape = input_view.shape();
-    let height = shape[0];
-    let width = shape[1];
-
-    let mut gray = image::GrayImage::new(width as u32, height as u32);
-    let data = input_view
-        .as_slice()
-        .map_err(|e: numpy::NotContiguousError| {
-            PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string())
-        })?;
+    let mut gray = image::GrayImage::new(shape[1] as u32, shape[0] as u32);
+    let data = input_view.as_slice()?;
     gray.copy_from_slice(data);
-
     let result = cv_imgproc::gaussian_blur(&gray, sigma as f32);
-
-    let py_array = PyArray2::zeros_bound(py, [height, width], false);
+    let py_array = PyArray2::zeros_bound(py, [shape[0], shape[1]], false);
     unsafe {
-        let res_ptr = py_array
-            .as_slice_mut()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string()))?;
+        let res_ptr = py_array.as_slice_mut()?;
         res_ptr.copy_from_slice(result.as_raw());
     }
     Ok(py_array)
-}
-
-#[pyfunction]
-fn detect_orb<'py>(
-    py: Python<'py>,
-    input: Bound<'py, PyArray2<u8>>,
-    n_features: usize,
-) -> PyResult<(Vec<PyKeyPoint>, Bound<'py, PyArray2<u8>>)> {
-    let input_view = input.readonly();
-    let shape = input_view.shape();
-    let height = shape[0];
-    let width = shape[1];
-
-    let mut gray = image::GrayImage::new(width as u32, height as u32);
-    let data = input_view
-        .as_slice()
-        .map_err(|e: numpy::NotContiguousError| {
-            PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string())
-        })?;
-    gray.copy_from_slice(data);
-
-    let (kps, descs) = cv_features::orb_detect_and_compute(&gray, n_features);
-
-    let py_kps: Vec<PyKeyPoint> = kps
-        .keypoints
-        .iter()
-        .map(|kp| PyKeyPoint {
-            x: kp.x as f32,
-            y: kp.y as f32,
-            size: kp.size as f32,
-            angle: kp.angle as f32,
-            response: kp.response as f32,
-        })
-        .collect();
-
-    let n_descs = descs.descriptors.len();
-    let desc_size = if n_descs > 0 {
-        descs.descriptors[0].data.len()
-    } else {
-        0
-    };
-    let py_descs = PyArray2::zeros_bound(py, [n_descs, desc_size], false);
-
-    let res_ptr = unsafe {
-        py_descs
-            .as_slice_mut()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string()))?
-    };
-    for (i, d) in descs.descriptors.iter().enumerate() {
-        res_ptr[i * desc_size..(i + 1) * desc_size].copy_from_slice(&d.data);
-    }
-
-    Ok((py_kps, py_descs))
-}
-
-#[pyfunction]
-fn match_descriptors<'py>(
-    _py: Python<'_>,
-    query: Bound<'py, PyArray2<u8>>,
-    train: Bound<'py, PyArray2<u8>>,
-) -> PyResult<Vec<PyFeatureMatch>> {
-    let q_view = query.readonly();
-    let t_view = train.readonly();
-
-    let q_shape = q_view.shape();
-    let t_shape = t_view.shape();
-
-    let q_data = q_view
-        .as_slice()
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string()))?;
-    let t_data = t_view
-        .as_slice()
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string()))?;
-
-    let mut q_descs = cv_core::Descriptors::new();
-    for i in 0..q_shape[0] {
-        let data = q_data[i * q_shape[1]..(i + 1) * q_shape[1]].to_vec();
-        q_descs.descriptors.push(cv_core::Descriptor::new(
-            data,
-            cv_core::KeyPoint::default(),
-        ));
-    }
-
-    let mut t_descs = cv_core::Descriptors::new();
-    for i in 0..t_shape[0] {
-        let data = t_data[i * t_shape[1]..(i + 1) * t_shape[1]].to_vec();
-        t_descs.descriptors.push(cv_core::Descriptor::new(
-            data,
-            cv_core::KeyPoint::default(),
-        ));
-    }
-
-    let matcher = cv_features::Matcher::new(cv_features::MatchType::BruteForce);
-    let matches = matcher.match_descriptors(&q_descs, &t_descs);
-
-    Ok(matches
-        .matches
-        .iter()
-        .map(|m| PyFeatureMatch {
-            query_idx: m.query_idx,
-            train_idx: m.train_idx,
-            distance: m.distance,
-        })
-        .collect())
 }
 
 #[pyclass]
@@ -687,34 +610,7 @@ pub struct PyCameraIntrinsics {
 impl PyCameraIntrinsics {
     #[new]
     pub fn new(fx: f64, fy: f64, cx: f64, cy: f64, width: u32, height: u32) -> Self {
-        Self {
-            inner: CameraIntrinsics::new(fx, fy, cx, cy, width, height),
-        }
-    }
-
-    #[getter]
-    pub fn fx(&self) -> f64 {
-        self.inner.fx
-    }
-    #[getter]
-    pub fn fy(&self) -> f64 {
-        self.inner.fy
-    }
-    #[getter]
-    pub fn cx(&self) -> f64 {
-        self.inner.cx
-    }
-    #[getter]
-    pub fn cy(&self) -> f64 {
-        self.inner.cy
-    }
-    #[getter]
-    pub fn width(&self) -> u32 {
-        self.inner.width
-    }
-    #[getter]
-    pub fn height(&self) -> u32 {
-        self.inner.height
+        Self { inner: CameraIntrinsics::new(fx, fy, cx, cy, width, height) }
     }
 }
 
@@ -728,467 +624,58 @@ pub struct PyCameraExtrinsics {
 impl PyCameraExtrinsics {
     #[new]
     pub fn new(rvec: Vec<f64>, tvec: Vec<f64>) -> PyResult<Self> {
-        if rvec.len() != 3 || tvec.len() != 3 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "rvec and tvec must have 3 elements each",
-            ));
-        }
         let axis = nalgebra::Vector3::new(rvec[0], rvec[1], rvec[2]);
         let angle = axis.norm();
-        let rotation = if angle < 1e-10 {
-            nalgebra::Matrix3::identity()
-        } else {
+        let rotation = if angle < 1e-10 { nalgebra::Matrix3::identity() } else {
             nalgebra::Rotation3::from_axis_angle(&nalgebra::Unit::new_normalize(axis), angle).into()
         };
         let translation = nalgebra::Vector3::new(tvec[0], tvec[1], tvec[2]);
-        Ok(Self {
-            inner: CameraExtrinsics {
-                rotation,
-                translation,
-            },
-        })
-    }
-
-    pub fn get_rvec(&self) -> Vec<f64> {
-        let r = &self.inner.rotation;
-        vec![r[(0, 0)], r[(1, 0)], r[(2, 0)]]
-    }
-
-    pub fn get_tvec(&self) -> Vec<f64> {
-        vec![
-            self.inner.translation[0],
-            self.inner.translation[1],
-            self.inner.translation[2],
-        ]
-    }
-}
-
-#[pyclass]
-#[derive(Clone)]
-pub struct PyDistortion {
-    pub inner: RustDistortion,
-}
-
-#[pymethods]
-impl PyDistortion {
-    #[new]
-    pub fn new(k1: f64, k2: f64, p1: f64, p2: f64, k3: f64) -> Self {
-        Self {
-            inner: RustDistortion::new(k1, k2, p1, p2, k3),
-        }
-    }
-
-    #[getter]
-    pub fn k1(&self) -> f64 {
-        self.inner.k1
-    }
-    #[getter]
-    pub fn k2(&self) -> f64 {
-        self.inner.k2
-    }
-    #[getter]
-    pub fn p1(&self) -> f64 {
-        self.inner.p1
-    }
-    #[getter]
-    pub fn p2(&self) -> f64 {
-        self.inner.p2
-    }
-    #[getter]
-    pub fn k3(&self) -> f64 {
-        self.inner.k3
-    }
-}
-
-#[pyclass]
-#[derive(Clone)]
-pub struct PyDisparityMap {
-    pub inner: DisparityMap,
-}
-
-#[pymethods]
-impl PyDisparityMap {
-    #[new]
-    pub fn new(width: u32, height: u32, min_d: i32, max_d: i32) -> Self {
-        Self {
-            inner: DisparityMap::new(width, height, min_d, max_d),
-        }
-    }
-
-    pub fn get(&self, x: u32, y: u32) -> f32 {
-        self.inner.get(x, y)
-    }
-
-    pub fn is_valid(&self, x: u32, y: u32) -> bool {
-        self.inner.is_valid(x, y)
-    }
-
-    pub fn width(&self) -> u32 {
-        self.inner.width
-    }
-
-    pub fn height(&self) -> u32 {
-        self.inner.height
-    }
-}
-
-#[pyclass]
-#[derive(Clone)]
-pub struct PyStereoParams {
-    pub inner: StereoParams,
-}
-
-#[pymethods]
-impl PyStereoParams {
-    #[new]
-    pub fn new(focal_length: f64, baseline: f64, cx: f64, cy: f64) -> Self {
-        Self {
-            inner: StereoParams::new(focal_length, baseline, cx, cy),
-        }
-    }
-
-    pub fn disparity_to_depth(&self, disparity: f64) -> Option<f64> {
-        self.inner.disparity_to_depth(disparity)
+        Ok(Self { inner: CameraExtrinsics { rotation, translation } })
     }
 }
 
 #[pyfunction]
-fn find_chessboard_corners(
-    image: Bound<'_, PyArray2<u8>>,
-    pattern_size: (usize, usize),
-) -> PyResult<Vec<(f64, f64)>> {
-    let view = image.readonly();
-    let shape = view.shape();
-    let height = shape[0];
-    let width = shape[1];
-
-    let mut gray = image::GrayImage::new(width as u32, height as u32);
-    let data = view.as_slice().map_err(|e: numpy::NotContiguousError| {
-        PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string())
-    })?;
-    gray.copy_from_slice(data);
-
-    let corners = rust_find_chessboard_corners(&gray, pattern_size)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-
-    Ok(corners.into_iter().map(|p| (p.x, p.y)).collect())
-}
-
-#[pyfunction]
-fn project_points(
-    object_points: Vec<(f64, f64, f64)>,
-    intrinsics: &PyCameraIntrinsics,
-    extrinsics: &PyCameraExtrinsics,
-) -> PyResult<Vec<(f64, f64)>> {
-    let pts: Vec<nalgebra::Point3<f64>> = object_points
-        .iter()
-        .map(|p| nalgebra::Point3::new(p.0, p.1, p.2))
-        .collect();
-
-    let result = rust_project_points(&pts, &intrinsics.inner, &extrinsics.inner)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-
-    Ok(result.into_iter().map(|p| (p.x, p.y)).collect())
-}
-
-#[pyfunction]
-fn solve_pnp_ransac(
+fn solve_pnp_refine(
     object_points: Vec<(f64, f64, f64)>,
     image_points: Vec<(f64, f64)>,
     intrinsics: &PyCameraIntrinsics,
-    threshold: f64,
-    max_iterations: usize,
-) -> PyResult<(PyCameraExtrinsics, Vec<bool>)> {
-    let obj_pts: Vec<nalgebra::Point3<f64>> = object_points
-        .iter()
-        .map(|p| nalgebra::Point3::new(p.0, p.1, p.2))
-        .collect();
-    let img_pts: Vec<nalgebra::Point2<f64>> = image_points
-        .iter()
-        .map(|p| nalgebra::Point2::new(p.0, p.1))
-        .collect();
-
-    let (extrinsics, inliers) = rust_solve_pnp_ransac(
-        &obj_pts,
-        &img_pts,
-        &intrinsics.inner,
-        threshold,
-        max_iterations,
-    )
-    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-
-    let py_ext = PyCameraExtrinsics { inner: extrinsics };
-    Ok((py_ext, inliers))
-}
-
-#[pyfunction]
-fn py_stereo_block_match(
-    left: Bound<'_, PyArray2<u8>>,
-    right: Bound<'_, PyArray2<u8>>,
-    block_size: usize,
-    max_disparity: i32,
-) -> PyResult<PyDisparityMap> {
-    let left_view = left.readonly();
-    let right_view = right.readonly();
-
-    let left_shape = left_view.shape();
-    let right_shape = right_view.shape();
-
-    if left_shape != right_shape {
-        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "Left and right images must have same dimensions",
-        ));
-    }
-
-    let height = left_shape[0];
-    let width = left_shape[1];
-
-    let mut left_gray = image::GrayImage::new(width as u32, height as u32);
-    let mut right_gray = image::GrayImage::new(width as u32, height as u32);
-
-    let left_data = left_view
-        .as_slice()
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string()))?;
-    let right_data = right_view
-        .as_slice()
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string()))?;
-
-    left_gray.copy_from_slice(left_data);
-    right_gray.copy_from_slice(right_data);
-
-    let result = cv_stereo::stereo_block_match(&left_gray, &right_gray, block_size, max_disparity)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-
-    Ok(PyDisparityMap { inner: result })
-}
-
-#[pyfunction]
-fn compute_disparity_validity(disparity: &PyDisparityMap, threshold: f32) -> Vec<bool> {
-    compute_validity_mask(&disparity.inner, threshold)
-}
-
-#[pyfunction]
-fn get_resource_group(name: &str) -> PyResult<PyResourceGroup> {
-    match cv_runtime::scheduler().get_group(name) {
-        Ok(Some(group)) => Ok(PyResourceGroup { inner: group }),
-        Ok(None) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Resource group '{}' not found",
-            name
-        ))),
-        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-            e.to_string(),
-        )),
-    }
-}
-
-#[pyfunction]
-#[pyo3(signature = (name, num_threads, cores=None, allow_work_stealing=true, allow_dynamic_scaling=true))]
-fn create_resource_group(
-    name: &str,
-    num_threads: usize,
-    cores: Option<Vec<usize>>,
-    allow_work_stealing: bool,
-    allow_dynamic_scaling: bool,
-) -> PyResult<PyResourceGroup> {
-    let policy = cv_runtime::orchestrator::GroupPolicy {
-        allow_work_stealing,
-        allow_dynamic_scaling,
-    };
-    let group = cv_runtime::scheduler()
-        .create_group(name, num_threads, cores, policy)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-    Ok(PyResourceGroup { inner: group })
-}
-
-#[pyfunction]
-fn estimate_normals<'a>(
-    points: &'a Bound<'_, PyArray2<f32>>,
-    k: usize,
-) -> PyResult<Bound<'a, PyArray2<f32>>> {
-    let view = points.readonly();
-    let shape = view.shape();
-    let n = shape[0];
-
-    let pts: Vec<Point3<f32>> = view
-        .as_slice()?
-        .chunks(3)
-        .map(|c| Point3::new(c[0], c[1], c[2]))
-        .collect();
-
-    let mut pc = cv_core::PointCloud::new(pts);
-    sci_estimate_normals(&mut pc, k);
-
-    let normals = pc.normals.unwrap();
-
-    let py = points.py();
-    let normals_array = PyArray2::zeros_bound(py, [n, 3], false);
-    unsafe {
-        let mut slice = normals_array.as_slice_mut()?;
-        for (i, n) in normals.iter().enumerate() {
-            slice[i * 3] = n.x;
-            slice[i * 3 + 1] = n.y;
-            slice[i * 3 + 2] = n.z;
-        }
-    }
-
-    Ok(normals_array)
-}
-
-#[pyfunction]
-fn orient_normals<'a>(
-    points: &'a Bound<'_, PyArray2<f32>>,
-    normals: &'a Bound<'_, PyArray2<f32>>,
-    k: usize,
-) -> PyResult<Bound<'a, PyArray2<f32>>> {
-    let view = points.readonly();
-    let n = view.shape()[0];
-
-    let pts: Vec<Point3<f32>> = view
-        .as_slice()?
-        .chunks(3)
-        .map(|c| Point3::new(c[0], c[1], c[2]))
-        .collect();
-
-    let norms_view = normals.readonly();
-    let norms: Vec<Vector3<f32>> = norms_view
-        .as_slice()?
-        .chunks(3)
-        .map(|c| Vector3::new(c[0], c[1], c[2]))
-        .collect();
-
-    let mut pc = cv_core::PointCloud::new(pts);
-    pc.normals = Some(norms);
-    sci_orient_normals(&mut pc, k);
-
-    let oriented = pc.normals.unwrap();
-
-    let py = points.py();
-    let result = PyArray2::zeros_bound(py, [n, 3], false);
-    unsafe {
-        let mut slice = result.as_slice_mut()?;
-        for (i, n) in oriented.iter().enumerate() {
-            slice[i * 3] = n.x;
-            slice[i * 3 + 1] = n.y;
-            slice[i * 3 + 2] = n.z;
-        }
-    }
-
-    Ok(result)
-}
-
-#[pyfunction]
-fn compute_normals<'a>(
-    points: &'a Bound<'_, PyArray2<f32>>,
-    k: usize,
-) -> PyResult<Bound<'a, PyArray2<f32>>> {
-    let view = points.readonly();
-    let n = view.shape()[0];
-
-    let pts: Vec<Point3<f32>> = view
-        .as_slice()?
-        .chunks(3)
-        .map(|c| Point3::new(c[0], c[1], c[2]))
-        .collect();
-
-    let normals = cv_3d::gpu::point_cloud::compute_normals_simple(&pts, k);
-
-    let py = points.py();
-    let result = PyArray2::zeros_bound(py, [n, 3], false);
-    unsafe {
-        let mut slice = result.as_slice_mut()?;
-        for (i, n) in normals.iter().enumerate() {
-            slice[i * 3] = n.x;
-            slice[i * 3 + 1] = n.y;
-            slice[i * 3 + 2] = n.z;
-        }
-    }
-
-    Ok(result)
-}
-
-#[pyfunction]
-fn is_gpu_available_fn() -> bool {
-    cv_hal::gpu::GpuContext::is_available()
-}
-
-#[pyfunction]
-fn gpu_info() -> Option<String> {
-    cv_3d::gpu::gpu_info()
-}
-
-#[pyfunction]
-fn voxel_downsample_gpu<'a>(
-    py: Python<'a>,
-    points: &Bound<'_, PyArray2<f32>>,
-    voxel_size: f32,
-) -> PyResult<Bound<'a, PyArray2<f32>>> {
-    let view = points.readonly();
-    let n = view.shape()[0];
-
-    let pts: Vec<Point3<f32>> = view
-        .as_slice()?
-        .chunks(3)
-        .map(|c| Point3::new(c[0], c[1], c[2]))
-        .collect();
-
-    let downsampled = cv_3d::gpu::point_cloud::voxel_downsample(&pts, voxel_size);
-
-    let result = PyArray2::zeros_bound(py, [downsampled.len(), 3], false);
-    unsafe {
-        let mut slice = result.as_slice_mut()?;
-        for (i, p) in downsampled.iter().enumerate() {
-            slice[i * 3] = p.x;
-            slice[i * 3 + 1] = p.y;
-            slice[i * 3 + 2] = p.z;
-        }
-    }
-
-    Ok(result)
+    init_extrinsics: &PyCameraExtrinsics,
+) -> PyResult<PyCameraExtrinsics> {
+    let obj_pts: Vec<Point3<f64>> = object_points.iter().map(|p| Point3::new(p.0, p.1, p.2)).collect();
+    let img_pts: Vec<nalgebra::Point2<f64>> = image_points.iter().map(|p| nalgebra::Point2::new(p.0, p.1)).collect();
+    let refined = rust_solve_pnp_refine(&obj_pts, &img_pts, &intrinsics.inner, &init_extrinsics.inner)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    Ok(PyCameraExtrinsics { inner: refined })
 }
 
 #[pymodule]
 fn cv_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyPointCloud>()?;
-    m.add_class::<PyPointCloud3D>()?;
-    m.add_class::<PyPoint3D>()?;
-    m.add_class::<PyKeyPoint>()?;
-    m.add_class::<PyFeatureMatch>()?;
-    m.add_class::<PyResourceGroup>()?;
-    m.add_class::<PySlam>()?;
     m.add_class::<PyRect>()?;
     m.add_class::<PyPolygon>()?;
     m.add_class::<PySpatialIndex>()?;
+    m.add_class::<PyPoint3D>()?;
+    m.add_class::<PyPointCloud3D>()?;
     m.add_class::<PyICPResult>()?;
     m.add_class::<PyGlobalRegistrationResult>()?;
-    m.add_class::<PyCameraIntrinsics>()?;
-    m.add_class::<PyCameraExtrinsics>()?;
-    m.add_class::<PyDistortion>()?;
-    m.add_class::<PyDisparityMap>()?;
-    m.add_class::<PyStereoParams>()?;
+    m.add_class::<PyKeyPoint>()?;
+    m.add_class::<PyFeatureMatch>()?;
+    m.add_class::<PyResourceGroup>()?;
     m.add_class::<PyComputeDevice>()?;
     m.add_class::<PyTensor>()?;
+    m.add_class::<PySlam>()?;
+    m.add_class::<PyAkaze>()?;
+    m.add_class::<PyVideoCapture>()?;
+    m.add_class::<PyCameraIntrinsics>()?;
+    m.add_class::<PyCameraExtrinsics>()?;
 
-    m.add_function(wrap_pyfunction!(gaussian_blur, m)?)?;
-    m.add_function(wrap_pyfunction!(detect_orb, m)?)?;
-    m.add_function(wrap_pyfunction!(orb_detect_accelerated, m)?)?;
-    m.add_function(wrap_pyfunction!(match_descriptors, m)?)?;
-    m.add_function(wrap_pyfunction!(get_resource_group, m)?)?;
-    m.add_function(wrap_pyfunction!(create_resource_group, m)?)?;
     m.add_function(wrap_pyfunction!(iou, m)?)?;
     m.add_function(wrap_pyfunction!(py_vectorized_iou, m)?)?;
     m.add_function(wrap_pyfunction!(py_polygon_iou, m)?)?;
     m.add_function(wrap_pyfunction!(registration_icp, m)?)?;
-    m.add_function(wrap_pyfunction!(find_chessboard_corners, m)?)?;
-    m.add_function(wrap_pyfunction!(project_points, m)?)?;
-    m.add_function(wrap_pyfunction!(solve_pnp_ransac, m)?)?;
-    m.add_function(wrap_pyfunction!(py_stereo_block_match, m)?)?;
-    m.add_function(wrap_pyfunction!(compute_disparity_validity, m)?)?;
-    m.add_function(wrap_pyfunction!(estimate_normals, m)?)?;
-    m.add_function(wrap_pyfunction!(orient_normals, m)?)?;
-    m.add_function(wrap_pyfunction!(compute_normals, m)?)?;
+    m.add_function(wrap_pyfunction!(gaussian_blur, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_pnp_refine, m)?)?;
     m.add_function(wrap_pyfunction!(is_gpu_available_fn, m)?)?;
-    m.add_function(wrap_pyfunction!(gpu_info, m)?)?;
-    m.add_function(wrap_pyfunction!(voxel_downsample_gpu, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_normals, m)?)?;
 
     Ok(())
 }
