@@ -1,12 +1,11 @@
 // Global Prefix Sum (Scan) Shader
 // Performs work-efficient parallel exclusive prefix sum on GPU.
 
-@group(0) @binding(0) var<storage, read> input_data: array<u32>;
-@group(0) @binding(1) var<storage, read_write> output_data: array<u32>;
-@group(0) @binding(2) var<storage, read_write> block_sums: array<u32>;
-@group(0) @binding(3) var<uniform> num_elements: u32;
+@group(0) @binding(0) var<storage, read_write> data: array<u32>;
+@group(0) @binding(1) var<storage, read_write> block_sums: array<u32>;
+@group(0) @binding(2) var<uniform> num_elements: u32;
 
-var<workgroup> temp: array<u32, 512>;
+var<workgroup> temp: array<u32, 512 + 16>; // Extra space for bank conflict avoidance
 
 // Kernel 1: Scan individual blocks of 512 elements and record block totals.
 @compute @workgroup_size(256)
@@ -19,22 +18,21 @@ fn scan_blocks(
     let gid = global_id.x;
     let n = 512u;
     
-    // Load unaligned data (two elements per thread)
+    // Load data into shared memory
     let ai = thid;
     let bi = thid + 256u;
     
-    // Simple bank conflict avoidance: add 1 element per bank (32)
     let bank_offset_a = ai >> 5u;
     let bank_offset_b = bi >> 5u;
 
     if (2u * gid < num_elements) {
-        temp[ai + bank_offset_a] = input_data[2u * gid];
+        temp[ai + bank_offset_a] = data[2u * gid];
     } else {
         temp[ai + bank_offset_a] = 0u;
     }
     
     if (2u * gid + 1u < num_elements) {
-        temp[bi + bank_offset_b] = input_data[2u * gid + 1u];
+        temp[bi + bank_offset_b] = data[2u * gid + 1u];
     } else {
         temp[bi + bank_offset_b] = 0u;
     }
@@ -79,10 +77,10 @@ fn scan_blocks(
 
     // Write block-local prefix sum
     if (2u * gid < num_elements) {
-        output_data[2u * gid] = temp[ai + bank_offset_a];
+        data[2u * gid] = temp[ai + bank_offset_a];
     }
     if (2u * gid + 1u < num_elements) {
-        output_data[2u * gid + 1u] = temp[bi + bank_offset_b];
+        data[2u * gid + 1u] = temp[bi + bank_offset_b];
     }
 }
 
@@ -93,14 +91,10 @@ fn scan_blocks(
 @compute @workgroup_size(256)
 fn add_offsets(
     @builtin(global_invocation_id) global_id: vec3<u32>,
-    @builtin(local_invocation_id) local_id: vec3<u32>,
     @builtin(workgroup_id) group_id: vec3<u32>,
 ) {
     let gid = global_id.x;
     let wid = group_id.x;
-    
-    // Each thread in a workgroup adds the SAME block offset to its elements.
-    // Each thread processes 2 elements to match scan_blocks.
     let offset = block_offsets[wid];
     
     if (2u * gid < num_elements) {

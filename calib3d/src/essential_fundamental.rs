@@ -43,6 +43,22 @@ pub fn find_essential_mat(
     estimate_essential_8_point(&n1, &n2)
 }
 
+/// Estimate Fundamental matrix from two sets of corresponding points.
+///
+/// Uses the 8-point algorithm with Hartley normalization for numerical stability.
+/// Requires at least 8 point pairs.
+pub fn find_fundamental_mat(
+    pts1: &[Point2<f64>],
+    pts2: &[Point2<f64>],
+) -> Result<Matrix3<f64>> {
+    if pts1.len() != pts2.len() || pts1.len() < 8 {
+        return Err(CalibError::InvalidParameters(
+            "find_fundamental_mat needs >=8 paired points".to_string(),
+        ));
+    }
+    estimate_fundamental_8_point(pts1, pts2)
+}
+
 use cv_core::{RobustModel, RobustConfig, Ransac};
 
 pub struct EssentialEstimator;

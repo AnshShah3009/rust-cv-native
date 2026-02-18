@@ -194,9 +194,8 @@ pub fn gpu_exclusive_scan(
         layout: &scan_pipeline.get_bind_group_layout(0),
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: block_sums_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: n_elements_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: block_sums_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 2, resource: n_elements_buffer.as_entire_binding() },
         ],
     });
     
@@ -229,8 +228,7 @@ pub fn gpu_exclusive_scan(
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: block_sums_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: block_sums_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: n_elements_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: n_elements_buffer.as_entire_binding() },
             ],
         });
         

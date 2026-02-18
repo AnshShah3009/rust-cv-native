@@ -40,7 +40,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         self.sync_to_device(&ComputeDevice::Gpu(ctx))
     }
 
-    pub fn sync_to_device(&mut self, device: &ComputeDevice) -> Result<()> {
+    pub fn sync_to_device(&mut self, device: &ComputeDevice<'_>) -> Result<()> {
         if self.location == BufferLocation::Device || self.location == BufferLocation::Both {
             return Ok(());
         }
@@ -55,8 +55,6 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
             if b.size() >= size {
                 b
             } else {
-                // Return old buffer to pool if it was pooled?
-                // For now just create new one from pool
                 let new_b = device.get_buffer(size, usages)?;
                 self.device_data = Some(new_b);
                 self.device_data.as_ref().unwrap()
@@ -79,7 +77,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         self.sync_to_host(&ComputeDevice::Gpu(ctx)).await
     }
 
-    pub async fn sync_to_host(&mut self, device: &ComputeDevice) -> Result<()> {
+    pub async fn sync_to_host(&mut self, device: &ComputeDevice<'_>) -> Result<()> {
         if self.location == BufferLocation::Host || self.location == BufferLocation::Both {
             return Ok(());
         }
@@ -111,7 +109,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
     }
 
     /// Return the GPU buffer to the pool.
-    pub fn release(&mut self, device: &ComputeDevice) -> Result<()> {
+    pub fn release(&mut self, device: &ComputeDevice<'_>) -> Result<()> {
         if let Some(buffer) = self.device_data.take() {
             let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
             device.return_buffer(buffer, usages)?;
