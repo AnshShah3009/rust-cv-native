@@ -53,6 +53,7 @@ pub mod bilateral;
 pub mod fast;
 pub mod matching;
 pub mod sift;
+pub mod icp;
 
 /// Shader compilation utilities
 pub mod shaders {

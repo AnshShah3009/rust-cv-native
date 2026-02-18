@@ -251,10 +251,33 @@ impl<'a> ComputeDevice<'a> {
         dog_next: &Tensor<f32, S>,
         threshold: f32,
         edge_threshold: f32,
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<u8, cv_core::storage::CpuStorage<u8>>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold),
             ComputeDevice::Gpu(gpu) => gpu.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold),
+        }
+    }
+
+    pub fn compute_sift_descriptors<S: Storage<f32> + 'static>(
+        &self,
+        image: &Tensor<f32, S>,
+        keypoints: &cv_core::KeyPoints,
+    ) -> Result<cv_core::Descriptors> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.compute_sift_descriptors(image, keypoints),
+            ComputeDevice::Gpu(gpu) => gpu.compute_sift_descriptors(image, keypoints),
+        }
+    }
+
+    pub fn icp_correspondences<S: Storage<f32> + 'static>(
+        &self,
+        src: &Tensor<f32, S>,
+        tgt: &Tensor<f32, S>,
+        max_dist: f32,
+    ) -> Result<Vec<(usize, usize, f32)>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.icp_correspondences(src, tgt, max_dist),
+            ComputeDevice::Gpu(gpu) => gpu.icp_correspondences(src, tgt, max_dist),
         }
     }
 }

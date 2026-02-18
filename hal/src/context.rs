@@ -193,7 +193,8 @@ pub trait ComputeContext: Send + Sync {
     ) -> Result<cv_core::Matches>;
 
     /// SIFT Local Extrema Detection
-    /// Finds local maxima/minima in 3x3x3 scale-space neighborhood
+    /// Finds local maxima/minima in 3x3x3 scale-space neighborhood.
+    /// Returns a U8 score map on CPU for refinement.
     fn sift_extrema<S: Storage<f32> + 'static>(
         &self,
         dog_prev: &Tensor<f32, S>,
@@ -201,7 +202,24 @@ pub trait ComputeContext: Send + Sync {
         dog_next: &Tensor<f32, S>,
         threshold: f32,
         edge_threshold: f32,
-    ) -> Result<Tensor<u8, S>>;
+    ) -> Result<Tensor<u8, cv_core::storage::CpuStorage<u8>>>;
+
+    /// SIFT Descriptor Computation
+    /// Returns a descriptor tensor (num_kps x 128)
+    fn compute_sift_descriptors<S: Storage<f32> + 'static>(
+        &self,
+        image: &Tensor<f32, S>,
+        keypoints: &cv_core::KeyPoints,
+    ) -> Result<cv_core::Descriptors>;
+
+    /// ICP Point Correspondence
+    /// Finds nearest neighbors from src points to tgt points
+    fn icp_correspondences<S: Storage<f32> + 'static>(
+        &self,
+        src: &Tensor<f32, S>,
+        tgt: &Tensor<f32, S>,
+        max_dist: f32,
+    ) -> Result<Vec<(usize, usize, f32)>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

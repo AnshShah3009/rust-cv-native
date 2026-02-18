@@ -53,7 +53,49 @@ fn test_cross_device_parity() {
         test_bilateral_parity(&cpu, &gpu, &info.name);
         test_fast_parity(&cpu, &gpu, &info.name);
         test_matching_parity(&cpu, &gpu, &info.name);
+        test_icp_parity(&cpu, &gpu, &info.name);
     }
+}
+
+fn test_icp_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
+    let num_src = 100;
+    let num_tgt = 200;
+    
+    let mut src_data = vec![0.0f32; num_src * 4];
+    let mut tgt_data = vec![0.0f32; num_tgt * 4];
+    
+    // Create some exact matches
+    for i in 0..num_src {
+        src_data[i * 4] = i as f32;
+        src_data[i * 4 + 1] = (i * 2) as f32;
+        src_data[i * 4 + 2] = (i * 3) as f32;
+        src_data[i * 4 + 3] = 1.0;
+        
+        tgt_data[i * 4] = i as f32;
+        tgt_data[i * 4 + 1] = (i * 2) as f32;
+        tgt_data[i * 4 + 2] = (i * 3) as f32;
+        tgt_data[i * 4 + 3] = 1.0;
+    }
+    
+    let src_cpu = Tensor::from_vec(src_data, TensorShape::new(1, num_src, 4));
+    let tgt_cpu = Tensor::from_vec(tgt_data, TensorShape::new(1, num_tgt, 4));
+    
+    let src_gpu = src_cpu.to_gpu_ctx(gpu).unwrap();
+    let tgt_gpu = tgt_cpu.to_gpu_ctx(gpu).unwrap();
+    
+    // CPU
+    let res_cpu = cpu.icp_correspondences(&src_cpu, &tgt_cpu, 1.0).unwrap();
+    
+    // GPU
+    let res_gpu = gpu.icp_correspondences(&src_gpu, &tgt_gpu, 1.0).unwrap();
+    
+    assert_eq!(res_cpu.len(), res_gpu.len(), "ICP count mismatch on {}", gpu_name);
+    for i in 0..res_cpu.len() {
+        assert_eq!(res_cpu[i].0, res_gpu[i].0);
+        assert_eq!(res_cpu[i].1, res_gpu[i].1);
+        assert!((res_cpu[i].2 - res_gpu[i].2).abs() < 1e-5);
+    }
+    println!("  ✓ ICP parity passed for {}", gpu_name);
 }
 
 fn test_matching_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {

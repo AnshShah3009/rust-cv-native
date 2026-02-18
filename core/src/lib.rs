@@ -1,3 +1,4 @@
+pub mod descriptor;
 pub mod frames;
 pub mod geometry;
 pub mod image;
@@ -7,6 +8,7 @@ pub mod runtime;
 pub mod storage;
 pub mod tensor;
 
+pub use descriptor::*;
 pub use frames::*;
 pub use geometry::*;
 pub use image::*;

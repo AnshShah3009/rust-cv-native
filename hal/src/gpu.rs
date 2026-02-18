@@ -1,4 +1,5 @@
 use wgpu::{Device, Queue, Instance, RequestAdapterOptions, PowerPreference, Backends};
+use wgpu::util::DeviceExt;
 use std::sync::{Arc, OnceLock};
 use futures::executor::block_on;
 use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType, ColorConversion};
@@ -394,9 +395,10 @@ impl ComputeContext for GpuContext {
         dog_next: &Tensor<f32, S>,
         threshold: f32,
         edge_threshold: f32,
-    ) -> crate::Result<Tensor<u8, S>> {
+    ) -> crate::Result<Tensor<u8, cv_core::storage::CpuStorage<u8>>> {
         use std::any::TypeId;
         use crate::storage::GpuStorage;
+        use crate::tensor_ext::TensorToCpu;
 
         if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
             let p_ptr = dog_prev as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
@@ -408,10 +410,115 @@ impl ComputeContext for GpuContext {
             let n_gpu = unsafe { &*n_ptr };
 
             let result_gpu = crate::gpu_kernels::sift::sift_extrema(self, p_gpu, c_gpu, n_gpu, threshold, edge_threshold)?;
+            result_gpu.to_cpu_ctx(self)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
 
-            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<u8, S>) };
-            std::mem::forget(result_gpu);
-            Ok(result)
+    fn compute_sift_descriptors<S: Storage<f32> + 'static>(
+        &self,
+        image: &Tensor<f32, S>,
+        keypoints: &cv_core::KeyPoints,
+    ) -> crate::Result<cv_core::Descriptors> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let img_ptr = image as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let img_gpu = unsafe { &*img_ptr };
+
+            // 1. Upload keypoints to GPU
+            let kp_data: Vec<[f32; 4]> = keypoints.keypoints.iter().map(|kp| {
+                [kp.x as f32, kp.y as f32, kp.size as f32, kp.angle as f32]
+            }).collect();
+            
+            let kp_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("SIFT Keypoints Buffer"),
+                contents: bytemuck::cast_slice(&kp_data),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+
+            // 2. Output buffer for descriptors (num_kps * 128 * 4 bytes)
+            let out_byte_size = (kp_data.len() * 128 * 4) as u64;
+            let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("SIFT Descriptors Output"),
+                size: out_byte_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+
+            let params = [image.shape.width as u32, image.shape.height as u32, kp_data.len() as u32, 0u32];
+            let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("SIFT Desc Params"),
+                contents: bytemuck::cast_slice(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+
+            let shader_source = include_str!("../shaders/sift_descriptor.wgsl");
+            let pipeline = self.create_compute_pipeline(shader_source, "main");
+
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("SIFT Desc Bind Group"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: img_gpu.storage.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: kp_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: output_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+                ],
+            });
+
+            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                let x = (kp_data.len() as u32 + 63) / 64;
+                pass.dispatch_workgroups(x, 1, 1);
+            }
+            self.submit(encoder);
+
+            // 3. Read back and convert to Descriptor objects
+            let raw_descs: Vec<f32> = pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer(
+                self.device.clone(),
+                &self.queue,
+                &output_buffer,
+                0,
+                out_byte_size as usize,
+            ))?;
+
+            let mut descs = Vec::with_capacity(keypoints.len());
+            for i in 0..keypoints.len() {
+                let start = i * 128;
+                let data: Vec<u8> = raw_descs[start .. start + 128].iter().map(|&v| {
+                    (v * 512.0).min(255.0) as u8
+                }).collect();
+                descs.push(cv_core::Descriptor::new(data, keypoints.keypoints[i].clone()));
+            }
+
+            Ok(cv_core::Descriptors { descriptors: descs })
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn icp_correspondences<S: Storage<f32> + 'static>(
+        &self,
+        src: &Tensor<f32, S>,
+        tgt: &Tensor<f32, S>,
+        max_dist: f32,
+    ) -> crate::Result<Vec<(usize, usize, f32)>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let src_ptr = src as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let tgt_ptr = tgt as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let src_gpu = unsafe { &*src_ptr };
+            let tgt_gpu = unsafe { &*tgt_ptr };
+
+            crate::gpu_kernels::icp::icp_correspondences(self, src_gpu, tgt_gpu, max_dist)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }

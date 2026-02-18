@@ -952,17 +952,12 @@ impl ComputeContext for CpuBackend {
         dog_next: &Tensor<f32, S>,
         threshold: f32,
         edge_threshold: f32,
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<u8, cv_core::storage::CpuStorage<u8>>> {
         let (h, w) = dog_curr.shape.hw();
         let prev = dog_prev.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Prev not on CPU".into()))?;
         let curr = dog_curr.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Curr not on CPU".into()))?;
         let next = dog_next.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Next not on CPU".into()))?;
 
-        let mut output_storage = S::new(h * w, 0); // Using Sf32 for Storage<u8> is tricky, let's use generic transmute if needed or fix trait.
-        // Actually ComputeContext::sift_extrema returns Tensor<u8, S>. 
-        // This implies S must implement Storage<u8> AND Storage<f32>.
-        // Let's assume S is compatible or use explicit CpuStorage.
-        
         let mut dst = vec![0u8; h * w];
 
         dst.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
@@ -991,7 +986,6 @@ impl ComputeContext for CpuBackend {
                 }
 
                 if is_max || is_min {
-                    // Edge response
                     let dxx = curr[y * w + x + 1] + curr[y * w + x - 1] - 2.0 * val;
                     let dyy = curr[(y + 1) * w + x] + curr[(y - 1) * w + x] - 2.0 * val;
                     let dxy = (curr[(y + 1) * w + x + 1] - curr[(y + 1) * w + x - 1] - 
@@ -1007,11 +1001,123 @@ impl ComputeContext for CpuBackend {
             }
         });
 
-        // Transmute results to generic S if possible, or return CpuStorage
-        // This is a common pattern in our HAL to keep it generic yet performant.
-        let out_tensor = Tensor::from_vec(dst, dog_curr.shape);
-        Ok(unsafe { std::mem::transmute_copy(&out_tensor) })
+        Ok(Tensor::from_vec(dst, dog_curr.shape))
     }
+
+    fn compute_sift_descriptors<S: Storage<f32> + 'static>(
+        &self,
+        image: &Tensor<f32, S>,
+        keypoints: &cv_core::KeyPoints,
+    ) -> Result<cv_core::Descriptors> {
+        let (h, w) = image.shape.hw();
+        let src = image.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Image not on CPU".into()))?;
+        
+        let descs: Vec<cv_core::Descriptor> = keypoints.keypoints.par_iter().map(|kp| {
+            let cx = kp.x as f32;
+            let cy = kp.y as f32;
+            let size = kp.size as f32;
+            let angle_rad = kp.angle as f32 * std::f32::consts::PI / 180.0;
+            
+            let cos_a = angle_rad.cos();
+            let sin_a = angle_rad.sin();
+
+            let mut hist = [0.0f32; 128];
+            let bin_width = size * 3.0;
+            let radius = (bin_width * 2.0) as i32;
+
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    let rx = (dx as f32 * cos_a + dy as f32 * sin_a) / bin_width;
+                    let ry = (-dx as f32 * sin_a + dy as f32 * cos_a) / bin_width;
+                    
+                    let r_bin_x = rx + 1.5;
+                    let r_bin_y = ry + 1.5;
+
+                    if r_bin_x > -1.0 && r_bin_x < 4.0 && r_bin_y > -1.0 && r_bin_y < 4.0 {
+                        let x = (cx + dx as f32) as i32;
+                        let y = (cy + dy as f32) as i32;
+                        
+                        let g_x = get_val_cpu(src, w, h, x + 1, y) - get_val_cpu(src, w, h, x - 1, y);
+                        let g_y = get_val_cpu(src, w, h, x, y + 1) - get_val_cpu(src, w, h, x, y - 1);
+                        let mag = (g_x * g_x + g_y * g_y).sqrt();
+                        let mut ori = g_y.atan2(g_x) - angle_rad;
+                        while ori < 0.0 { ori += 2.0 * std::f32::consts::PI; }
+                        let o_bin = ori * 8.0 / (2.0 * std::f32::consts::PI);
+
+                        let ix = r_bin_x.floor() as i32;
+                        let iy = r_bin_y.floor() as i32;
+                        let io = o_bin.floor() as i32;
+
+                        if ix >= 0 && ix < 4 && iy >= 0 && iy < 4 {
+                            let bin_idx = (iy * 4 + ix) * 8 + (io % 8);
+                            hist[bin_idx as usize] += mag;
+                        }
+                    }
+                }
+            }
+
+            let mut norm_sq = 0.0;
+            for v in &hist { norm_sq += v * v; }
+            let norm_inv = 1.0 / (norm_sq.sqrt() + 1e-7);
+            
+            let data: Vec<u8> = hist.iter().map(|&v| {
+                let norm_v = (v * norm_inv).min(0.2);
+                (norm_v * 512.0).min(255.0) as u8 // Scale to byte
+            }).collect();
+
+            cv_core::Descriptor::new(data, kp.clone())
+        }).collect();
+
+        Ok(cv_core::Descriptors { descriptors: descs })
+    }
+
+    fn icp_correspondences<S: Storage<f32> + 'static>(
+        &self,
+        src: &Tensor<f32, S>,
+        tgt: &Tensor<f32, S>,
+        max_dist: f32,
+    ) -> Result<Vec<(usize, usize, f32)>> {
+        let src_points = src.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Src not on CPU".into()))?;
+        let tgt_points = tgt.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Tgt not on CPU".into()))?;
+        
+        let num_src = src.shape.height;
+        let num_tgt = tgt.shape.height;
+        let max_dist_sq = max_dist * max_dist;
+
+        let correspondences: Vec<(usize, usize, f32)> = (0..num_src).into_par_iter().filter_map(|si| {
+            let p_s = [src_points[si * 4], src_points[si * 4 + 1], src_points[si * 4 + 2]];
+            let mut min_dist_sq = f32::MAX;
+            let mut best_ti = 0;
+            let mut found = false;
+
+            for ti in 0..num_tgt {
+                let dx = p_s[0] - tgt_points[ti * 4];
+                let dy = p_s[1] - tgt_points[ti * 4 + 1];
+                let dz = p_s[2] - tgt_points[ti * 4 + 2];
+                let d2 = dx*dx + dy*dy + dz*dz;
+                
+                if d2 < min_dist_sq {
+                    min_dist_sq = d2;
+                    best_ti = ti;
+                    found = true;
+                }
+            }
+
+            if found && min_dist_sq <= max_dist_sq {
+                Some((si, best_ti, min_dist_sq.sqrt()))
+            } else {
+                None
+            }
+        }).collect();
+
+        Ok(correspondences)
+    }
+}
+
+fn get_val_cpu(src: &[f32], w: usize, h: usize, x: i32, y: i32) -> f32 {
+    let cx = x.clamp(0, w as i32 - 1) as usize;
+    let cy = y.clamp(0, h as i32 - 1) as usize;
+    src[cy * w + cx]
 }
 
 fn hamming_dist(a: &[u8], b: &[u8]) -> u32 {
