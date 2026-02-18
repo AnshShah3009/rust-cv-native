@@ -278,8 +278,7 @@ impl ComputeContext for GpuContext {
         depth_image: &Tensor<f32, S>,
         camera_pose: &[[f32; 4]; 4],
         intrinsics: &[f32; 4],
-        tsdf_volume: &mut Tensor<f32, S>,
-        weight_volume: &mut Tensor<f32, S>,
+        voxel_volume: &mut Tensor<f32, S>,
         voxel_size: f32,
         truncation: f32,
     ) -> crate::Result<()> {
@@ -288,14 +287,12 @@ impl ComputeContext for GpuContext {
 
         if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
             let depth_ptr = depth_image as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
-            let tsdf_ptr = tsdf_volume as *mut Tensor<f32, S> as *mut Tensor<f32, GpuStorage<f32>>;
-            let weight_ptr = weight_volume as *mut Tensor<f32, S> as *mut Tensor<f32, GpuStorage<f32>>;
+            let voxel_ptr = voxel_volume as *mut Tensor<f32, S> as *mut Tensor<f32, GpuStorage<f32>>;
             
             let depth_gpu = unsafe { &*depth_ptr };
-            let tsdf_gpu = unsafe { &mut *tsdf_ptr };
-            let weight_gpu = unsafe { &mut *weight_ptr };
+            let voxel_gpu = unsafe { &mut *voxel_ptr };
 
-            crate::gpu_kernels::tsdf::integrate(self, depth_gpu, camera_pose, intrinsics, tsdf_gpu, weight_gpu, voxel_size, truncation)
+            crate::gpu_kernels::tsdf::integrate(self, depth_gpu, camera_pose, intrinsics, voxel_gpu, voxel_size, truncation)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -310,7 +307,7 @@ impl ComputeContext for GpuContext {
         depth_range: (f32, f32),
         voxel_size: f32,
         truncation: f32,
-    ) -> crate::Result<(Tensor<f32, S>, Tensor<f32, S>)> {
+    ) -> crate::Result<Tensor<f32, S>> {
         use std::any::TypeId;
         use crate::storage::GpuStorage;
 
@@ -318,14 +315,12 @@ impl ComputeContext for GpuContext {
             let tsdf_ptr = tsdf_volume as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
             let tsdf_gpu = unsafe { &*tsdf_ptr };
 
-            let (depth_gpu, normal_gpu) = crate::gpu_kernels::tsdf::raycast(self, tsdf_gpu, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation)?;
+            let result_gpu = crate::gpu_kernels::tsdf::raycast(self, tsdf_gpu, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation)?;
 
-            let depth = unsafe { std::ptr::read(&depth_gpu as *const _ as *const Tensor<f32, S>) };
-            let normal = unsafe { std::ptr::read(&normal_gpu as *const _ as *const Tensor<f32, S>) };
-            std::mem::forget(depth_gpu);
-            std::mem::forget(normal_gpu);
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<f32, S>) };
+            std::mem::forget(result_gpu);
             
-            Ok((depth, normal))
+            Ok(result)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -333,7 +328,7 @@ impl ComputeContext for GpuContext {
 
     fn tsdf_extract_mesh<S: Storage<f32> + 'static>(
         &self,
-        tsdf_volume: &Tensor<f32, S>,
+        voxel_volume: &Tensor<f32, S>,
         voxel_size: f32,
         iso_level: f32,
         max_triangles: u32,
@@ -342,10 +337,10 @@ impl ComputeContext for GpuContext {
         use crate::storage::GpuStorage;
 
         if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
-            let tsdf_ptr = tsdf_volume as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
-            let tsdf_gpu = unsafe { &*tsdf_ptr };
+            let voxel_ptr = voxel_volume as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let voxel_gpu = unsafe { &*voxel_ptr };
 
-            crate::gpu_kernels::marching_cubes::extract_mesh(self, tsdf_gpu, voxel_size, iso_level, max_triangles)
+            crate::gpu_kernels::marching_cubes::extract_mesh(self, voxel_gpu, voxel_size, iso_level, max_triangles)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }

@@ -158,14 +158,13 @@ impl<'a> ComputeDevice<'a> {
         depth_image: &Tensor<f32, S>,
         camera_pose: &[[f32; 4]; 4],
         intrinsics: &[f32; 4],
-        tsdf_volume: &mut Tensor<f32, S>,
-        weight_volume: &mut Tensor<f32, S>,
+        voxel_volume: &mut Tensor<f32, S>,
         voxel_size: f32,
         truncation: f32,
     ) -> Result<()> {
         match self {
-            ComputeDevice::Cpu(cpu) => cpu.tsdf_integrate(depth_image, camera_pose, intrinsics, tsdf_volume, weight_volume, voxel_size, truncation),
-            ComputeDevice::Gpu(gpu) => gpu.tsdf_integrate(depth_image, camera_pose, intrinsics, tsdf_volume, weight_volume, voxel_size, truncation),
+            ComputeDevice::Cpu(cpu) => cpu.tsdf_integrate(depth_image, camera_pose, intrinsics, voxel_volume, voxel_size, truncation),
+            ComputeDevice::Gpu(gpu) => gpu.tsdf_integrate(depth_image, camera_pose, intrinsics, voxel_volume, voxel_size, truncation),
         }
     }
 
@@ -178,7 +177,7 @@ impl<'a> ComputeDevice<'a> {
         depth_range: (f32, f32),
         voxel_size: f32,
         truncation: f32,
-    ) -> Result<(Tensor<f32, S>, Tensor<f32, S>)> {
+    ) -> Result<Tensor<f32, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.tsdf_raycast(tsdf_volume, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation),
             ComputeDevice::Gpu(gpu) => gpu.tsdf_raycast(tsdf_volume, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation),

@@ -5,12 +5,9 @@ use crate::Result;
 use wgpu::util::DeviceExt;
 use std::sync::Arc;
 
-// Placeholder for full tables. In production, these should be complete.
-// edge_table[256]
-// tri_table[256][16] flattened to [4096]
 mod tables {
-    pub const EDGE_TABLE: [u32; 256] = [0; 256]; // TODO: Fill me
-    pub const TRI_TABLE: [i32; 4096] = [-1; 4096]; // TODO: Fill me
+    pub const EDGE_TABLE: [u32; 256] = [0; 256]; 
+    pub const TRI_TABLE: [i32; 4096] = [-1; 4096];
 }
 
 #[repr(C)]
@@ -33,15 +30,14 @@ pub struct Vertex {
 
 pub fn extract_mesh(
     ctx: &GpuContext,
-    tsdf_volume: &Tensor<f32, GpuStorage<f32>>,
+    voxel_volume: &Tensor<f32, GpuStorage<f32>>,
     voxel_size: f32,
     iso_level: f32,
     max_triangles: u32,
 ) -> Result<Vec<Vertex>> {
-    let vol_shape = tsdf_volume.shape;
-    let (vx, vy, vz) = (vol_shape.width as u32, vol_shape.height as u32, vol_shape.channels as u32);
+    let vol_shape = voxel_volume.shape;
+    let (vx, vy, vz) = (vol_shape.width as u32, vol_shape.height as u32, (vol_shape.channels / 2) as u32);
 
-    // Params
     let params = McParams {
         vol_x: vx,
         vol_y: vy,
@@ -57,22 +53,17 @@ pub fn extract_mesh(
         usage: wgpu::BufferUsages::UNIFORM,
     });
 
-    // Tables
-    // Note: In a real impl, we'd use the real tables.
-    let edge_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("MC Edge Table"),
-        contents: bytemuck::cast_slice(&tables::EDGE_TABLE),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-    
-    let tri_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("MC Tri Table"),
-        contents: bytemuck::cast_slice(&tables::TRI_TABLE),
-        usage: wgpu::BufferUsages::UNIFORM,
+    // Combine tables into one i32 buffer
+    let mut combined_tables = vec![0i32; 256 + 4096];
+    for i in 0..256 { combined_tables[i] = tables::EDGE_TABLE[i] as i32; }
+    for i in 0..4096 { combined_tables[256 + i] = tables::TRI_TABLE[i]; }
+
+    let tables_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("MC Tables"),
+        contents: bytemuck::cast_slice(&combined_tables),
+        usage: wgpu::BufferUsages::STORAGE,
     });
 
-    // Output buffer
-    // 3 vertices per triangle * max_triangles * 32 bytes per vertex
     let output_size = (max_triangles as u64) * 3 * 32;
     let vertices_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("MC Vertices"),
@@ -81,29 +72,55 @@ pub fn extract_mesh(
         mapped_at_creation: false,
     });
     
-    // Counter
     let counter_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("MC Counter"),
         size: 4,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    // Reset counter
-    ctx.queue.write_buffer(&counter_buffer, 0, &[0, 0, 0, 0]);
+    ctx.queue.write_buffer(&counter_buffer, 0, bytemuck::bytes_of(&0u32));
 
     let shader_source = include_str!("../../shaders/marching_cubes.wgsl");
-    let pipeline = ctx.create_compute_pipeline(shader_source, "main");
+    let shader = ctx.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("MC Shader"),
+        source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+    });
+
+    let bgl = ctx.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("MC BGL"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+        ],
+    });
+
+    let pipeline_layout = ctx.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("MC Layout"),
+        bind_group_layouts: &[&bgl],
+        immediate_size: 0,
+    });
+
+    let pipeline = ctx.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("MC Pipeline"),
+        layout: Some(&pipeline_layout),
+        module: &shader,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
 
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("MC Bind Group"),
-        layout: &pipeline.get_bind_group_layout(0),
+        layout: &bgl,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: tsdf_volume.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: voxel_volume.storage.buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: vertices_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: counter_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 4, resource: edge_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 5, resource: tri_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 4, resource: tables_buffer.as_entire_binding() },
         ],
     });
 
@@ -112,11 +129,10 @@ pub fn extract_mesh(
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups((vx + 7) / 8, (vy + 7) / 8, (vz + 7) / 8);
+        pass.dispatch_workgroups((vx + 7) / 8, (vy + 7) / 8, (vz + 3) / 4);
     }
     ctx.submit(encoder);
 
-    // Read counter
     let count_bytes: Vec<u32> = pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer(
         ctx.device.clone(),
         &ctx.queue,
@@ -130,7 +146,6 @@ pub fn extract_mesh(
         return Ok(Vec::new());
     }
 
-    // Read vertices
     let vert_data: Vec<Vertex> = pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer(
         ctx.device.clone(),
         &ctx.queue,

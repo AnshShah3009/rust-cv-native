@@ -10,18 +10,22 @@ struct Params {
     max_triangles: u32,
 }
 
+struct Voxel {
+    tsdf: f32,
+    weight: f32,
+}
+
 struct Vertex {
     pos: vec4<f32>, // w is padding
     norm: vec4<f32>, // w is padding
 }
 
 // Bindings
-@group(0) @binding(0) var<storage, read> tsdf_volume: array<f32>;
-@group(0) @binding(1) var<storage, read_write> vertices: array<Vertex>; // Output triangle soup
-@group(0) @binding(2) var<storage, read_write> counter: atomic<u32>;    // Triangle counter
+@group(0) @binding(0) var<storage, read> voxels: array<Voxel>;
+@group(0) @binding(1) var<storage, read_write> vertices: array<Vertex>; 
+@group(0) @binding(2) var<storage, read_write> counter: atomic<u32>;    
 @group(0) @binding(3) var<uniform> params: Params;
-@group(0) @binding(4) var<uniform> edge_table: array<u32, 256>;         // Lookup table 1
-@group(0) @binding(5) var<uniform> tri_table: array<i32, 4096>;         // Lookup table 2 (256 * 16)
+@group(0) @binding(4) var<storage, read> tables: array<i32>; // Combined edge and tri tables
 
 // Vertex interpolation
 fn vertex_interp(p1: vec3<f32>, val1: f32, p2: vec3<f32>, val2: f32) -> vec3<f32> {
@@ -35,10 +39,10 @@ fn vertex_interp(p1: vec3<f32>, val1: f32, p2: vec3<f32>, val2: f32) -> vec3<f32
 
 fn get_val(x: u32, y: u32, z: u32) -> f32 {
     let idx = z * params.vol_x * params.vol_y + y * params.vol_x + x;
-    return tsdf_volume[idx];
+    return voxels[idx].tsdf;
 }
 
-@compute @workgroup_size(8, 8, 8)
+@compute @workgroup_size(8, 8, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let x = global_id.x;
     let y = global_id.y;
@@ -48,40 +52,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // 8 corners
-    // 0: x, y, z
-    // 1: x+1, y, z
-    // 2: x+1, y, z+1
-    // 3: x, y, z+1
-    // 4: x, y+1, z
-    // 5: x+1, y+1, z
-    // 6: x+1, y+1, z+1
-    // 7: x, y+1, z+1
-    
-    // Note: Standard MC indexing might differ. I'll stick to a standard one.
-    // 0: x,y,z
-    // 1: x+1,y,z
-    // 2: x+1,y,z+1
-    // 3: x,y,z+1
-    // 4: x,y+1,z
-    // 5: x+1,y+1,z
-    // 6: x+1,y+1,z+1
-    // 7: x,y+1,z+1
-    
-    // Actually, standard Paul Bourke indexing:
-    // 0: x,y,z
-    // 1: x+1,y,z
-    // 2: x+1,y+1,z
-    // 3: x,y+1,z
-    // 4: x,y,z+1
-    // 5: x+1,y,z+1
-    // 6: x+1,y+1,z+1
-    // 7: x,y+1,z+1
-    
     let p0 = vec3<u32>(x, y, z);
     let p1 = vec3<u32>(x+1u, y, z);
-    let p2 = vec3<u32>(x+1u, y+1u, z); // Bourke 2
-    let p3 = vec3<u32>(x, y+1u, z);    // Bourke 3
+    let p2 = vec3<u32>(x+1u, y+1u, z); 
+    let p3 = vec3<u32>(x, y+1u, z);    
     let p4 = vec3<u32>(x, y, z+1u);
     let p5 = vec3<u32>(x+1u, y, z+1u);
     let p6 = vec3<u32>(x+1u, y+1u, z+1u);
@@ -106,10 +80,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (v6 < params.iso_level) { cube_index |= 64u; }
     if (v7 < params.iso_level) { cube_index |= 128u; }
 
-    let edges = edge_table[cube_index];
+    let edge_table_ptr = 0u; // Start of edge table
+    let tri_table_ptr = 256u; // Start of tri table
+    
+    let edges = u32(tables[edge_table_ptr + cube_index]);
     if (edges == 0u) { return; }
 
-    // Compute vertices on edges
     var vertlist: array<vec3<f32>, 12>;
     let pos = vec3<f32>(f32(x) * params.voxel_size, f32(y) * params.voxel_size, f32(z) * params.voxel_size);
     let vs = params.voxel_size;
@@ -136,28 +112,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if ((edges & 1024u) != 0u) { vertlist[10] = vertex_interp(vp2, v2, vp6, v6); }
     if ((edges & 2048u) != 0u) { vertlist[11] = vertex_interp(vp3, v3, vp7, v7); }
 
-    // Emit triangles
     var i = 0u;
     loop {
-        let t_idx = tri_table[cube_index * 16u + i];
+        let t_idx = tables[tri_table_ptr + cube_index * 16u + i];
         if (t_idx == -1) { break; }
 
-        let idx0 = tri_table[cube_index * 16u + i];
-        let idx1 = tri_table[cube_index * 16u + i + 1u];
-        let idx2 = tri_table[cube_index * 16u + i + 2u];
+        let idx0 = tables[tri_table_ptr + cube_index * 16u + i];
+        let idx1 = tables[tri_table_ptr + cube_index * 16u + i + 1u];
+        let idx2 = tables[tri_table_ptr + cube_index * 16u + i + 2u];
 
-        let p0 = vertlist[u32(idx0)];
-        let p1 = vertlist[u32(idx1)];
-        let p2 = vertlist[u32(idx2)];
+        let p0_tri = vertlist[u32(idx0)];
+        let p1_tri = vertlist[u32(idx1)];
+        let p2_tri = vertlist[u32(idx2)];
         
-        // Compute face normal (flat shading)
-        let n = normalize(cross(p1 - p0, p2 - p0));
+        let n = normalize(cross(p1_tri - p0_tri, p2_tri - p0_tri));
 
         let current_count = atomicAdd(&counter, 3u);
         if (current_count + 3u < params.max_triangles * 3u) {
-            vertices[current_count] = Vertex(vec4<f32>(p0, 1.0), vec4<f32>(n, 0.0));
-            vertices[current_count + 1u] = Vertex(vec4<f32>(p1, 1.0), vec4<f32>(n, 0.0));
-            vertices[current_count + 2u] = Vertex(vec4<f32>(p2, 1.0), vec4<f32>(n, 0.0));
+            vertices[current_count] = Vertex(vec4<f32>(p0_tri, 1.0), vec4<f32>(n, 0.0));
+            vertices[current_count + 1u] = Vertex(vec4<f32>(p1_tri, 1.0), vec4<f32>(n, 0.0));
+            vertices[current_count + 2u] = Vertex(vec4<f32>(p2_tri, 1.0), vec4<f32>(n, 0.0));
         }
 
         i += 3u;

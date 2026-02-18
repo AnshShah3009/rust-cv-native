@@ -739,42 +739,36 @@ impl ComputeContext for CpuBackend {
         depth_image: &Tensor<f32, S>,
         camera_pose: &[[f32; 4]; 4], // World-to-camera
         intrinsics: &[f32; 4],
-        tsdf_volume: &mut Tensor<f32, S>,
-        weight_volume: &mut Tensor<f32, S>,
+        voxel_volume: &mut Tensor<f32, S>,
         voxel_size: f32,
         truncation: f32,
     ) -> Result<()> {
         let depth = depth_image.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Depth not on CPU".into()))?;
-        let tsdf = tsdf_volume.storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("TSDF not on CPU".into()))?;
-        let weights = weight_volume.storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Weights not on CPU".into()))?;
+        let voxels = voxel_volume.storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Voxels not on CPU".into()))?;
 
         let (img_h, img_w) = depth_image.shape.hw();
-        let (vx, vy, vz) = (tsdf_volume.shape.width, tsdf_volume.shape.height, tsdf_volume.shape.channels);
+        let (vx, vy, vz) = (voxel_volume.shape.width, voxel_volume.shape.height, voxel_volume.shape.channels);
         
         let fx = intrinsics[0];
         let fy = intrinsics[1];
         let cx = intrinsics[2];
         let cy = intrinsics[3];
 
-        // Rayon processes planes of the volume
-        tsdf.par_chunks_mut(vx * vy).zip(weights.par_chunks_mut(vx * vy)).enumerate().for_each(|(z_idx, (tsdf_plane, weight_plane))| {
+        voxels.par_chunks_mut(vx * vy * 2).enumerate().for_each(|(z_idx, plane)| {
             for y_idx in 0..vy {
                 for x_idx in 0..vx {
-                    // Voxel world position
                     let p_world = [
                         (x_idx as f32 + 0.5) * voxel_size,
                         (y_idx as f32 + 0.5) * voxel_size,
                         (z_idx as f32 + 0.5) * voxel_size,
                     ];
 
-                    // Transform to camera space
                     let px = camera_pose[0][0] * p_world[0] + camera_pose[0][1] * p_world[1] + camera_pose[0][2] * p_world[2] + camera_pose[0][3];
                     let py = camera_pose[1][0] * p_world[0] + camera_pose[1][1] * p_world[1] + camera_pose[1][2] * p_world[2] + camera_pose[1][3];
                     let pz = camera_pose[2][0] * p_world[0] + camera_pose[2][1] * p_world[1] + camera_pose[2][2] * p_world[2] + camera_pose[2][3];
 
                     if pz <= 0.0 { continue; }
 
-                    // Project to image
                     let u = (px * fx / pz + cx).round() as i32;
                     let v = (py * fy / pz + cy).round() as i32;
 
@@ -787,14 +781,14 @@ impl ComputeContext for CpuBackend {
                     if dist < -truncation { continue; }
 
                     let tsdf_val = (dist / truncation).clamp(-1.0, 1.0);
-                    let idx = y_idx * vx + x_idx;
+                    let v_idx = (y_idx * vx + x_idx) * 2;
                     
-                    let old_w = weight_plane[idx];
-                    let old_v = tsdf_plane[idx];
+                    let old_v = plane[v_idx];
+                    let old_w = plane[v_idx + 1];
                     
                     let new_w = (old_w + 1.0).min(50.0);
-                    tsdf_plane[idx] = (old_v * old_w + tsdf_val) / new_w;
-                    weight_plane[idx] = new_w;
+                    plane[v_idx] = (old_v * old_w + tsdf_val) / new_w;
+                    plane[v_idx + 1] = new_w;
                 }
             }
         });
@@ -811,7 +805,7 @@ impl ComputeContext for CpuBackend {
         _depth_range: (f32, f32),
         _voxel_size: f32,
         _truncation: f32,
-    ) -> Result<(Tensor<f32, S>, Tensor<f32, S>)> {
+    ) -> Result<Tensor<f32, S>> {
         Err(crate::Error::NotSupported("CPU tsdf_raycast pending implementation".into()))
     }
 

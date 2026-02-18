@@ -128,8 +128,7 @@ pub trait ComputeContext: Send + Sync {
         depth_image: &Tensor<f32, S>,
         camera_pose: &[[f32; 4]; 4],
         intrinsics: &[f32; 4],
-        tsdf_volume: &mut Tensor<f32, S>,
-        weight_volume: &mut Tensor<f32, S>,
+        voxel_volume: &mut Tensor<f32, S>,
         voxel_size: f32,
         truncation: f32,
     ) -> Result<()>;
@@ -143,7 +142,7 @@ pub trait ComputeContext: Send + Sync {
         depth_range: (f32, f32),
         voxel_size: f32,
         truncation: f32,
-    ) -> Result<(Tensor<f32, S>, Tensor<f32, S>)>;
+    ) -> Result<Tensor<f32, S>>;
 
     fn tsdf_extract_mesh<S: Storage<f32> + 'static>(
         &self,

@@ -12,11 +12,15 @@ struct Params {
     padding: u32,
 }
 
+struct Voxel {
+    tsdf: f32,
+    weight: f32,
+}
+
 @group(0) @binding(0) var<storage, read> depth_image: array<f32>;
 @group(0) @binding(1) var<storage, read> color_image: array<u32>; // Packed RGBA
-@group(0) @binding(2) var<storage, read_write> tsdf_values: array<f32>;
-@group(0) @binding(3) var<storage, read_write> weights: array<f32>;
-@group(0) @binding(4) var<storage, read_write> colors: array<u32>;
+@group(0) @binding(2) var<storage, read_write> voxels: array<Voxel>;
+@group(0) @binding(3) var<storage, read_write> colors: array<u32>;
 
 @group(1) @binding(0) var<uniform> world_to_camera: mat4x4<f32>;
 @group(1) @binding(1) var<uniform> intrinsics: vec4<f32>; // fx, fy, cx, cy
@@ -35,7 +39,7 @@ fn project(p: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(u, v);
 }
 
-@compute @workgroup_size(8, 8, 8)
+@compute @workgroup_size(8, 8, 4)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let vx = global_id.x;
     let vy = global_id.y;
@@ -81,16 +85,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    let tsdf = clamp(dist / params.truncation_distance, -1.0, 1.0);
+    let tsdf_sample = clamp(dist / params.truncation_distance, -1.0, 1.0);
     
     let idx = vz * params.vol_x * params.vol_y + vy * params.vol_x + vx;
-    let old_tsdf = tsdf_values[idx];
-    let old_weight = weights[idx];
+    let old_v = voxels[idx];
     
     let weight = 1.0;
-    let new_weight = min(old_weight + weight, 50.0);
-    let new_tsdf = (old_tsdf * old_weight + tsdf * weight) / new_weight;
+    let new_weight = min(old_v.weight + weight, 50.0);
+    let new_tsdf = (old_v.tsdf * old_v.weight + tsdf_sample * weight) / new_weight;
     
-    tsdf_values[idx] = new_tsdf;
-    weights[idx] = new_weight;
+    voxels[idx] = Voxel(new_tsdf, new_weight);
 }

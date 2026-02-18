@@ -79,3 +79,23 @@ This document tracks the core architectural components that have been stabilized
 *   **Status:** Frozen (Feb 19, 2026)
 *   **Definition:** The `CameraModel<T>` trait and its `PinholeModel` implementation.
 *   **Rationale:** Standardizes how all 2D/3D algorithms (SFM, SLAM, Calibration) interact with camera hardware. Combining intrinsics and distortion into a single model simplifies APIs and ensures consistent unprojection/undistortion logic.
+
+## 14. Volumetric Raycasting Pattern (`hal/src/gpu_kernels/tsdf.rs`)
+*   **Status:** Frozen (Feb 19, 2026)
+*   **Definition:** The zero-crossing raymarch orchestration that transforms volumetric TSDF data into synthetic depth/normal maps.
+*   **Rationale:** Bridges the gap between implicit volumes and pixel-space perception. Essential for model-to-frame tracking and real-time AR visualization.
+
+## 15. Iterative GPU Pyramid Propagation (`hal/src/gpu_kernels/optical_flow.rs`)
+*   **Status:** Frozen (Feb 19, 2026)
+*   **Definition:** Coarse-to-fine orchestration where point estimates are propagated and scaled (x2) between pyramid levels using inline GPU scaling kernels.
+*   **Rationale:** Enables tracking of large displacements while eliminating PCIe bottlenecks. This pattern is mandatory for all pyramid-based tracking (LK, Patch-based, etc.).
+
+## 16. GPU Atomic Geometry Extraction (`hal/src/gpu_kernels/marching_cubes.rs`)
+*   **Status:** Frozen (Feb 19, 2026)
+*   **Definition:** The pattern for extracting non-deterministic triangle meshes from structured volumes using `atomicAdd` on GPU counter buffers.
+*   **Rationale:** Provides a scalable, high-throughput way to convert volumetric data to explicit mesh geometry without CPU-side vertex management.
+
+## 17. Spatial Graph Data Model (`cv-optimize::pose_graph`)
+*   **Status:** Frozen (Feb 19, 2026)
+*   **Definition:** The SE3 node/edge representation for global consistency, utilizing `Isometry3` and `Matrix6` information matrices.
+*   **Rationale:** Establishes the source of truth for the system's pose history and relative constraints. Decouples the graph topology from the specific numerical solver used.

@@ -6,7 +6,7 @@ struct Params {
     height: u32,
     voxel_size: f32,
     truncation: f32,
-    step_factor: f32, // Step size multiplier (usually < 1.0 * truncation)
+    step_factor: f32,
     min_depth: f32,
     max_depth: f32,
     vol_x: u32,
@@ -14,12 +14,16 @@ struct Params {
     vol_z: u32,
 }
 
-@group(0) @binding(0) var<storage, read> tsdf_volume: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output_depth: array<f32>;
-@group(0) @binding(2) var<storage, read_write> output_normals: array<f32>; // packed vec4 (x, y, z, 0)
-@group(0) @binding(3) var<uniform> params: Params;
-@group(0) @binding(4) var<uniform> camera_to_world: mat4x4<f32>;
-@group(0) @binding(5) var<uniform> intrinsics_inv: vec4<f32>; // 1/fx, 1/fy, cx, cy
+struct Voxel {
+    tsdf: f32,
+    weight: f32,
+}
+
+@group(0) @binding(0) var<storage, read> voxels: array<Voxel>;
+@group(0) @binding(1) var<storage, read_write> output_data: array<vec4<f32>>; // x: depth, yzw: normal
+@group(0) @binding(2) var<uniform> params: Params;
+@group(0) @binding(3) var<uniform> camera_to_world: mat4x4<f32>;
+@group(0) @binding(4) var<uniform> intrinsics_inv: vec4<f32>; // 1/fx, 1/fy, cx, cy
 
 fn get_tsdf(p: vec3<f32>) -> f32 {
     let x = i32(floor(p.x / params.voxel_size));
@@ -27,17 +31,14 @@ fn get_tsdf(p: vec3<f32>) -> f32 {
     let z = i32(floor(p.z / params.voxel_size));
 
     if (x < 0 || x >= i32(params.vol_x) || y < 0 || y >= i32(params.vol_y) || z < 0 || z >= i32(params.vol_z)) {
-        return 0.0; // Empty/Unknown
+        return 0.0;
     }
 
     let idx = u32(z) * params.vol_x * params.vol_y + u32(y) * params.vol_x + u32(x);
-    return tsdf_volume[idx];
+    return voxels[idx].tsdf;
 }
 
 fn get_tsdf_interp(p: vec3<f32>) -> f32 {
-    // Trilinear interpolation could go here, but NN is often sufficient for raycasting
-    // if voxel size is small. For high quality, we want trilinear.
-    // Simplifying to NN for initial implementation speed.
     return get_tsdf(p);
 }
 
@@ -63,17 +64,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // Unproject pixel to ray direction in camera space
     let u = f32(x);
     let v = f32(y);
     
-    let mx = (u - params.intrinsics_inv.z) * params.intrinsics_inv.x;
-    let my = (v - params.intrinsics_inv.w) * params.intrinsics_inv.y;
+    let mx = (u - intrinsics_inv.z) * intrinsics_inv.x;
+    let my = (v - intrinsics_inv.w) * intrinsics_inv.y;
     
     let dir_cam = normalize(vec3<f32>(mx, my, 1.0));
     let origin_cam = vec3<f32>(0.0, 0.0, 0.0);
 
-    // Transform to world space
     let dir_world = (camera_to_world * vec4<f32>(dir_cam, 0.0)).xyz;
     let origin_world = (camera_to_world * vec4<f32>(origin_cam, 1.0)).xyz;
 
@@ -81,46 +80,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var found = false;
     var t_step = params.voxel_size * params.step_factor;
 
-    // Ray marching
-    // We look for a zero crossing from positive to negative
     var prev_tsdf = get_tsdf(origin_world + dir_world * t);
     
-    // Optimization: Skip empty space if we had a hierarchy, but linear search for now.
     loop {
         if (t >= params.max_depth) { break; }
         
         let p = origin_world + dir_world * t;
-        let tsdf = get_tsdf(p);
+        let tsdf_val = get_tsdf(p);
         
-        if (prev_tsdf > 0.0 && tsdf < 0.0 && tsdf > -0.8) {
-            // Zero crossing found!
-            // Refine t with linear interpolation
-            let t_surf = t - t_step * (tsdf / (tsdf - prev_tsdf));
+        if (prev_tsdf > 0.0 && tsdf_val < 0.0 && tsdf_val > -0.8) {
+            let t_surf = t - t_step * (tsdf_val / (tsdf_val - prev_tsdf));
             let p_surf = origin_world + dir_world * t_surf;
             
-            output_depth[y * params.width + x] = t_surf;
-            
             let normal = compute_normal(p_surf);
-            let n_idx = (y * params.width + x) * 4u;
-            output_normals[n_idx + 0u] = normal.x;
-            output_normals[n_idx + 1u] = normal.y;
-            output_normals[n_idx + 2u] = normal.z;
-            output_normals[n_idx + 3u] = 0.0;
+            output_data[y * params.width + x] = vec4<f32>(t_surf, normal.x, normal.y, normal.z);
             
             found = true;
             break;
         }
         
-        prev_tsdf = tsdf;
+        prev_tsdf = tsdf_val;
         t += t_step;
     }
 
     if (!found) {
-        output_depth[y * params.width + x] = 0.0;
-        let n_idx = (y * params.width + x) * 4u;
-        output_normals[n_idx] = 0.0;
-        output_normals[n_idx + 1u] = 0.0;
-        output_normals[n_idx + 2u] = 0.0;
-        output_normals[n_idx + 3u] = 0.0;
+        output_data[y * params.width + x] = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 }

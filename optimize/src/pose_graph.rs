@@ -1,4 +1,4 @@
-use nalgebra::{DMatrix, DVector, Isometry3, Vector3, Matrix6, Vector6, U6};
+use nalgebra::{DMatrix, DVector, Isometry3, Vector3, Matrix6, Vector6, Rotation3};
 use std::collections::HashMap;
 
 pub struct PoseGraph {
@@ -10,8 +10,8 @@ pub struct PoseGraph {
 pub struct Edge {
     pub from: usize,
     pub to: usize,
-    pub measurement: Isometry3<f64>, // Relative pose from -> to
-    pub information: Matrix6<f64>,   // Inverse covariance
+    pub measurement: Isometry3<f64>,
+    pub information: Matrix6<f64>,
 }
 
 impl PoseGraph {
@@ -40,16 +40,16 @@ impl PoseGraph {
         self.fixed_nodes.insert(id);
     }
 
-    /// Performs one iteration of Gauss-Newton optimization using dense linear algebra.
-    /// Warning: Only suitable for small graphs (< 500 nodes).
     pub fn optimize(&mut self, iterations: usize) -> Result<f64, String> {
         let num_nodes = self.nodes.len();
         if num_nodes == 0 { return Ok(0.0); }
 
         let mut node_indices: HashMap<usize, usize> = HashMap::new();
         let mut idx = 0;
-        // Assign matrix indices to non-fixed nodes
-        for (&id, _) in &self.nodes {
+        let mut sorted_keys: Vec<usize> = self.nodes.keys().cloned().collect();
+        sorted_keys.sort();
+        
+        for id in sorted_keys {
             if !self.fixed_nodes.contains(&id) {
                 node_indices.insert(id, idx);
                 idx += 1;
@@ -61,8 +61,8 @@ impl PoseGraph {
         let mut error_sum = 0.0;
 
         for _ in 0..iterations {
-            let mut H = DMatrix::zeros(system_size, system_size);
-            let mut b = DVector::zeros(system_size);
+            let mut h_mat = DMatrix::zeros(system_size, system_size);
+            let mut b_vec = DVector::zeros(system_size);
             error_sum = 0.0;
 
             for edge in &self.edges {
@@ -71,85 +71,104 @@ impl PoseGraph {
                 let pose_ij = edge.measurement;
                 let info = edge.information;
 
-                // Error vector e_ij = log(Z_ij^-1 * (X_i^-1 * X_j))
-                // Approximate linear error model
+                // Error: e = log(Z^-1 * Xi^-1 * Xj)
                 let prediction = pose_i.inverse() * pose_j;
                 let error_se3 = pose_ij.inverse() * prediction;
-                let error = Vector6::from_iterator(error_se3.translation.vector.iter().chain(error_se3.rotation.scaled_axis().iter()).cloned());
-
-                error_sum += error.transpose() * info * error;
-
-                // Jacobians (approximation)
-                // d(e_ij)/d(x_i) = -J_r^-1(e_ij) * Ad(Z_ij^-1)
-                // d(e_ij)/d(x_j) = J_r^-1(e_ij) * Ad(error_se3^-1)
-                // Simplified for small errors: J_i = -I, J_j = I (in local tangent space)
-                // Wait, correct Jacobians are critical.
-                // For pose graph slam:
-                // e = log(Z_ij^-1 * Xi^-1 * Xj)
-                // J_i = -Ad(Xj^-1 * Xi)
-                // J_j = I
-                // Let's use a simpler approximation for now: Identity blocks rotated.
                 
-                // Construct H and b
+                let error = Vector6::new(
+                    error_se3.translation.vector.x,
+                    error_se3.translation.vector.y,
+                    error_se3.translation.vector.z,
+                    error_se3.rotation.scaled_axis().x,
+                    error_se3.rotation.scaled_axis().y,
+                    error_se3.rotation.scaled_axis().z,
+                );
+
+                error_sum += error.dot(&(info * error));
+
                 let idx_i = node_indices.get(&edge.from);
                 let idx_j = node_indices.get(&edge.to);
 
-                // If both fixed, skip
                 if idx_i.is_none() && idx_j.is_none() { continue; }
 
-                let J_i = -Matrix6::identity(); // Approximation
-                let J_j = Matrix6::identity();  // Approximation
+                let jj: Matrix6<f64> = Matrix6::identity();
+                let rel_pose = pose_j.inverse() * pose_i;
+                let ji: Matrix6<f64> = -adjoint(&rel_pose);
 
-                let H_ii = J_i.transpose() * info * J_i;
-                let H_jj = J_j.transpose() * info * J_j;
-                let H_ij = J_i.transpose() * info * J_j;
-                let H_ji = H_ij.transpose();
+                let h_ii: Matrix6<f64> = ji.transpose() * info * ji;
+                let h_jj: Matrix6<f64> = jj.transpose() * info * jj;
+                let h_ij: Matrix6<f64> = ji.transpose() * info * jj;
 
-                let b_i = J_i.transpose() * info * error;
-                let b_j = J_j.transpose() * info * error;
+                let b_i: Vector6<f64> = ji.transpose() * info * error;
+                let b_j: Vector6<f64> = jj.transpose() * info * error;
 
                 if let Some(&i) = idx_i {
                     let r = i * 6;
-                    H.slice_mut((r, r), (6, 6)) .add_assign(&H_ii);
-                    b.rows_mut(r, 6) += &(-b_i);
+                    h_mat.fixed_view_mut::<6, 6>(r, r).add_assign(h_ii);
+                    b_vec.fixed_rows_mut::<6>(r).sub_assign(b_i);
 
                     if let Some(&j) = idx_j {
                         let c = j * 6;
-                        H.slice_mut((r, c), (6, 6)) += &H_ij;
-                        H.slice_mut((c, r), (6, 6)) += &H_ji;
-                        H.slice_mut((c, c), (6, 6)) += &H_jj;
-                        b.rows_mut(c, 6) += &(-b_j);
+                        h_mat.fixed_view_mut::<6, 6>(r, c).add_assign(h_ij);
+                        h_mat.fixed_view_mut::<6, 6>(c, r).add_assign(h_ij.transpose());
+                        h_mat.fixed_view_mut::<6, 6>(c, c).add_assign(h_jj);
+                        b_vec.fixed_rows_mut::<6>(c).sub_assign(b_j);
                     }
                 } else if let Some(&j) = idx_j {
                     let c = j * 6;
-                    H.slice_mut((c, c), (6, 6)) += &H_jj;
-                    b.rows_mut(c, 6) += &(-b_j);
+                    h_mat.fixed_view_mut::<6, 6>(c, c).add_assign(h_jj);
+                    b_vec.fixed_rows_mut::<6>(c).sub_assign(b_j);
                 }
             }
 
-            // Solve H * dx = b
-            let dx = match H.cholesky() {
-                Some(chol) => chol.solve(&b),
-                None => return Err("Cholesky decomposition failed (system unstable)".into()),
+            // Regularization
+            for i in 0..system_size {
+                h_mat[(i, i)] += 1e-6;
+            }
+
+            let dx = match h_mat.cholesky() {
+                Some(chol) => chol.solve(&b_vec),
+                None => return Err("Cholesky failed".into()),
             };
 
-            // Update poses
             for (&id, &idx) in &node_indices {
-                let update = dx.rows(idx * 6, 6);
+                let update = dx.fixed_rows::<6>(idx * 6);
                 let translation = Vector3::new(update[0], update[1], update[2]);
                 let rotation = Vector3::new(update[3], update[4], update[5]);
                 
-                // Exp map update
+                // Exponential map update
                 let delta = Isometry3::new(translation, rotation);
-                // Left update: X_new = delta * X_old
                 if let Some(pose) = self.nodes.get_mut(&id) {
-                    *pose = delta * (*pose);
+                    // X = X * exp(-delta)? No, we use left or right update consistently.
+                    // If e = log(Z^-1 * Xi^-1 * Xj), then updates are:
+                    // Xi = Xi * exp(dxi)
+                    // Xj = Xj * exp(dxj)
+                    *pose = (*pose) * delta;
                 }
             }
 
-            if error_sum < 1e-6 { break; }
+            if error_sum < 1e-9 { break; }
         }
 
         Ok(error_sum)
     }
 }
+
+fn adjoint(iso: &Isometry3<f64>) -> Matrix6<f64> {
+    let r = iso.rotation.to_rotation_matrix().matrix().clone_owned();
+    let t = iso.translation.vector;
+    let t_skew = nalgebra::Matrix3::new(
+        0.0, -t.z, t.y,
+        t.z, 0.0, -t.x,
+        -t.y, t.x, 0.0
+    );
+    let tr = t_skew * r;
+    
+    let mut ad = Matrix6::zeros();
+    ad.fixed_view_mut::<3, 3>(0, 0).copy_from(&r);
+    ad.fixed_view_mut::<3, 3>(0, 3).copy_from(&tr);
+    ad.fixed_view_mut::<3, 3>(3, 3).copy_from(&r);
+    ad
+}
+
+use std::ops::{AddAssign, SubAssign};

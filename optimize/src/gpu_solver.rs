@@ -140,7 +140,7 @@ mod tests {
         let b = DVector::from_vec(vec![4.0, 9.0, 16.0]);
 
         let solver = GpuCgSolver::new();
-        let ctx = ComputeDevice::Cpu;
+        let ctx = cv_hal::compute::get_device();
         let x = solver.solve(&ctx, &a, &b).unwrap();
 
         assert!((x[0] - 2.0).abs() < 1e-6, "x[0] = {}, expected 2.0", x[0]);
@@ -178,7 +178,7 @@ mod tests {
         let b = DVector::from_vec(vec![1.0, 2.0]);
 
         let solver = GpuCgSolver::new();
-        let ctx = ComputeDevice::Cpu;
+        let ctx = cv_hal::compute::get_device();
         let x = solver.solve(&ctx, &a, &b).unwrap();
 
         // Verify A*x ≈ b
@@ -222,7 +222,7 @@ mod tests {
         let b = DVector::from_vec(vec![1.0; n]);
 
         let solver = GpuCgSolver::new();
-        let ctx = ComputeDevice::Cpu;
+        let ctx = cv_hal::compute::get_device();
         let x = solver.solve(&ctx, &a, &b).unwrap();
 
         // Verify A*x ≈ b
