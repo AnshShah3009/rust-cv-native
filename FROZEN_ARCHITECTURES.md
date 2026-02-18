@@ -74,3 +74,8 @@ This document tracks the core architectural components that have been stabilized
 *   **Status:** Frozen (Feb 19, 2026)
 *   **Definition:** The `gpu_exclusive_scan` implementation that uses a recursive work-efficient Blelloch scan to handle arbitrary data sizes on the GPU.
 *   **Rationale:** Essential for many computer vision algorithms (sorting, feature collection, stream compaction). The recursive approach avoids the limitations of single-workgroup scan sizes.
+
+## 13. Unified Camera Model & Projection (`cv-core::geometry`)
+*   **Status:** Frozen (Feb 19, 2026)
+*   **Definition:** The `CameraModel<T>` trait and its `PinholeModel` implementation.
+*   **Rationale:** Standardizes how all 2D/3D algorithms (SFM, SLAM, Calibration) interact with camera hardware. Combining intrinsics and distortion into a single model simplifies APIs and ensures consistent unprojection/undistortion logic.

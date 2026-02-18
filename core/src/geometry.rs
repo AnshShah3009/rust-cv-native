@@ -2,6 +2,83 @@ use nalgebra::{Matrix3, Matrix4, Point2, Point3, Vector3};
 
 pub type Vector6<T> = nalgebra::Vector6<T>;
 
+pub trait CameraModel<T> {
+    fn project(&self, point: &Point3<T>) -> Point2<T>;
+    fn unproject(&self, pixel: &Point2<T>, depth: T) -> Point3<T>;
+    fn width(&self) -> u32;
+    fn height(&self) -> u32;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PinholeModel {
+    pub intrinsics: CameraIntrinsics,
+    pub distortion: Distortion,
+}
+
+impl PinholeModel {
+    pub fn new(intrinsics: CameraIntrinsics, distortion: Distortion) -> Self {
+        Self { intrinsics, distortion }
+    }
+}
+
+impl CameraModel<f64> for PinholeModel {
+    fn project(&self, point: &Point3<f64>) -> Point2<f64> {
+        let z = point.z;
+        if z.abs() < 1e-10 {
+            return Point2::new(self.intrinsics.cx, self.intrinsics.cy);
+        }
+        let x = point.x / z;
+        let y = point.y / z;
+        let (xd, yd) = self.distortion.apply(x, y);
+        Point2::new(xd * self.intrinsics.fx + self.intrinsics.cx, yd * self.intrinsics.fy + self.intrinsics.cy)
+    }
+
+    fn unproject(&self, pixel: &Point2<f64>, depth: f64) -> Point3<f64> {
+        let x = (pixel.x - self.intrinsics.cx) / self.intrinsics.fx;
+        let y = (pixel.y - self.intrinsics.cy) / self.intrinsics.fy;
+        let (xu, yu) = self.distortion.remove(x, y);
+        Point3::new(xu * depth, yu * depth, depth)
+    }
+
+    fn width(&self) -> u32 { self.intrinsics.width }
+    fn height(&self) -> u32 { self.intrinsics.height }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PinholeModelF32 {
+    pub intrinsics: CameraIntrinsicsF32,
+    pub distortion: DistortionF32,
+}
+
+impl PinholeModelF32 {
+    pub fn new(intrinsics: CameraIntrinsicsF32, distortion: DistortionF32) -> Self {
+        Self { intrinsics, distortion }
+    }
+}
+
+impl CameraModel<f32> for PinholeModelF32 {
+    fn project(&self, point: &Point3<f32>) -> Point2<f32> {
+        let z = point.z;
+        if z.abs() < 1e-7 {
+            return Point2::new(self.intrinsics.cx, self.intrinsics.cy);
+        }
+        let x = point.x / z;
+        let y = point.y / z;
+        let (xd, yd) = self.distortion.apply(x, y);
+        Point2::new(xd * self.intrinsics.fx + self.intrinsics.cx, yd * self.intrinsics.fy + self.intrinsics.cy)
+    }
+
+    fn unproject(&self, pixel: &Point2<f32>, depth: f32) -> Point3<f32> {
+        let x = (pixel.x - self.intrinsics.cx) / self.intrinsics.fx;
+        let y = (pixel.y - self.intrinsics.cy) / self.intrinsics.fy;
+        let (xu, yu) = self.distortion.remove(x, y);
+        Point3::new(xu * depth, yu * depth, depth)
+    }
+
+    fn width(&self) -> u32 { self.intrinsics.width }
+    fn height(&self) -> u32 { self.intrinsics.height }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CameraIntrinsics {
     pub fx: f64,

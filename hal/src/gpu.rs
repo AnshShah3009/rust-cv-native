@@ -173,11 +173,25 @@ impl ComputeContext for GpuContext {
 
     fn nms<S: Storage<f32> + 'static>(
         &self,
-        _input: &Tensor<f32, S>,
-        _threshold: f32,
-        _window_size: usize,
+        input: &Tensor<f32, S>,
+        threshold: f32,
+        window_size: usize,
     ) -> crate::Result<Tensor<f32, S>> {
-        Err(crate::Error::NotSupported("GPU Pixel-wise NMS pending implementation".into()))
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let input_ptr = input as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            let result_gpu = crate::gpu_kernels::nms::nms_pixel(self, input_gpu, threshold, window_size)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<f32, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
     }
 
     fn nms_boxes<S: Storage<f32> + 'static>(
