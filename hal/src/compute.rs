@@ -14,6 +14,13 @@ pub enum ComputeDevice<'a> {
 }
 
 impl<'a> ComputeDevice<'a> {
+    pub fn backend_type(&self) -> crate::BackendType {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.backend_type(),
+            ComputeDevice::Gpu(gpu) => gpu.backend_type(),
+        }
+    }
+
     pub fn convolve_2d<S: Storage<f32> + 'static>(
         &self,
         input: &Tensor<f32, S>,
@@ -278,6 +285,65 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.icp_correspondences(src, tgt, max_dist),
             ComputeDevice::Gpu(gpu) => gpu.icp_correspondences(src, tgt, max_dist),
+        }
+    }
+
+    pub fn icp_accumulate<S: Storage<f32> + 'static>(
+        &self,
+        source: &Tensor<f32, S>,
+        target: &Tensor<f32, S>,
+        target_normals: &Tensor<f32, S>,
+        correspondences: &[(u32, u32)],
+        transform: &nalgebra::Matrix4<f32>,
+    ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.icp_accumulate(source, target, target_normals, correspondences, transform),
+            ComputeDevice::Gpu(gpu) => gpu.icp_accumulate(source, target, target_normals, correspondences, transform),
+        }
+    }
+
+    pub fn akaze_diffusion<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+        k: f32,
+        tau: f32,
+    ) -> Result<Tensor<f32, S>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.akaze_diffusion(input, k, tau),
+            ComputeDevice::Gpu(gpu) => gpu.akaze_diffusion(input, k, tau),
+        }
+    }
+
+    pub fn akaze_derivatives<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+    ) -> Result<(Tensor<f32, S>, Tensor<f32, S>, Tensor<f32, S>)> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.akaze_derivatives(input),
+            ComputeDevice::Gpu(gpu) => gpu.akaze_derivatives(input),
+        }
+    }
+
+    pub fn akaze_contrast_k<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+    ) -> Result<f32> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.akaze_contrast_k(input),
+            ComputeDevice::Gpu(gpu) => gpu.akaze_contrast_k(input),
+        }
+    }
+
+    pub fn spmv<S: Storage<f32> + 'static>(
+        &self,
+        row_ptr: &[u32],
+        col_indices: &[u32],
+        values: &[f32],
+        x: &Tensor<f32, S>,
+    ) -> Result<Tensor<f32, S>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.spmv(row_ptr, col_indices, values, x),
+            ComputeDevice::Gpu(gpu) => gpu.spmv(row_ptr, col_indices, values, x),
         }
     }
 }

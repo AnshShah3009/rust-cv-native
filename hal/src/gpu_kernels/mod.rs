@@ -8,7 +8,6 @@ use wgpu::{
 };
 use nalgebra::Vector3;
 use std::sync::Arc;
-use crate::gpu::GpuContext;
 
 /// GPU Compute Context (Deprecated: Use GpuContext instead)
 #[deprecated(since = "0.1.1", note = "Use cv_hal::gpu::GpuContext directly instead")]
@@ -54,6 +53,9 @@ pub mod fast;
 pub mod matching;
 pub mod sift;
 pub mod icp;
+pub mod subtract;
+pub mod akaze;
+pub mod sparse;
 
 /// Shader compilation utilities
 pub mod shaders {
@@ -110,6 +112,12 @@ pub mod shaders {
                 include_str!("icp_correspondences.wgsl"),
             );
 
+            // ICP accumulation (J^T J, J^T r)
+            shaders.insert(
+                "icp_accumulate",
+                include_str!("../../shaders/icp_accumulate.wgsl"),
+            );
+
             // ICP reduction (sum of errors)
             shaders.insert(
                 "icp_reduction",
@@ -162,6 +170,18 @@ pub mod shaders {
             shaders.insert(
                 "parallel_reduce",
                 include_str!("parallel_reduce.wgsl"),
+            );
+
+            // Gaussian blur (separable)
+            shaders.insert(
+                "gaussian_blur_separable",
+                include_str!("../../shaders/gaussian_blur_separable.wgsl"),
+            );
+
+            // Image subtraction
+            shaders.insert(
+                "subtract",
+                include_str!("../../shaders/subtract.wgsl"),
             );
 
             // Matrix multiplication

@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use crate::{BackendType, DeviceId, Result};
 use cv_core::{Tensor, storage::Storage};
 
@@ -220,6 +219,46 @@ pub trait ComputeContext: Send + Sync {
         tgt: &Tensor<f32, S>,
         max_dist: f32,
     ) -> Result<Vec<(usize, usize, f32)>>;
+
+    /// ICP Jacobian Accumulation
+    /// Accumulates J^T * J and J^T * r for point-to-plane ICP
+    fn icp_accumulate<S: Storage<f32> + 'static>(
+        &self,
+        source: &Tensor<f32, S>,
+        target: &Tensor<f32, S>,
+        target_normals: &Tensor<f32, S>,
+        correspondences: &[(u32, u32)],
+        transform: &nalgebra::Matrix4<f32>,
+    ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)>;
+
+    /// AKAZE Non-linear Diffusion step
+    fn akaze_diffusion<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+        k: f32,
+        tau: f32,
+    ) -> Result<Tensor<f32, S>>;
+
+    /// AKAZE Derivatives and Hessian Determinant
+    fn akaze_derivatives<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+    ) -> Result<(Tensor<f32, S>, Tensor<f32, S>, Tensor<f32, S>)>;
+
+    /// Compute AKAZE Contrast K factor (70th percentile)
+    fn akaze_contrast_k<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+    ) -> Result<f32>;
+
+    /// Sparse Matrix-Vector Multiply (y = A * x)
+    fn spmv<S: Storage<f32> + 'static>(
+        &self,
+        row_ptr: &[u32],
+        col_indices: &[u32],
+        values: &[f32],
+        x: &Tensor<f32, S>,
+    ) -> Result<Tensor<f32, S>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
