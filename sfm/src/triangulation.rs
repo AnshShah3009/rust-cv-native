@@ -1,4 +1,6 @@
 use nalgebra::{Matrix3x4, Point2, Point3};
+use rayon::prelude::*;
+use cv_runtime::orchestrator::ResourceGroup;
 
 /// Error type for SfM operations
 #[derive(Debug, thiserror::Error)]
@@ -70,17 +72,30 @@ pub fn triangulate_points(
     proj1: &Matrix3x4<f64>,
     proj2: &Matrix3x4<f64>,
 ) -> Result<Vec<Point3<f64>>> {
+    let group = cv_runtime::orchestrator::scheduler().get_default_group();
+    triangulate_points_ctx(points1, points2, proj1, proj2, &group)
+}
+
+/// Triangulate multiple points with context-aware parallelism
+pub fn triangulate_points_ctx(
+    points1: &[Point2<f64>],
+    points2: &[Point2<f64>],
+    proj1: &Matrix3x4<f64>,
+    proj2: &Matrix3x4<f64>,
+    group: &ResourceGroup,
+) -> Result<Vec<Point3<f64>>> {
     if points1.len() != points2.len() {
         return Err(SfmError::TriangulationFailed(
             "Point counts must match".to_string(),
         ));
     }
 
-    let mut result = Vec::with_capacity(points1.len());
-    for (p1, p2) in points1.iter().zip(points2.iter()) {
-        result.push(triangulate_point_dlt(p1, p2, proj1, proj2)?);
-    }
-    Ok(result)
+    group.run(|| {
+        points1.par_iter()
+            .zip(points2.par_iter())
+            .map(|(p1, p2)| triangulate_point_dlt(p1, p2, proj1, proj2))
+            .collect()
+    })
 }
 
 #[cfg(test)]

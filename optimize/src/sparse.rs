@@ -1,97 +1,109 @@
-use faer::prelude::Solve;
 use faer::sparse::SparseColMat;
 pub use faer::sparse::Triplet;
 use nalgebra::DVector;
+use cv_hal::compute::ComputeDevice;
+use cv_hal::context::ComputeContext;
+use cv_core::Tensor;
 
-/// Sparse Matrix representation using Faer as backend.
+/// Sparse Matrix representation in CSR format for GPU optimization
 pub struct SparseMatrix {
     pub rows: usize,
     pub cols: usize,
-    pub triplets: Vec<Triplet<usize, usize, f64>>,
+    pub row_ptr: Vec<u32>,
+    pub col_indices: Vec<u32>,
+    pub values: Vec<f64>,
 }
 
 impl SparseMatrix {
-    pub fn new(rows: usize, cols: usize) -> Self {
+    pub fn from_triplets(rows: usize, cols: usize, triplets: &[Triplet<usize, usize, f64>]) -> Self {
+        // Convert COO (triplets) to CSR
+        let mut row_counts = vec![0; rows];
+        for t in triplets {
+            row_counts[t.row] += 1;
+        }
+
+        let mut row_ptr = vec![0; rows + 1];
+        for i in 0..rows {
+            row_ptr[i + 1] = row_ptr[i] + row_counts[i];
+        }
+
+        let mut current_row_pos = vec![0; rows];
+        let mut col_indices = vec![0; triplets.len()];
+        let mut values = vec![0.0; triplets.len()];
+
+        for t in triplets {
+            let pos = row_ptr[t.row] as usize + current_row_pos[t.row];
+            col_indices[pos] = t.col as u32;
+            values[pos] = t.val;
+            current_row_pos[t.row] += 1;
+        }
+
         Self {
             rows,
             cols,
-            triplets: Vec::new(),
+            row_ptr,
+            col_indices,
+            values,
         }
     }
 
-    pub fn add(&mut self, row: usize, col: usize, value: f64) {
-        self.triplets.push(Triplet::new(row, col, value));
-    }
+    pub fn spmv_ctx(&self, ctx: &ComputeDevice, x: &DVector<f64>) -> DVector<f64> {
+        // Convert f64 to f32 for GPU SpMV
+        let x_f32: Vec<f32> = x.iter().map(|&v| v as f32).collect();
+        let values_f32: Vec<f32> = self.values.iter().map(|&v| v as f32).collect();
+        
+        let x_tensor = Tensor::from_vec(x_f32, cv_core::TensorShape::new(1, x.len(), 1));
+        
+        // If GPU, upload x
+        let result_tensor = match ctx {
+            ComputeDevice::Gpu(gpu) => {
+                let x_gpu = cv_hal::tensor_ext::TensorToGpu::to_gpu_ctx(&x_tensor, gpu).unwrap();
+                ctx.spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_gpu).unwrap()
+            },
+            _ => ctx.spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_tensor).unwrap(),
+        };
 
-    /// Convert to Faer SparseColMat
-    pub fn to_faer(&self) -> SparseColMat<usize, f64> {
-        SparseColMat::try_new_from_triplets(self.rows, self.cols, &self.triplets)
-            .expect("Failed to create sparse matrix")
+        // Download result
+        let res_cpu = match ctx {
+            ComputeDevice::Gpu(gpu) => cv_hal::tensor_ext::TensorToCpu::to_cpu_ctx(&result_tensor, gpu).unwrap(),
+            _ => result_tensor,
+        };
+
+        DVector::from_vec(res_cpu.storage.as_slice().unwrap().iter().map(|&v| v as f64).collect())
     }
 }
 
 pub trait LinearSolver {
-    fn solve(&self, a: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String>;
+    fn solve(&self, ctx: &ComputeDevice, a: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String>;
 }
 
-pub struct CholeskySolver;
-
-impl LinearSolver for CholeskySolver {
-    fn solve(&self, a: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String> {
-        // TEMPORARY: Convert sparse to dense and use dense Cholesky
-        // TODO: Implement proper sparse Cholesky or GPU compute shader solver
-        // (avoiding CUDA bindings as per user preference)
-
-        use faer::Mat;
-
-        // Convert sparse matrix to dense
-        let mut dense = Mat::zeros(a.rows, a.cols);
-        for triplet in &a.triplets {
-            *dense.get_mut(triplet.row, triplet.col) = triplet.val;
-        }
-
-        // Convert b to faer Mat
-        let mut b_mat = Mat::zeros(b.len(), 1);
-        for i in 0..b.len() {
-            *b_mat.get_mut(i, 0) = b[i];
-        }
-
-        // Use LU decomposition for general linear solve
-        // TODO: Implement proper sparse solver or GPU compute shader
-        let lu = dense.full_piv_lu();
-        let x_faer = lu.solve(b_mat.as_ref());
-
-        // Convert back to DVector
-        let mut x_vec = Vec::with_capacity(x_faer.nrows());
-        for i in 0..x_faer.nrows() {
-            x_vec.push(*x_faer.get(i, 0));
-        }
-
-        Ok(DVector::from_vec(x_vec))
-    }
+/// Conjugate Gradient solver on GPU/CPU
+pub struct CgSolver {
+    pub max_iters: usize,
+    pub tolerance: f64,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl LinearSolver for CgSolver {
+    fn solve(&self, ctx: &ComputeDevice, a: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String> {
+        let mut x = DVector::zeros(a.cols);
+        let mut r = b - a.spmv_ctx(ctx, &x);
+        let mut p = r.clone();
+        let mut rsold = r.dot(&r);
 
-    #[test]
-    fn test_sparse_solver() {
-        // Solve A x = b
-        // A = [[2, 0], [0, 2]]
-        // b = [2, 4]
-        // x = [1, 2]
+        for _ in 0..self.max_iters {
+            let ap = a.spmv_ctx(ctx, &p);
+            let alpha = rsold / p.dot(&ap);
+            x += alpha * &p;
+            r -= alpha * &ap;
+            
+            let rsnew = r.dot(&r);
+            if rsnew.sqrt() < self.tolerance {
+                break;
+            }
+            p = &r + (rsnew / rsold) * &p;
+            rsold = rsnew;
+        }
 
-        let mut mat = SparseMatrix::new(2, 2);
-        mat.add(0, 0, 2.0);
-        mat.add(1, 1, 2.0);
-
-        let b = DVector::from_vec(vec![2.0, 4.0]);
-
-        let solver = CholeskySolver;
-        let x = solver.solve(&mat, &b).expect("Solve failed");
-
-        assert!((x[0] - 1.0).abs() < 1e-6);
-        assert!((x[1] - 2.0).abs() < 1e-6);
+        Ok(x)
     }
 }

@@ -155,6 +155,91 @@ pub fn registration_icp_point_to_plane(
     })
 }
 
+/// Standard point-to-plane ICP with context-aware acceleration
+pub fn registration_icp_point_to_plane_ctx(
+    source: &PointCloud,
+    target: &PointCloud,
+    max_correspondence_distance: f32,
+    init_transformation: &nalgebra::Matrix4<f32>,
+    max_iterations: usize,
+    ctx: &cv_hal::compute::ComputeDevice,
+) -> Option<ICPResult> {
+    use cv_hal::tensor_ext::TensorToGpu;
+    use cv_core::Tensor;
+
+    let mut transformation = *init_transformation;
+    let mut best_fitness = 0.0;
+    let mut best_rmse = f32::MAX;
+    let mut final_iterations = 0;
+
+    // Convert point clouds to tensors for GPU processing
+    let source_tensor = Tensor::from_vec(
+        source.points.iter().flat_map(|p| [p.x, p.y, p.z, 1.0]).collect(),
+        cv_core::TensorShape::new(1, source.points.len(), 4)
+    );
+    let target_tensor = Tensor::from_vec(
+        target.points.iter().flat_map(|p| [p.x, p.y, p.z, 1.0]).collect(),
+        cv_core::TensorShape::new(1, target.points.len(), 4)
+    );
+    let target_normals_tensor = Tensor::from_vec(
+        target.normals.as_ref().unwrap().iter().flat_map(|n| [n.x, n.y, n.z, 0.0]).collect(),
+        cv_core::TensorShape::new(1, target.points.len(), 4)
+    );
+
+    // If using GPU, upload once
+    let (s_gpu, t_gpu, n_gpu) = if let cv_hal::compute::ComputeDevice::Gpu(gpu) = ctx {
+        (
+            source_tensor.to_gpu_ctx(gpu).ok()?,
+            target_tensor.to_gpu_ctx(gpu).ok()?,
+            target_normals_tensor.to_gpu_ctx(gpu).ok()?
+        )
+    } else {
+        // CPU fallback: we'll use the tensors directly but it's less efficient than specialized CPU code
+        return registration_icp_point_to_plane(source, target, max_correspondence_distance, init_transformation, max_iterations);
+    };
+
+    for iter in 0..max_iterations {
+        // Find correspondences on device
+        let correspondences_raw = ctx.icp_correspondences(&s_gpu, &t_gpu, max_correspondence_distance).ok()?;
+        
+        if correspondences_raw.len() < 3 {
+            break;
+        }
+
+        let correspondences: Vec<(u32, u32)> = correspondences_raw.iter().map(|&(s, t, _)| (s as u32, t as u32)).collect();
+
+        // Accumulate Normal Equations on device
+        let (ata, atb) = ctx.icp_accumulate(&s_gpu, &t_gpu, &n_gpu, &correspondences, &transformation).ok()?;
+
+        // Solve for update on CPU (Matrix6 is small)
+        if let Some(ata_inv) = ata.try_inverse() {
+            let delta = ata_inv * atb;
+            let update = exponential_map_se3(&delta);
+            transformation = update * transformation;
+        }
+
+        // Evaluation (could be optimized on GPU too)
+        let (fitness, rmse) = evaluate_registration(source, target, &transformation, max_correspondence_distance);
+
+        if fitness > best_fitness {
+            best_fitness = fitness;
+            best_rmse = rmse;
+            final_iterations = iter + 1;
+        }
+
+        if rmse < 1e-6 {
+            break;
+        }
+    }
+
+    Some(ICPResult {
+        transformation,
+        fitness: best_fitness,
+        inlier_rmse: best_rmse,
+        num_iterations: final_iterations,
+    })
+}
+
 /// Multi-scale ICP
 pub fn registration_multi_scale_icp(
     source: &PointCloud,
@@ -286,3 +371,4 @@ pub fn evaluate_registration(
 
     (fitness, rmse)
 }
+mod mod_test;
