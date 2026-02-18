@@ -280,8 +280,8 @@ impl ComputeContext for GpuContext {
         intrinsics: &[f32; 4],
         tsdf_volume: &mut Tensor<f32, S>,
         weight_volume: &mut Tensor<f32, S>,
-        _voxel_size: f32,
-        _truncation: f32,
+        voxel_size: f32,
+        truncation: f32,
     ) -> crate::Result<()> {
         use std::any::TypeId;
         use crate::storage::GpuStorage;
@@ -295,7 +295,37 @@ impl ComputeContext for GpuContext {
             let tsdf_gpu = unsafe { &mut *tsdf_ptr };
             let weight_gpu = unsafe { &mut *weight_ptr };
 
-            crate::gpu_kernels::tsdf::integrate(self, depth_gpu, camera_pose, intrinsics, tsdf_gpu, weight_gpu, _voxel_size, _truncation)
+            crate::gpu_kernels::tsdf::integrate(self, depth_gpu, camera_pose, intrinsics, tsdf_gpu, weight_gpu, voxel_size, truncation)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn tsdf_raycast<S: Storage<f32> + 'static>(
+        &self,
+        tsdf_volume: &Tensor<f32, S>,
+        camera_pose: &[[f32; 4]; 4],
+        intrinsics: &[f32; 4],
+        image_size: (u32, u32),
+        depth_range: (f32, f32),
+        voxel_size: f32,
+        truncation: f32,
+    ) -> crate::Result<(Tensor<f32, S>, Tensor<f32, S>)> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let tsdf_ptr = tsdf_volume as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let tsdf_gpu = unsafe { &*tsdf_ptr };
+
+            let (depth_gpu, normal_gpu) = crate::gpu_kernels::tsdf::raycast(self, tsdf_gpu, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation)?;
+
+            let depth = unsafe { std::ptr::read(&depth_gpu as *const _ as *const Tensor<f32, S>) };
+            let normal = unsafe { std::ptr::read(&normal_gpu as *const _ as *const Tensor<f32, S>) };
+            std::mem::forget(depth_gpu);
+            std::mem::forget(normal_gpu);
+            
+            Ok((depth, normal))
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }

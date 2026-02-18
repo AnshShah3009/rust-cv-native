@@ -47,6 +47,7 @@ pub mod morphology;
 pub mod nms;
 pub mod pointcloud;
 pub mod tsdf;
+pub mod optical_flow;
 pub mod color;
 pub mod resize;
 pub mod warp;
