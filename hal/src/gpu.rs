@@ -705,6 +705,31 @@ impl ComputeContext for GpuContext {
         }
     }
 
+    fn dense_icp_step<S: Storage<f32> + 'static>(
+        &self,
+        source_depth: &Tensor<f32, S>,
+        target_data: &Tensor<f32, S>,
+        intrinsics: &[f32; 4],
+        initial_guess: &nalgebra::Matrix4<f32>,
+        max_dist: f32,
+        max_angle: f32,
+    ) -> crate::Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let src_ptr = source_depth as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let tgt_ptr = target_data as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            
+            let src_gpu = unsafe { &*src_ptr };
+            let tgt_gpu = unsafe { &*tgt_ptr };
+
+            crate::gpu_kernels::icp::dense_step(self, src_gpu, tgt_gpu, intrinsics, initial_guess, max_dist, max_angle)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
     fn akaze_diffusion<S: Storage<f32> + 'static>(
         &self,
         input: &Tensor<f32, S>,

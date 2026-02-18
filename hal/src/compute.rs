@@ -344,6 +344,21 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
+    pub fn dense_icp_step<S: Storage<f32> + 'static>(
+        &self,
+        source_depth: &Tensor<f32, S>,
+        target_data: &Tensor<f32, S>,
+        intrinsics: &[f32; 4],
+        initial_guess: &nalgebra::Matrix4<f32>,
+        max_dist: f32,
+        max_angle: f32,
+    ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.dense_icp_step(source_depth, target_data, intrinsics, initial_guess, max_dist, max_angle),
+            ComputeDevice::Gpu(gpu) => gpu.dense_icp_step(source_depth, target_data, intrinsics, initial_guess, max_dist, max_angle),
+        }
+    }
+
     pub fn akaze_diffusion<S: Storage<f32> + 'static>(
         &self,
         input: &Tensor<f32, S>,

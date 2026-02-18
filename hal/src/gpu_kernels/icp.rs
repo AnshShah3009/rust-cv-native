@@ -1,4 +1,4 @@
-use cv_core::Tensor;
+use cv_core::{Tensor, TensorShape};
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
@@ -196,6 +196,162 @@ pub fn icp_accumulate(
     let mut atb = nalgebra::Vector6::<f32>::zeros();
     for i in 0..6 {
         atb[i] = atb_raw[i] as f32 / 1000000.0;
+    }
+
+    Ok((ata, atb))
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct IcpDenseParams {
+    width: u32,
+    height: u32,
+    max_dist: f32,
+    max_angle: f32,
+}
+
+pub fn dense_step(
+    ctx: &GpuContext,
+    source_depth: &Tensor<f32, GpuStorage<f32>>,
+    target_data: &Tensor<f32, GpuStorage<f32>>,
+    intrinsics: &[f32; 4],
+    initial_guess: &nalgebra::Matrix4<f32>,
+    max_dist: f32,
+    max_angle: f32,
+) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
+    let (h, w) = source_depth.shape.hw();
+    let num_pixels = (w * h) as u32;
+
+    let scratch_size = (num_pixels * 27 * 4) as u64;
+    let scratch_buffer = ctx.get_buffer(scratch_size, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST);
+
+    let params = IcpDenseParams {
+        width: w as u32,
+        height: h as u32,
+        max_dist,
+        max_angle: max_angle.cos(),
+    };
+    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("ICP Dense Params"),
+        contents: bytemuck::bytes_of(&params),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+
+    let intrinsics_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("ICP Intrinsics"),
+        contents: bytemuck::cast_slice(intrinsics),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    
+    let inv_intrinsics = [1.0 / intrinsics[0], 1.0 / intrinsics[1], intrinsics[2], intrinsics[3]];
+    let inv_intrinsics_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("ICP Inv Intrinsics"),
+        contents: bytemuck::cast_slice(&inv_intrinsics),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+
+    let mut pose_flat = [0.0f32; 16];
+    pose_flat.copy_from_slice(initial_guess.as_slice());
+    let pose_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("ICP Pose"),
+        contents: bytemuck::cast_slice(&pose_flat),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+
+    let shader_source = include_str!("../../shaders/icp_dense.wgsl");
+    let pipeline = ctx.create_compute_pipeline(shader_source, "main");
+
+    let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("ICP Dense BG"),
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: source_depth.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: target_data.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 2, resource: scratch_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 4, resource: intrinsics_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 5, resource: inv_intrinsics_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 6, resource: pose_buffer.as_entire_binding() },
+        ],
+    });
+
+    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("ICP Dense Compute") });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups((w as u32 + 15) / 16, (h as u32 + 15) / 16, 1);
+    }
+    ctx.submit(encoder);
+
+    // Reduction
+    let reduce_shader = include_str!("../../shaders/icp_reduce.wgsl");
+    let reduce_pipeline = ctx.create_compute_pipeline(reduce_shader, "main");
+
+    let mut current_elements = num_pixels;
+    let mut current_input = scratch_buffer;
+    
+    while current_elements > 1 {
+        let workgroups = (current_elements + 127) / 128;
+        let out_size = (workgroups * 27 * 4) as u64;
+        let out_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Reduction Step"),
+            size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let reduce_params = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::bytes_of(&current_elements),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        let reduce_bg = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ICP Reduce BG"),
+            layout: &reduce_pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: current_input.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: reduce_params.as_entire_binding() },
+            ],
+        });
+
+        let mut red_enc = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = red_enc.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_pipeline(&reduce_pipeline);
+            pass.set_bind_group(0, &reduce_bg, &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+        ctx.submit(red_enc);
+
+        current_input = out_buffer;
+        current_elements = workgroups;
+    }
+
+    let final_data: Vec<f32> = pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer(
+        ctx.device.clone(),
+        &ctx.queue,
+        &current_input, // Final result is here
+        0,
+        27 * 4,
+    ))?;
+
+    let mut ata = nalgebra::Matrix6::zeros();
+    let mut atb = nalgebra::Vector6::zeros();
+    
+    let mut idx = 0;
+    for i in 0..6 {
+        for j in i..6 {
+            ata[(i, j)] = final_data[idx];
+            ata[(j, i)] = final_data[idx];
+            idx += 1;
+        }
+    }
+    for i in 0..6 {
+        atb[i] = final_data[idx];
+        idx += 1;
     }
 
     Ok((ata, atb))

@@ -90,10 +90,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         if (prev_tsdf > 0.0 && tsdf_val < 0.0 && tsdf_val > -0.8) {
             let t_surf = t - t_step * (tsdf_val / (tsdf_val - prev_tsdf));
-            let p_surf = origin_world + dir_world * t_surf;
+            let p_surf_world = origin_world + dir_world * t_surf;
             
-            let normal = compute_normal(p_surf);
-            output_data[y * params.width + x] = vec4<f32>(t_surf, normal.x, normal.y, normal.z);
+            // Convert p_surf_world back to camera frame to get Z depth
+            // Actually, we can just use t_surf * dir_cam.z if we had dir_cam.
+            // But dir_cam was normalized. dir_cam.z = 1.0 / length(vec3(mx, my, 1.0))
+            let z_depth = t_surf * (1.0 / length(vec3<f32>(mx, my, 1.0)));
+
+            let normal = compute_normal(p_surf_world);
+            output_data[y * params.width + x] = vec4<f32>(z_depth, normal.x, normal.y, normal.z);
             
             found = true;
             break;

@@ -258,6 +258,16 @@ pub trait ComputeContext: Send + Sync {
         transform: &nalgebra::Matrix4<f32>,
     ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)>;
 
+    fn dense_icp_step<S: Storage<f32> + 'static>(
+        &self,
+        source_depth: &Tensor<f32, S>,
+        target_data: &Tensor<f32, S>,
+        intrinsics: &[f32; 4],
+        initial_guess: &nalgebra::Matrix4<f32>,
+        max_dist: f32,
+        max_angle: f32,
+    ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)>;
+
     /// AKAZE Non-linear Diffusion step
     fn akaze_diffusion<S: Storage<f32> + 'static>(
         &self,

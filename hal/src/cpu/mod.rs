@@ -830,6 +830,18 @@ impl ComputeContext for CpuBackend {
         Err(crate::Error::NotSupported("CPU optical_flow_lk pending implementation".into()))
     }
 
+    fn dense_icp_step<S: Storage<f32> + 'static>(
+        &self,
+        _source_depth: &Tensor<f32, S>,
+        _target_data: &Tensor<f32, S>,
+        _intrinsics: &[f32; 4],
+        _initial_guess: &nalgebra::Matrix4<f32>,
+        _max_dist: f32,
+        _max_angle: f32,
+    ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
+        Err(crate::Error::NotSupported("CPU dense_icp_step pending implementation".into()))
+    }
+
     fn cvt_color<S: Storage<u8> + 'static>(
         &self,
         input: &Tensor<u8, S>,

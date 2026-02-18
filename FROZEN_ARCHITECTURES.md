@@ -99,3 +99,8 @@ This document tracks the core architectural components that have been stabilized
 *   **Status:** Frozen (Feb 19, 2026)
 *   **Definition:** The SE3 node/edge representation for global consistency, utilizing `Isometry3` and `Matrix6` information matrices.
 *   **Rationale:** Establishes the source of truth for the system's pose history and relative constraints. Decouples the graph topology from the specific numerical solver used.
+
+## 18. Dense GPU ICP Tracking (`hal/src/gpu_kernels/icp.rs`)
+*   **Status:** Frozen (Feb 19, 2026)
+*   **Definition:** The projective point-to-plane ICP orchestration: per-pixel Jacobian/Hessian computation followed by hierarchical parallel reduction on GPU.
+*   **Rationale:** Provides the core tracking loop for Dense SLAM. The on-device reduction minimizes data transfer to a single 6x6 matrix per frame, enabling high-frequency tracking against complex volumetric models.
