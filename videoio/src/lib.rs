@@ -25,35 +25,27 @@ pub enum VideoError {
 
 /// Generic interface for video capture devices
 pub trait VideoCapture: Send + Debug {
-    /// Check if the device is open and ready
     fn is_opened(&self) -> bool;
-
-    /// Grab the next frame from the stream
     fn grab(&mut self) -> Result<()>;
-
-    /// Retrieve the grabbed frame as a GrayImage
     fn retrieve(&mut self) -> Result<GrayImage>;
-
-    /// Convenience method to grab and retrieve a frame
     fn read(&mut self) -> Result<GrayImage> {
         self.grab()?;
         self.retrieve()
     }
 }
 
-/// Video writer interface (planned)
-pub trait VideoWriter: Send + Debug {
-    fn write(&mut self, frame: &GrayImage) -> Result<()>;
-}
-
 pub mod backends;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Open a video file using native FFmpeg backend
+pub fn open_video(path: &str) -> Result<Box<dyn VideoCapture>> {
+    let cap = backends::NativeFfmpegCapture::new(path)?;
+    Ok(Box::new(cap))
+}
 
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
+/// Open a camera device (V4L2 on Linux)
+#[cfg(target_os = "linux")]
+pub fn open_camera(path: &str, width: u32, height: u32) -> Result<Box<dyn VideoCapture>> {
+    let mut cap = backends::V4L2Capture::new(path)?;
+    cap.start_stream(width, height)?;
+    Ok(Box::new(cap))
 }
