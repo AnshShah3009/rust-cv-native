@@ -12,7 +12,6 @@ use cv_scientific::geometry::vectorized_iou as rust_vectorized_iou;
 use cv_scientific::point_cloud::{
     estimate_normals as sci_estimate_normals, orient_normals as sci_orient_normals,
 };
-use cv_slam::SlamSystem;
 use cv_stereo::{compute_validity_mask, DisparityMap, StereoParams};
 use geo::Area;
 use nalgebra::{Matrix4, Point3, Vector3};
@@ -60,19 +59,6 @@ impl PyRect {
     }
 }
 
-/// Calculate Intersection over Union (IoU) between two rectangles.
-///
-/// Args:
-///     r1: First rectangle
-///     r2: Second rectangle
-///
-/// Returns:
-///     float: IoU value between 0 and 1
-///
-/// Example:
-///     >>> rect1 = PyRect(0, 0, 100, 100)
-///     >>> rect2 = PyRect(50, 50, 100, 100)
-///     >>> iou = iou(rect1, rect2)  # 0.143
 #[pyfunction]
 fn iou(r1: &PyRect, r2: &PyRect) -> f32 {
     r1.inner.iou(&r2.inner)
@@ -85,7 +71,6 @@ fn py_vectorized_iou<'py>(
     boxes1: &Bound<'_, PyArray2<f32>>,
     boxes2: &Bound<'_, PyArray2<f32>>,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
-    // boxes1 and boxes2 are expected to be (N, 4) arrays of [x, y, w, h]
     let b1 = boxes1.readonly();
     let b2 = boxes2.readonly();
 
@@ -109,7 +94,6 @@ fn py_vectorized_iou<'py>(
 
     let result = rust_vectorized_iou(&rects1, &rects2);
 
-    // Convert ndarray::Array2 to PyArray2
     #[allow(deprecated)]
     let pyarray = result.into_pyarray(py);
     #[allow(deprecated)]
@@ -168,8 +152,6 @@ impl PySpatialIndex {
         }
     }
 
-    /// Find indices of polygons intersecting the bounding box of the query polygon.
-    /// This is a filter step.
     pub fn query(&self, min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Vec<usize> {
         self.inner.query_bbox(min_x, min_y, max_x, max_y)
     }
@@ -458,17 +440,66 @@ impl PyResourceGroup {
 }
 
 #[pyclass]
+pub struct PyComputeDevice {
+    pub inner: cv_hal::compute::ComputeDevice<'static>,
+    _cpu: Option<Box<cv_hal::cpu::CpuBackend>>,
+    _gpu: Option<Box<cv_hal::gpu::GpuContext>>,
+}
+
+#[pymethods]
+impl PyComputeDevice {
+    #[staticmethod]
+    pub fn cpu() -> Self {
+        let cpu = Box::new(cv_hal::cpu::CpuBackend::new().unwrap());
+        let inner = unsafe { cv_hal::compute::ComputeDevice::Cpu(std::mem::transmute(&*cpu)) };
+        Self { inner, _cpu: Some(cpu), _gpu: None }
+    }
+
+    #[staticmethod]
+    pub fn gpu() -> Self {
+        let gpu = Box::new(cv_hal::gpu::GpuContext::new().unwrap());
+        let inner = unsafe { cv_hal::compute::ComputeDevice::Gpu(std::mem::transmute(&*gpu)) };
+        Self { inner, _cpu: None, _gpu: Some(gpu) }
+    }
+}
+
+#[pyclass]
+pub struct PyTensor {
+    pub shape: [usize; 3],
+    pub data: Vec<u8>,
+}
+
+#[pymethods]
+impl PyTensor {
+    #[new]
+    pub fn new(data: Vec<u8>, c: usize, h: usize, w: usize) -> Self {
+        Self { data, shape: [c, h, w] }
+    }
+}
+
+#[pyclass]
 pub struct PySlam {
-    inner: Box<dyn SlamSystem + Send>,
+    inner: Option<cv_slam::Slam<'static>>,
+    _device: Option<PyComputeDevice>,
 }
 
 #[pymethods]
 impl PySlam {
     #[new]
-    pub fn new(fx: f64, fy: f64, cx: f64, cy: f64, width: u32, height: u32) -> Self {
+    pub fn new(device: &PyComputeDevice, fx: f64, fy: f64, cx: f64, cy: f64, width: u32, height: u32) -> Self {
         let intrinsics = CameraIntrinsics::new(fx, fy, cx, cy, width, height);
+        let slam = unsafe {
+            // Safety: device lives as long as PySlam because we hold it in _device
+            let d_ptr = &device.inner as *const _;
+            cv_slam::Slam::new(&*d_ptr, intrinsics)
+        };
         Self {
-            inner: Box::new(cv_slam::Slam::new(intrinsics)),
+            inner: Some(slam),
+            _device: Some(PyComputeDevice {
+                inner: unsafe { std::mem::transmute_copy(&device.inner) },
+                _cpu: None,
+                _gpu: None, // This is just a shell to keep lifetime, real context is in the passed 'device'
+            }),
         }
     }
 
@@ -477,15 +508,38 @@ impl PySlam {
         let shape = view.shape();
         let mut gray = image::GrayImage::new(shape[1] as u32, shape[0] as u32);
 
-        // Safety: view.as_slice() returns Result<&[u8], ...>
         let data = view
             .as_slice()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string()))?;
         gray.copy_from_slice(data);
 
-        self.inner.process_frame(&gray);
+        if let Some(ref mut slam) = self.inner {
+            slam.process_image(&gray).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+        }
         Ok(())
     }
+}
+
+#[pyfunction]
+fn orb_detect_accelerated(
+    device: &PyComputeDevice,
+    image: &PyTensor,
+    n_features: usize,
+) -> Vec<PyKeyPoint> {
+    use cv_core::storage::CpuStorage;
+    let shape = cv_core::TensorShape::new(image.shape[0], image.shape[1], image.shape[2]);
+    let tensor: cv_core::Tensor<u8, CpuStorage<u8>> = cv_core::Tensor::from_vec(image.data.clone(), shape);
+    
+    let orb = cv_features::Orb::new().with_n_features(n_features);
+    let kps = orb.detect_ctx(&device.inner, &tensor);
+    
+    kps.keypoints.iter().map(|kp| PyKeyPoint {
+        x: kp.x as f32,
+        y: kp.y as f32,
+        size: kp.size as f32,
+        angle: kp.angle as f32,
+        response: kp.response as f32,
+    }).collect()
 }
 
 #[pyfunction]
@@ -591,19 +645,19 @@ fn match_descriptors<'py>(
         .as_slice()
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string()))?;
 
-    let mut q_descs = cv_features::Descriptors::new();
+    let mut q_descs = cv_core::Descriptors::new();
     for i in 0..q_shape[0] {
         let data = q_data[i * q_shape[1]..(i + 1) * q_shape[1]].to_vec();
-        q_descs.descriptors.push(cv_features::Descriptor::new(
+        q_descs.descriptors.push(cv_core::Descriptor::new(
             data,
             cv_core::KeyPoint::default(),
         ));
     }
 
-    let mut t_descs = cv_features::Descriptors::new();
+    let mut t_descs = cv_core::Descriptors::new();
     for i in 0..t_shape[0] {
         let data = t_data[i * t_shape[1]..(i + 1) * t_shape[1]].to_vec();
-        t_descs.descriptors.push(cv_features::Descriptor::new(
+        t_descs.descriptors.push(cv_core::Descriptor::new(
             data,
             cv_core::KeyPoint::default(),
         ));
@@ -1052,26 +1106,16 @@ fn compute_normals<'a>(
     Ok(result)
 }
 
-/// Check if a GPU is available on this system.
 #[pyfunction]
 fn is_gpu_available_fn() -> bool {
     cv_hal::gpu::GpuContext::is_available()
 }
 
-/// Get information about the available GPU.
 #[pyfunction]
 fn gpu_info() -> Option<String> {
     cv_3d::gpu::gpu_info()
 }
 
-/// Downsample a point cloud using voxel grid filtering.
-///
-/// Args:
-///     points: Nx3 numpy array of point coordinates
-///     voxel_size: Size of voxel grid cells
-///
-/// Returns:
-///     Mx3 numpy array of downsampled point coordinates
 #[pyfunction]
 fn voxel_downsample_gpu<'a>(
     py: Python<'a>,
@@ -1121,9 +1165,12 @@ fn cv_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDistortion>()?;
     m.add_class::<PyDisparityMap>()?;
     m.add_class::<PyStereoParams>()?;
+    m.add_class::<PyComputeDevice>()?;
+    m.add_class::<PyTensor>()?;
 
     m.add_function(wrap_pyfunction!(gaussian_blur, m)?)?;
     m.add_function(wrap_pyfunction!(detect_orb, m)?)?;
+    m.add_function(wrap_pyfunction!(orb_detect_accelerated, m)?)?;
     m.add_function(wrap_pyfunction!(match_descriptors, m)?)?;
     m.add_function(wrap_pyfunction!(get_resource_group, m)?)?;
     m.add_function(wrap_pyfunction!(create_resource_group, m)?)?;
