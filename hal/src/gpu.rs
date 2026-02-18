@@ -348,6 +348,32 @@ impl ComputeContext for GpuContext {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
     }
+
+    fn gaussian_blur<S: Storage<u8> + 'static>(
+        &self,
+        _input: &Tensor<u8, S>,
+        _sigma: f32,
+        _k_size: usize,
+    ) -> crate::Result<Tensor<u8, S>> {
+        Err(crate::Error::NotSupported("GPU gaussian_blur pending implementation".into()))
+    }
+
+    fn subtract<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug, S: Storage<T> + 'static>(
+        &self,
+        _a: &Tensor<T, S>,
+        _b: &Tensor<T, S>,
+    ) -> crate::Result<Tensor<T, S>> {
+        Err(crate::Error::NotSupported("GPU subtract pending implementation".into()))
+    }
+
+    fn match_descriptors<S: Storage<u8> + 'static>(
+        &self,
+        _query: &Tensor<u8, S>,
+        _train: &Tensor<u8, S>,
+        _ratio_threshold: f32,
+    ) -> crate::Result<cv_core::Matches> {
+        Err(crate::Error::NotSupported("GPU match_descriptors pending implementation".into()))
+    }
 }
 
 impl GpuContext {

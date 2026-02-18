@@ -208,6 +208,41 @@ impl<'a> ComputeDevice<'a> {
             ComputeDevice::Gpu(gpu) => gpu.fast_detect(input, threshold, non_max_suppression),
         }
     }
+
+    pub fn gaussian_blur<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        sigma: f32,
+        k_size: usize,
+    ) -> Result<Tensor<u8, S>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.gaussian_blur(input, sigma, k_size),
+            ComputeDevice::Gpu(gpu) => gpu.gaussian_blur(input, sigma, k_size),
+        }
+    }
+
+    pub fn subtract<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug, S: Storage<T> + 'static>(
+        &self,
+        a: &Tensor<T, S>,
+        b: &Tensor<T, S>,
+    ) -> Result<Tensor<T, S>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.subtract(a, b),
+            ComputeDevice::Gpu(gpu) => gpu.subtract(a, b),
+        }
+    }
+
+    pub fn match_descriptors<S: Storage<u8> + 'static>(
+        &self,
+        query: &Tensor<u8, S>,
+        train: &Tensor<u8, S>,
+        ratio_threshold: f32,
+    ) -> Result<cv_core::Matches> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.match_descriptors(query, train, ratio_threshold),
+            ComputeDevice::Gpu(gpu) => gpu.match_descriptors(query, train, ratio_threshold),
+        }
+    }
 }
 
 /// Get the best available compute device.

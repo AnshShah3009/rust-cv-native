@@ -1458,6 +1458,7 @@ dependencies = [
  "cv-calib3d",
  "cv-core",
  "cv-features",
+ "cv-hal",
  "cv-sfm",
  "image 0.25.9",
  "nalgebra",

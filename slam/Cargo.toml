@@ -8,6 +8,7 @@ cv-core = { path = "../core" }
 cv-features = { path = "../features" }
 cv-calib3d = { path = "../calib3d" }
 cv-sfm = { path = "../sfm" }
+cv-hal = { path = "../hal" }
 nalgebra = { workspace = true }
 image = { workspace = true }
 thiserror = { workspace = true }

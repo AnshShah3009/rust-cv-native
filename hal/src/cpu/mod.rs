@@ -801,6 +801,157 @@ impl ComputeContext for CpuBackend {
             _phantom: std::marker::PhantomData,
         })
     }
+
+    fn gaussian_blur<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        sigma: f32,
+        k_size: usize,
+    ) -> Result<Tensor<u8, S>> {
+        let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
+        let (h, w) = input.shape.hw();
+        let mut output_storage = S::new(h * w, 0);
+        let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+
+        // 1D Kernel
+        let mut kernel = vec![0.0f32; k_size];
+        let radius = k_size / 2;
+        let mut sum = 0.0;
+        for i in 0..k_size {
+            let x = (i as f32 - radius as f32);
+            kernel[i] = (-(x * x) / (2.0 * sigma * sigma)).exp();
+            sum += kernel[i];
+        }
+        for i in 0..k_size { kernel[i] /= sum; }
+
+        // Horizontal pass
+        let mut tmp = vec![0.0f32; h * w];
+        tmp.par_chunks_mut(w).enumerate().for_each(|(y, row_tmp)| {
+            for x in 0..w {
+                let mut val = 0.0;
+                for i in 0..k_size {
+                    let kx = x as i32 + i as i32 - radius as i32;
+                    let cl_kx = kx.clamp(0, w as i32 - 1) as usize;
+                    val += src[y * w + cl_kx] as f32 * kernel[i];
+                }
+                row_tmp[x] = val;
+            }
+        });
+
+        // Vertical pass
+        dst.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
+            for x in 0..w {
+                let mut val = 0.0;
+                for i in 0..k_size {
+                    let ky = y as i32 + i as i32 - radius as i32;
+                    let cl_ky = ky.clamp(0, h as i32 - 1) as usize;
+                    val += tmp[cl_ky * w + x] * kernel[i];
+                }
+                row_out[x] = val.round().clamp(0.0, 255.0) as u8;
+            }
+        });
+
+        Ok(Tensor {
+            storage: output_storage,
+            shape: input.shape,
+            dtype: input.dtype,
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    fn subtract<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug, S: Storage<T> + 'static>(
+        &self,
+        a: &Tensor<T, S>,
+        b: &Tensor<T, S>,
+    ) -> Result<Tensor<T, S>> {
+        let src_a = a.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("A not on CPU".into()))?;
+        let src_b = b.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("B not on CPU".into()))?;
+        
+        let mut output_storage = S::new(a.shape.len(), T::zeroed());
+        let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+
+        // This requires T to support subtraction. Since we use Pod + Debug, 
+        // we might need to restrict T or use dynamic dispatch if needed.
+        // For SIFT, T is usually f32.
+        
+        use std::any::TypeId;
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            let a_f32 = unsafe { std::mem::transmute::<&[T], &[f32]>(src_a) };
+            let b_f32 = unsafe { std::mem::transmute::<&[T], &[f32]>(src_b) };
+            let dst_f32 = unsafe { std::mem::transmute::<&mut [T], &mut [f32]>(dst) };
+            
+            dst_f32.par_iter_mut().enumerate().for_each(|(i, val)| {
+                *val = a_f32[i] - b_f32[i];
+            });
+        } else if TypeId::of::<T>() == TypeId::of::<u8>() {
+            let a_u8 = unsafe { std::mem::transmute::<&[T], &[u8]>(src_a) };
+            let b_u8 = unsafe { std::mem::transmute::<&[T], &[u8]>(src_b) };
+            let dst_u8 = unsafe { std::mem::transmute::<&mut [T], &mut [u8]>(dst) };
+            
+            dst_u8.par_iter_mut().enumerate().for_each(|(i, val)| {
+                *val = a_u8[i].saturating_sub(b_u8[i]);
+            });
+        } else {
+            return Err(crate::Error::NotSupported("Subtraction not implemented for this type".into()));
+        }
+
+        Ok(Tensor {
+            storage: output_storage,
+            shape: a.shape,
+            dtype: a.dtype,
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    fn match_descriptors<S: Storage<u8> + 'static>(
+        &self,
+        query: &Tensor<u8, S>,
+        train: &Tensor<u8, S>,
+        ratio_threshold: f32,
+    ) -> Result<cv_core::Matches> {
+        let q_slice = query.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Query not on CPU".into()))?;
+        let t_slice = train.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Train not on CPU".into()))?;
+        
+        let q_len = query.shape.height;
+        let t_len = train.shape.height;
+        let d_size = query.shape.width; // Desc size in bytes
+
+        let matches: Vec<cv_core::FeatureMatch> = (0..q_len).into_par_iter().filter_map(|qi| {
+            let q_desc = &q_slice[qi * d_size .. (qi + 1) * d_size];
+            let mut best_dist = u32::MAX;
+            let mut second_best = u32::MAX;
+            let mut best_idx = 0;
+
+            for ti in 0..t_len {
+                let t_desc = &t_slice[ti * d_size .. (ti + 1) * d_size];
+                let dist = hamming_dist(q_desc, t_desc);
+                
+                if dist < best_dist {
+                    second_best = best_dist;
+                    best_dist = dist;
+                    best_idx = ti;
+                } else if dist < second_best {
+                    second_best = dist;
+                }
+            }
+
+            if best_dist as f32 <= ratio_threshold * second_best as f32 {
+                Some(cv_core::FeatureMatch::new(qi as i32, best_idx as i32, best_dist as f32))
+            } else {
+                None
+            }
+        }).collect();
+
+        Ok(cv_core::Matches { matches, mask: None })
+    }
+}
+
+fn hamming_dist(a: &[u8], b: &[u8]) -> u32 {
+    let mut dist = 0;
+    for i in 0..a.len() {
+        dist += (a[i] ^ b[i]).count_ones();
+    }
+    dist
 }
 
 fn has_9_contiguous(vals: &[u8; 16], high: u8, low: u8) -> bool {

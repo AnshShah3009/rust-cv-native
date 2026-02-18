@@ -166,6 +166,31 @@ pub trait ComputeContext: Send + Sync {
         threshold: u8,
         non_max_suppression: bool,
     ) -> Result<Tensor<u8, S>>;
+
+    /// Gaussian Blur
+    fn gaussian_blur<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        sigma: f32,
+        k_size: usize,
+    ) -> Result<Tensor<u8, S>>;
+
+    /// Elementwise Subtraction (A - B)
+    /// Input: Signed output often needed for DoG, but we might use f32 or i16.
+    /// For SIFT DoG, we usually use f32.
+    fn subtract<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug, S: Storage<T> + 'static>(
+        &self,
+        a: &Tensor<T, S>,
+        b: &Tensor<T, S>,
+    ) -> Result<Tensor<T, S>>;
+
+    /// Feature Matching
+    fn match_descriptors<S: Storage<u8> + 'static>(
+        &self,
+        query: &Tensor<u8, S>,
+        train: &Tensor<u8, S>,
+        ratio_threshold: f32,
+    ) -> Result<cv_core::Matches>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
