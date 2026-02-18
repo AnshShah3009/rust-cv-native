@@ -331,6 +331,26 @@ impl ComputeContext for GpuContext {
         }
     }
 
+    fn tsdf_extract_mesh<S: Storage<f32> + 'static>(
+        &self,
+        tsdf_volume: &Tensor<f32, S>,
+        voxel_size: f32,
+        iso_level: f32,
+        max_triangles: u32,
+    ) -> crate::Result<Vec<crate::gpu_kernels::marching_cubes::Vertex>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let tsdf_ptr = tsdf_volume as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let tsdf_gpu = unsafe { &*tsdf_ptr };
+
+            crate::gpu_kernels::marching_cubes::extract_mesh(self, tsdf_gpu, voxel_size, iso_level, max_triangles)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
     fn optical_flow_lk<S: Storage<f32> + 'static>(
         &self,
         prev_pyramid: &[Tensor<f32, S>],
