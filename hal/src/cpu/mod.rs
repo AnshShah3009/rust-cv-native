@@ -802,6 +802,40 @@ impl ComputeContext for CpuBackend {
         Ok(())
     }
 
+    fn tsdf_raycast<S: Storage<f32> + 'static>(
+        &self,
+        _tsdf_volume: &Tensor<f32, S>,
+        _camera_pose: &[[f32; 4]; 4],
+        _intrinsics: &[f32; 4],
+        _image_size: (u32, u32),
+        _depth_range: (f32, f32),
+        _voxel_size: f32,
+        _truncation: f32,
+    ) -> Result<(Tensor<f32, S>, Tensor<f32, S>)> {
+        Err(crate::Error::NotSupported("CPU tsdf_raycast pending implementation".into()))
+    }
+
+    fn tsdf_extract_mesh<S: Storage<f32> + 'static>(
+        &self,
+        _tsdf_volume: &Tensor<f32, S>,
+        _voxel_size: f32,
+        _iso_level: f32,
+        _max_triangles: u32,
+    ) -> Result<Vec<crate::gpu_kernels::marching_cubes::Vertex>> {
+        Err(crate::Error::NotSupported("CPU tsdf_extract_mesh pending implementation".into()))
+    }
+
+    fn optical_flow_lk<S: Storage<f32> + 'static>(
+        &self,
+        _prev_pyramid: &[Tensor<f32, S>],
+        _next_pyramid: &[Tensor<f32, S>],
+        _points: &[[f32; 2]],
+        _window_size: usize,
+        _max_iters: u32,
+    ) -> Result<Vec<[f32; 2]>> {
+        Err(crate::Error::NotSupported("CPU optical_flow_lk pending implementation".into()))
+    }
+
     fn cvt_color<S: Storage<u8> + 'static>(
         &self,
         input: &Tensor<u8, S>,

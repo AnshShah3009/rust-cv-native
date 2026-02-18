@@ -134,6 +134,34 @@ pub trait ComputeContext: Send + Sync {
         truncation: f32,
     ) -> Result<()>;
 
+    fn tsdf_raycast<S: Storage<f32> + 'static>(
+        &self,
+        tsdf_volume: &Tensor<f32, S>,
+        camera_pose: &[[f32; 4]; 4],
+        intrinsics: &[f32; 4],
+        image_size: (u32, u32),
+        depth_range: (f32, f32),
+        voxel_size: f32,
+        truncation: f32,
+    ) -> Result<(Tensor<f32, S>, Tensor<f32, S>)>;
+
+    fn tsdf_extract_mesh<S: Storage<f32> + 'static>(
+        &self,
+        tsdf_volume: &Tensor<f32, S>,
+        voxel_size: f32,
+        iso_level: f32,
+        max_triangles: u32,
+    ) -> Result<Vec<crate::gpu_kernels::marching_cubes::Vertex>>;
+
+    fn optical_flow_lk<S: Storage<f32> + 'static>(
+        &self,
+        prev_pyramid: &[Tensor<f32, S>],
+        next_pyramid: &[Tensor<f32, S>],
+        points: &[[f32; 2]],
+        window_size: usize,
+        max_iters: u32,
+    ) -> Result<Vec<[f32; 2]>>;
+
     /// Color space conversion
     fn cvt_color<S: Storage<u8> + 'static>(
         &self,

@@ -2,7 +2,7 @@ use nalgebra::{Matrix3, Matrix4, Point2, Point3, Vector3};
 
 pub type Vector6<T> = nalgebra::Vector6<T>;
 
-pub trait CameraModel<T> {
+pub trait CameraModel<T: nalgebra::Scalar> {
     fn project(&self, point: &Point3<T>) -> Point2<T>;
     fn unproject(&self, pixel: &Point2<T>, depth: T) -> Point3<T>;
     fn width(&self) -> u32;

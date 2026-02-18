@@ -215,19 +215,20 @@ pub fn raycast(
     ctx.submit(encoder);
 
     use cv_core::TensorShape;
+    use cv_core::DataType;
     use std::marker::PhantomData;
 
     let depth_tensor = Tensor {
         storage: GpuStorage::from_buffer(Arc::new(output_depth), (w * h * 4) as usize),
         shape: TensorShape::new(1, h as usize, w as usize),
-        dtype: cv_core::DType::F32,
+        dtype: DataType::F32,
         _phantom: PhantomData,
     };
     
     let normal_tensor = Tensor {
         storage: GpuStorage::from_buffer(Arc::new(output_normals), (w * h * 16) as usize),
         shape: TensorShape::new(4, h as usize, w as usize), // 4 channels (x, y, z, pad)
-        dtype: cv_core::DType::F32,
+        dtype: DataType::F32,
         _phantom: PhantomData,
     };
 

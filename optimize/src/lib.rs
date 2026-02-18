@@ -1,9 +1,10 @@
 pub mod gpu_solver;
 pub mod sparse;
+pub mod pose_graph;
 
-use nalgebra::{DVector, DMatrix};
+use nalgebra::DVector;
 use cv_hal::compute::ComputeDevice;
-use sparse::{SparseMatrix, LinearSolver, CgSolver, Triplet};
+use sparse::{SparseMatrix, LinearSolver, CgSolver};
 
 pub struct SparseLMSolver<'a> {
     pub ctx: &'a ComputeDevice<'a>,

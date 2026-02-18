@@ -169,6 +169,49 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
+    pub fn tsdf_raycast<S: Storage<f32> + 'static>(
+        &self,
+        tsdf_volume: &Tensor<f32, S>,
+        camera_pose: &[[f32; 4]; 4],
+        intrinsics: &[f32; 4],
+        image_size: (u32, u32),
+        depth_range: (f32, f32),
+        voxel_size: f32,
+        truncation: f32,
+    ) -> Result<(Tensor<f32, S>, Tensor<f32, S>)> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.tsdf_raycast(tsdf_volume, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation),
+            ComputeDevice::Gpu(gpu) => gpu.tsdf_raycast(tsdf_volume, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation),
+        }
+    }
+
+    pub fn tsdf_extract_mesh<S: Storage<f32> + 'static>(
+        &self,
+        tsdf_volume: &Tensor<f32, S>,
+        voxel_size: f32,
+        iso_level: f32,
+        max_triangles: u32,
+    ) -> Result<Vec<crate::gpu_kernels::marching_cubes::Vertex>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles),
+            ComputeDevice::Gpu(gpu) => gpu.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles),
+        }
+    }
+
+    pub fn optical_flow_lk<S: Storage<f32> + 'static>(
+        &self,
+        prev_pyramid: &[Tensor<f32, S>],
+        next_pyramid: &[Tensor<f32, S>],
+        points: &[[f32; 2]],
+        window_size: usize,
+        max_iters: u32,
+    ) -> Result<Vec<[f32; 2]>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters),
+            ComputeDevice::Gpu(gpu) => gpu.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters),
+        }
+    }
+
     pub fn cvt_color<S: Storage<u8> + 'static>(
         &self,
         input: &Tensor<u8, S>,

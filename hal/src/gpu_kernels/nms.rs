@@ -3,6 +3,7 @@ use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
 use wgpu::util::DeviceExt;
+use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -75,11 +76,6 @@ pub fn nms_boxes(
     ))?;
 
     // Greedy selection on CPU
-    // We assume boxes are already sorted by score if user wants score-based selection.
-    // If not, we should have sorted them before uploading.
-    // But GpuContext requires GpuStorage, so they are already on GPU.
-    // This is a trade-off.
-    
     let mut kept = Vec::new();
     let mut suppressed = vec![false; num_boxes];
 
@@ -156,16 +152,18 @@ pub fn nms_pixel(
         pass.set_bind_group(0, &bind_group, &[]);
         let x = (w as u32 + 15) / 16;
         let y = (h as u32 + 15) / 16;
-        pass.dispatch_with_buffer_sizes(&[byte_size], &[x, y, 1]); // This is a helper or standard dispatch?
-        // Standard dispatch:
         pass.dispatch_workgroups(x, y, 1);
     }
     ctx.submit(encoder);
+    
+    use cv_core::TensorShape;
+    use cv_core::DataType;
+    use std::marker::PhantomData;
 
     Ok(Tensor {
         storage: GpuStorage::from_buffer(Arc::new(output_buffer), out_len),
         shape: input.shape,
         dtype: input.dtype,
-        _phantom: std::marker::PhantomData,
+        _phantom: PhantomData,
     })
 }
