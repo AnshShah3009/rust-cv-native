@@ -50,6 +50,7 @@ pub mod pointcloud;
 pub mod color;
 pub mod resize;
 pub mod bilateral;
+pub mod fast;
 
 /// Shader compilation utilities
 pub mod shaders {
@@ -293,10 +294,12 @@ pub mod buffer_utils {
         offset: u64,
         size: usize,
     ) -> crate::Result<Vec<T>> {
+        let aligned_size = (size + 3) & !3;
+        
         // Create a staging buffer
         let staging_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Staging Buffer"),
-            size: size as u64,
+            size: aligned_size as u64,
             usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -311,7 +314,7 @@ pub mod buffer_utils {
             offset,
             &staging_buffer,
             0,
-            size as u64,
+            aligned_size as u64,
         );
 
         let index = queue.submit(std::iter::once(encoder.finish()));
@@ -330,17 +333,13 @@ pub mod buffer_utils {
             .map_err(|e| crate::Error::DeviceError(format!("Buffer mapping failed: {}", e)))?;
 
         let data = slice.get_mapped_range();
-        let result = bytemuck::cast_slice(&data).to_vec();
-        
-        // DEBUG: Check first few bytes
-        if !result.is_empty() {
-            println!("  DEBUG read_buffer[0..4]: {:?}", &result[..4.min(result.len())]);
-        }
-
+        // Cast to aligned slice then truncate to original size if needed
+        let result_full: Vec<T> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         staging_buffer.unmap();
 
-        Ok(result)
+        let num_elements = size / std::mem::size_of::<T>();
+        Ok(result_full[..num_elements].to_vec())
     }
 }
 

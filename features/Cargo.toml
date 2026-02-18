@@ -24,3 +24,6 @@ pollster = { version = "0.3", optional = true }
 [features]
 default = []
 gpu = ["dep:wgpu", "dep:pollster"]
+
+[dev-dependencies]
+pollster = "0.3"

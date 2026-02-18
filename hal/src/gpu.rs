@@ -328,11 +328,25 @@ impl ComputeContext for GpuContext {
 
     fn fast_detect<S: Storage<u8> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
-        _threshold: u8,
-        _non_max_suppression: bool,
+        input: &Tensor<u8, S>,
+        threshold: u8,
+        non_max_suppression: bool,
     ) -> crate::Result<Tensor<u8, S>> {
-        Err(crate::Error::NotSupported("GPU FAST pending implementation".into()))
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
+            let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            let result_gpu = crate::gpu_kernels::fast::fast_detect(self, input_gpu, threshold, non_max_suppression)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<u8, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
     }
 }
 
