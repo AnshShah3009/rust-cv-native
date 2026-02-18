@@ -149,12 +149,26 @@ impl ComputeContext for GpuContext {
 
     fn warp<S: Storage<u8> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
-        _matrix: &[[f32; 3]; 3],
-        _new_shape: (usize, usize),
-        _typ: WarpType,
+        input: &Tensor<u8, S>,
+        matrix: &[[f32; 3]; 3],
+        new_shape: (usize, usize),
+        typ: WarpType,
     ) -> crate::Result<Tensor<u8, S>> {
-        Err(crate::Error::NotSupported("GPU Warp pending implementation".into()))
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
+            let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            let result_gpu = crate::gpu_kernels::warp::warp(self, input_gpu, matrix, new_shape, typ)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<u8, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
     }
 
     fn nms<S: Storage<f32> + 'static>(
@@ -247,15 +261,30 @@ impl ComputeContext for GpuContext {
 
     fn tsdf_integrate<S: Storage<f32> + 'static>(
         &self,
-        _depth_image: &Tensor<f32, S>,
-        _camera_pose: &[[f32; 4]; 4],
-        _intrinsics: &[f32; 4],
-        _tsdf_volume: &mut Tensor<f32, S>,
-        _weight_volume: &mut Tensor<f32, S>,
+        depth_image: &Tensor<f32, S>,
+        camera_pose: &[[f32; 4]; 4],
+        intrinsics: &[f32; 4],
+        tsdf_volume: &mut Tensor<f32, S>,
+        weight_volume: &mut Tensor<f32, S>,
         _voxel_size: f32,
         _truncation: f32,
     ) -> crate::Result<()> {
-        Err(crate::Error::NotSupported("GPU tsdf_integrate pending implementation".into()))
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let depth_ptr = depth_image as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let tsdf_ptr = tsdf_volume as *mut Tensor<f32, S> as *mut Tensor<f32, GpuStorage<f32>>;
+            let weight_ptr = weight_volume as *mut Tensor<f32, S> as *mut Tensor<f32, GpuStorage<f32>>;
+            
+            let depth_gpu = unsafe { &*depth_ptr };
+            let tsdf_gpu = unsafe { &mut *tsdf_ptr };
+            let weight_gpu = unsafe { &mut *weight_ptr };
+
+            crate::gpu_kernels::tsdf::integrate(self, depth_gpu, camera_pose, intrinsics, tsdf_gpu, weight_gpu, _voxel_size, _truncation)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
     }
 
     fn cvt_color<S: Storage<u8> + 'static>(

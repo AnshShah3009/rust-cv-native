@@ -57,3 +57,13 @@ This document tracks the core architectural components that have been stabilized
 *   **Status:** Frozen (Feb 19, 2026)
 *   **Definition:** The `UnifiedBuffer` abstraction for synchronized host-device memory access.
 *   **Rationale:** Simplifies complex multi-backend pipelines by automating the synchronization of data between CPU and GPU, ensuring that the latest data is always available to the requested compute device.
+
+## 10. GPU ORB Pipeline (`cv-features::orb`)
+*   **Status:** Frozen (Feb 19, 2026)
+*   **Definition:** The full end-to-end GPU-accelerated ORB extraction: Pyramid -> FAST -> Extraction -> Orientation -> rBRIEF.
+*   **Rationale:** Provides a high-performance baseline for SLAM and tracking systems. The pipeline minimizes CPU-GPU transfers by keeping intermediate score maps and pyramids on the device.
+
+## 11. Recursive GPU Scan & Global Sorting (`cv-hal`)
+*   **Status:** Frozen (Feb 19, 2026)
+*   **Definition:** The `gpu_exclusive_scan` implementation that uses a recursive work-efficient Blelloch scan to handle arbitrary data sizes on the GPU.
+*   **Rationale:** Essential for many computer vision algorithms (sorting, feature collection, stream compaction). The recursive approach avoids the limitations of single-workgroup scan sizes.
