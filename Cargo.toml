@@ -65,8 +65,8 @@ members = [
     "io",
     "objdetect",
     "3d", "rendering", "registration", "plot",
+    "examples",
 ]
-exclude = ["examples"]
 
 [workspace.dependencies]
 rayon = "1.10"

@@ -45,6 +45,10 @@ path = "src/imgproc_demo.rs"
 name = "features_demo"
 path = "src/features_demo.rs"
 
+[[example]]
+name = "orb_benchmark"
+path = "src/orb_benchmark.rs"
+
 [dependencies]
 cv-plot = { path = "../plot" }
 cv-core = { path = "../core" }
@@ -54,9 +58,11 @@ cv-scientific = { path = "../scientific" }
 cv-optimize = { path = "../optimize" }
 cv-3d = { path = "../3d" }
 cv-imgproc = { path = "../imgproc" }
-cv-features = { path = "../features" }
+cv-features = { path = "../features", features = ["gpu"] }
 cv-stereo = { path = "../stereo" }
 cv-calib3d = { path = "../calib3d" }
+cv-hal = { path = "../hal" }
+cv-runtime = { path = "../runtime" }
 nalgebra = "0.33"
 rand = "0.8"
 image = "0.25"

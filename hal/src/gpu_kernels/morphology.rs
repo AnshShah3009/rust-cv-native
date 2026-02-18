@@ -26,12 +26,16 @@ pub fn morphology(
     kernel: &Tensor<u8, GpuStorage<u8>>,
     iterations: u32,
 ) -> Result<Tensor<u8, GpuStorage<u8>>> {
+    if iterations == 0 {
+        return Ok(input.clone());
+    }
+
     let len = input.shape.len();
     let (h, w) = input.shape.hw();
     let (kh, kw) = kernel.shape.hw();
     let byte_size = ((len + 3) / 4 * 4) as u64;
 
-    // We implement Open/Close by calling Erode/Dilate twice for now
+    // Handle Open/Close
     if typ == MorphologyType::Open || typ == MorphologyType::Close {
         let (op1, op2) = if typ == MorphologyType::Open {
             (MorphologyType::Erode, MorphologyType::Dilate)
@@ -42,24 +46,18 @@ pub fn morphology(
         return morphology(ctx, &tmp, op2, kernel, iterations);
     }
 
-    let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Morphology Output"),
-        size: byte_size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    // Kernel mask needs to be u32 array for shader
-    // We convert the kernel tensor (u8) to u32 on GPU? 
-    // Ideally we should have uploaded it as u32. 
-    // For now, let's assume kernel is small and re-upload as u32 if it's CPU based, 
-    // but the trait says it's a Tensor<u8, S>.
-    // If S is GpuStorage, we have a problem (it's u8 on GPU).
-    // Let's implement a quick fix: copy kernel to CPU, convert to u32, upload.
-    // Or add a helper to HAL to convert buffers on GPU.
-    // For now, assume kernel is CPU based (common).
+    let usages = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
     
-    let k_data_u8 = kernel.storage.as_slice().ok_or_else(|| crate::Error::NotSupported("GPU Morphology currently requires CPU-based kernel mask".into()))?;
+    // We need an output buffer. If iterations > 1, we also need a temp buffer for ping-pong.
+    let output_buffer = ctx.get_buffer(byte_size, usages);
+    let mut temp_buffer: Option<wgpu::Buffer> = if iterations > 1 {
+        Some(ctx.get_buffer(byte_size, usages))
+    } else {
+        None
+    };
+
+    // Kernel mask handling
+    let k_data_u8 = kernel.storage.as_slice().ok_or_else(|| crate::Error::NotSupported("GPU Morphology requires CPU-based kernel mask".into()))?;
     let k_data_u32: Vec<u32> = k_data_u8.iter().map(|&v| v as u32).collect();
     
     let k_buf = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -74,36 +72,45 @@ pub fn morphology(
         kw: kw as u32,
         kh: kh as u32,
         typ: if typ == MorphologyType::Erode { 0 } else { 1 },
-        iterations: 1, // We handle iterations by looping in host or in shader (looping in host is easier for now)
+        iterations: 1,
     };
+
+    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Morph Params"),
+        contents: bytemuck::bytes_of(&params),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
 
     let shader_source = include_str!("../../shaders/morphology.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
 
-    let current_input = input.storage.buffer.clone();
-    let current_output = Arc::new(output_buffer);
-
-    for _ in 0..iterations {
-        let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Morph Params"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-
+    // Ping-pong state
+    // We don't want to modify original input.buffer.
+    // So for iteration 0: Input -> Output.
+    // If iterations > 1:
+    // Iteration 1: Output -> Temp.
+    // Iteration 2: Temp -> Output.
+    // ...
+    
+    let mut current_src: &wgpu::Buffer = &input.storage.buffer;
+    let mut current_dst: &wgpu::Buffer = &output_buffer;
+    
+    for i in 0..iterations {
+        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Morph Pass") });
+        
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Morph Bind Group"),
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: current_input.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: current_src.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: k_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: current_output.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: current_dst.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
             ],
         });
 
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             let wg_x = ((w as u32 + 3) / 4 + 15) / 16;
@@ -112,19 +119,39 @@ pub fn morphology(
         }
         ctx.submit(encoder);
         
-        // Setup for next iteration
-        if iterations > 1 {
-            // Need to copy current_output back to current_input? 
-            // Better: use a temporary ping-pong buffer.
-            // For now, let's just use one copy (slow but works).
-            let mut copy_encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-            copy_encoder.copy_buffer_to_buffer(&current_output, 0, &current_input, 0, byte_size);
-            ctx.submit(copy_encoder);
+        // Swap for next iteration
+        if i + 1 < iterations {
+            if i == 0 {
+                current_src = &output_buffer;
+                current_dst = temp_buffer.as_ref().unwrap();
+            } else {
+                std::mem::swap(&mut current_src, &mut current_dst);
+            }
         }
     }
 
+    // Result is in current_dst? No, the LAST pass wrote to current_dst.
+    // Let's re-trace:
+    // iter 0: src=input, dst=output. Result in output.
+    // if iterations=1: done. Result in output.
+    // if iterations=2:
+    // pass 0: src=input, dst=output. result in output. Swap -> src=output, dst=temp.
+    // pass 1: src=output, dst=temp. result in temp.
+    // Result in temp.
+    
+    // We need to return the buffer that has the final result.
+    // And return the other one to the pool.
+    
+    let result_handle = if std::ptr::eq(current_dst, &output_buffer) {
+        if let Some(tb) = temp_buffer { ctx.return_buffer(tb, usages); }
+        output_buffer
+    } else {
+        ctx.return_buffer(output_buffer, usages);
+        temp_buffer.unwrap()
+    };
+
     Ok(Tensor {
-        storage: GpuStorage::from_buffer(current_output, len),
+        storage: GpuStorage::from_buffer(Arc::new(result_handle), len),
         shape: input.shape,
         dtype: input.dtype,
         _phantom: PhantomData,

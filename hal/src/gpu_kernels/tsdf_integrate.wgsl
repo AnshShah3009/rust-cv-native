@@ -1,5 +1,5 @@
-// TSDF Integration Shader
-// Integrates depth frame into TSDF volume
+// TSDF Integration Shader (Voxel-centric)
+// Each thread processes one voxel, projecting it into the depth map.
 
 @group(0) @binding(0) var<storage, read> depth_image: array<f32>;
 @group(0) @binding(1) var<storage, read> color_image: array<u32>; // Packed RGBA
@@ -7,36 +7,55 @@
 @group(0) @binding(3) var<storage, read_write> weights: array<f32>;
 @group(0) @binding(4) var<storage, read_write> colors: array<u32>;
 
-@group(1) @binding(0) var<uniform> camera_pose: mat4x4<f32>;
+@group(1) @binding(0) var<uniform> world_to_camera: mat4x4<f32>;
 @group(1) @binding(1) var<uniform> intrinsics: vec4<f32>; // fx, fy, cx, cy
 @group(1) @binding(2) var<uniform> image_size: vec2<u32>; // width, height
 @group(1) @binding(3) var<uniform> voxel_size: f32;
 @group(1) @binding(4) var<uniform> truncation_distance: f32;
 @group(1) @binding(5) var<uniform> volume_size: vec3<u32>; // vx, vy, vz
 
-// Backproject pixel to 3D point in camera space
-fn unproject(u: u32, v: u32, depth: f32) -> vec3<f32> {
+// Project 3D point in camera space to 2D pixel coordinates
+fn project(p: vec3<f32>) -> vec2<f32> {
     let fx = intrinsics.x;
     let fy = intrinsics.y;
     let cx = intrinsics.z;
     let cy = intrinsics.w;
     
-    let x = (f32(u) - cx) * depth / fx;
-    let y = (f32(v) - cy) * depth / fy;
-    let z = depth;
+    let u = (p.x * fx / p.z) + cx;
+    let v = (p.y * fy / p.z) + cy;
     
-    return vec3<f32>(x, y, z);
+    return vec2<f32>(u, v);
 }
 
-// Get voxel index from 3D coordinates
-fn voxel_index(vx: u32, vy: u32, vz: u32) -> u32 {
-    return vz * volume_size.x * volume_size.y + vy * volume_size.x + vx;
-}
-
-@compute @workgroup_size(8, 8, 1)
+@compute @workgroup_size(8, 8, 8)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let u = global_id.x;
-    let v = global_id.y;
+    let vx = global_id.x;
+    let vy = global_id.y;
+    let vz = global_id.z;
+    
+    if (vx >= volume_size.x || vy >= volume_size.y || vz >= volume_size.z) {
+        return;
+    }
+    
+    // Voxel position in world space (assuming origin at 0,0,0)
+    let p_world = vec3<f32>(
+        (f32(vx) + 0.5) * voxel_size,
+        (f32(vy) + 0.5) * voxel_size,
+        (f32(vz) + 0.5) * voxel_size
+    );
+    
+    // Transform to camera space
+    let p_camera = (world_to_camera * vec4<f32>(p_world, 1.0)).xyz;
+    
+    // Check if point is in front of camera
+    if (p_camera.z <= 0.0) {
+        return;
+    }
+    
+    // Project to image
+    let uv = project(p_camera);
+    let u = u32(round(uv.x));
+    let v = u32(round(uv.y));
     
     if (u >= image_size.x || v >= image_size.y) {
         return;
@@ -45,60 +64,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pixel_idx = v * image_size.x + u;
     let depth = depth_image[pixel_idx];
     
-    // Skip invalid depth
     if (depth <= 0.0 || depth > 10.0) {
         return;
     }
     
-    // Backproject to camera space
-    let point_camera = unproject(u, v, depth);
+    // Signed distance
+    let dist = depth - p_camera.z;
     
-    // Transform to world space
-    let p_h = vec4<f32>(point_camera, 1.0);
-    let point_world = (camera_pose * p_h).xyz;
+    // If voxel is behind surface further than truncation, skip
+    if (dist < -truncation_distance) {
+        return;
+    }
     
-    // Ray direction (from camera center to point)
-    let camera_pos = camera_pose[3].xyz;
-    let ray_dir = normalize(point_world - camera_pos);
+    // Compute TSDF
+    let tsdf = clamp(dist / truncation_distance, -1.0, 1.0);
     
-    // March along ray and update voxels
-    let start_dist = max(0.0, depth - truncation_distance);
-    let end_dist = depth + truncation_distance;
-    let steps = u32((end_dist - start_dist) / voxel_size);
+    // Weighted update
+    let idx = vz * volume_size.x * volume_size.y + vy * volume_size.x + vx;
+    let old_tsdf = tsdf_values[idx];
+    let old_weight = weights[idx];
     
-    for (var i = 0u; i <= steps; i = i + 1u) {
-        let t = start_dist + f32(i) * voxel_size;
-        let voxel_pos = camera_pos + ray_dir * t;
-        
-        // Convert to voxel coordinates
-        let vx = u32(voxel_pos.x / voxel_size);
-        let vy = u32(voxel_pos.y / voxel_size);
-        let vz = u32(voxel_pos.z / voxel_size);
-        
-        // Check bounds
-        if (vx >= volume_size.x || vy >= volume_size.y || vz >= volume_size.z) {
-            continue;
-        }
-        
-        // Compute TSDF value
-        let dist = length(voxel_pos - point_world);
-        let sdf = select(-dist, dist, t > depth); // Negative if behind surface
-        let tsdf = clamp(sdf / truncation_distance, -1.0, 1.0);
-        
-        // Running average update
-        let idx = voxel_index(vx, vy, vz);
-        let old_tsdf = tsdf_values[idx];
-        let old_weight = weights[idx];
-        
-        let new_weight = min(old_weight + 1.0, 100.0); // Max weight = 100
-        let new_tsdf = (old_tsdf * old_weight + tsdf) / new_weight;
-        
-        tsdf_values[idx] = new_tsdf;
-        weights[idx] = new_weight;
-        
-        // Update color if close to surface
-        if (abs(tsdf) < 0.1) {
-            colors[idx] = color_image[pixel_idx];
-        }
+    // Standard TSDF weight: 1.0 per frame, capped at 50
+    let weight = 1.0;
+    let new_weight = min(old_weight + weight, 50.0);
+    let new_tsdf = (old_tsdf * old_weight + tsdf * weight) / new_weight;
+    
+    tsdf_values[idx] = new_tsdf;
+    weights[idx] = new_weight;
+    
+    // Color update if close to surface
+    if (dist > -truncation_distance && dist < truncation_distance * 0.5) {
+        colors[idx] = color_image[pixel_idx];
     }
 }
