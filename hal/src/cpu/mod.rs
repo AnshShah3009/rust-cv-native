@@ -27,6 +27,21 @@ impl CpuBackend {
     }
 }
 
+pub fn gaussian_kernel_1d(sigma: f32, size: usize) -> Vec<f32> {
+    let mut kernel = vec![0.0f32; size];
+    let radius = size / 2;
+    let mut sum = 0.0;
+    for i in 0..size {
+        let x = i as f32 - radius as f32;
+        kernel[i] = (-(x * x) / (2.0 * sigma * sigma)).exp();
+        sum += kernel[i];
+    }
+    for i in 0..size {
+        kernel[i] /= sum;
+    }
+    kernel
+}
+
 impl ComputeBackend for CpuBackend {
     fn backend_type(&self) -> BackendType {
         BackendType::Cpu
@@ -818,7 +833,7 @@ impl ComputeContext for CpuBackend {
         let radius = k_size / 2;
         let mut sum = 0.0;
         for i in 0..k_size {
-            let x = (i as f32 - radius as f32);
+            let x = i as f32 - radius as f32;
             kernel[i] = (-(x * x) / (2.0 * sigma * sigma)).exp();
             sum += kernel[i];
         }
@@ -1111,6 +1126,195 @@ impl ComputeContext for CpuBackend {
         }).collect();
 
         Ok(correspondences)
+    }
+
+    fn icp_accumulate<S: Storage<f32> + 'static>(
+        &self,
+        source: &Tensor<f32, S>,
+        target: &Tensor<f32, S>,
+        target_normals: &Tensor<f32, S>,
+        correspondences: &[(u32, u32)],
+        transform: &nalgebra::Matrix4<f32>,
+    ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
+        let src_slice = source.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Src not on CPU".into()))?;
+        let tgt_slice = target.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Tgt not on CPU".into()))?;
+        let norm_slice = target_normals.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Normals not on CPU".into()))?;
+
+        let mut ata = nalgebra::Matrix6::<f32>::zeros();
+        let mut atb = nalgebra::Vector6::<f32>::zeros();
+
+        for &(src_idx, tgt_idx) in correspondences {
+            let src_idx = src_idx as usize;
+            let tgt_idx = tgt_idx as usize;
+
+            let p_src = nalgebra::Point3::new(src_slice[src_idx * 4], src_slice[src_idx * 4 + 1], src_slice[src_idx * 4 + 2]);
+            let p_tgt = nalgebra::Point3::new(tgt_slice[tgt_idx * 4], tgt_slice[tgt_idx * 4 + 1], tgt_slice[tgt_idx * 4 + 2]);
+            let n_tgt = nalgebra::Vector3::new(norm_slice[tgt_idx * 4], norm_slice[tgt_idx * 4 + 1], norm_slice[tgt_idx * 4 + 2]);
+
+            let p_trans = transform.transform_point(&p_src);
+            let diff = p_trans - p_tgt;
+            let residual = diff.dot(&n_tgt);
+
+            let cross = p_trans.coords.cross(&n_tgt);
+            let jacobian = nalgebra::Vector6::new(n_tgt.x, n_tgt.y, n_tgt.z, cross.x, cross.y, cross.z);
+
+            ata += jacobian * jacobian.transpose();
+            atb += jacobian * residual;
+        }
+
+        Ok((ata, atb))
+    }
+
+    fn akaze_diffusion<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+        k: f32,
+        tau: f32,
+    ) -> crate::Result<Tensor<f32, S>> {
+        let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
+        let (h, w) = input.shape.hw();
+        let mut output_storage = S::new(input.shape.len(), 0.0);
+        let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+
+        let k2 = k * k;
+
+        dst.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
+            for x in 0..w {
+                let center = src[y * w + x];
+                
+                let n = src[if y > 0 { (y - 1) * w + x } else { y * w + x }];
+                let s = src[if y < h - 1 { (y + 1) * w + x } else { y * w + x }];
+                let west = src[if x > 0 { y * w + (x - 1) } else { y * w + x }];
+                let east = src[if x < w - 1 { y * w + (x + 1) } else { y * w + x }];
+
+                let grad_n = n - center;
+                let grad_s = s - center;
+                let grad_w = west - center;
+                let grad_e = east - center;
+
+                let g_n = 1.0 / (1.0 + grad_n * grad_n / k2);
+                let g_s = 1.0 / (1.0 + grad_s * grad_s / k2);
+                let g_w = 1.0 / (1.0 + grad_w * grad_w / k2);
+                let g_e = 1.0 / (1.0 + grad_e * grad_e / k2);
+
+                row_out[x] = center + tau * (g_n * grad_n + g_s * grad_s + g_w * grad_w + g_e * grad_e);
+            }
+        });
+
+        Ok(Tensor {
+            storage: output_storage,
+            shape: input.shape,
+            dtype: input.dtype,
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    fn akaze_derivatives<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+    ) -> crate::Result<(Tensor<f32, S>, Tensor<f32, S>, Tensor<f32, S>)> {
+        let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
+        let (h, w) = input.shape.hw();
+        
+        let mut lx_storage = S::new(input.shape.len(), 0.0);
+        let mut ly_storage = S::new(input.shape.len(), 0.0);
+        let mut ldet_storage = S::new(input.shape.len(), 0.0);
+        
+        let lx_slice = lx_storage.as_mut_slice().unwrap();
+        let ly_slice = ly_storage.as_mut_slice().unwrap();
+        let ldet_slice = ldet_storage.as_mut_slice().unwrap();
+
+        let get_val = |x: i32, y: i32| -> f32 {
+            let cx = x.clamp(0, w as i32 - 1) as usize;
+            let cy = y.clamp(0, h as i32 - 1) as usize;
+            src[cy * w + cx]
+        };
+
+        lx_slice.par_chunks_mut(w)
+            .zip(ly_slice.par_chunks_mut(w))
+            .zip(ldet_slice.par_chunks_mut(w))
+            .enumerate()
+            .for_each(|(y, ((row_lx, row_ly), row_ldet))| {
+                let y = y as i32;
+                for x in 0..w {
+                    let x = x as i32;
+                    let lx = (get_val(x + 1, y - 1) + 3.0 * get_val(x + 1, y) + get_val(x + 1, y + 1)) -
+                             (get_val(x - 1, y - 1) + 3.0 * get_val(x - 1, y) + get_val(x - 1, y + 1));
+                    
+                    let ly = (get_val(x - 1, y + 1) + 3.0 * get_val(x, y + 1) + get_val(x + 1, y + 1)) -
+                             (get_val(x - 1, y - 1) + 3.0 * get_val(x, y - 1) + get_val(x + 1, y - 1));
+
+                    row_lx[x as usize] = lx / 32.0;
+                    row_ly[x as usize] = ly / 32.0;
+
+                    let lxx = get_val(x + 1, y) + get_val(x - 1, y) - 2.0 * get_val(x, y);
+                    let lyy = get_val(x, y + 1) + get_val(x, y - 1) - 2.0 * get_val(x, y);
+                    let lxy = (get_val(x + 1, y + 1) + get_val(x - 1, y - 1) - get_val(x - 1, y + 1) - get_val(x + 1, y - 1)) / 4.0;
+
+                    row_ldet[x as usize] = lxx * lyy - lxy * lxy;
+                }
+            });
+
+        Ok((
+            Tensor { storage: lx_storage, shape: input.shape, dtype: input.dtype, _phantom: std::marker::PhantomData },
+            Tensor { storage: ly_storage, shape: input.shape, dtype: input.dtype, _phantom: std::marker::PhantomData },
+            Tensor { storage: ldet_storage, shape: input.shape, dtype: input.dtype, _phantom: std::marker::PhantomData },
+        ))
+    }
+
+    fn akaze_contrast_k<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+    ) -> crate::Result<f32> {
+        let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
+        let (h, w) = input.shape.hw();
+        
+        // Sample gradients
+        let mut mags: Vec<f32> = (1..h-1).into_par_iter().flat_map(|y| {
+            let mut row_mags = Vec::with_capacity(w);
+            for x in 1..w-1 {
+                let lx = src[y * w + x + 1] - src[y * w + x - 1];
+                let ly = src[(y + 1) * w + x] - src[(y - 1) * w + x];
+                row_mags.push((lx * lx + ly * ly).sqrt());
+            }
+            row_mags
+        }).collect();
+
+        if mags.is_empty() { return Ok(0.03); }
+        
+        mags.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let idx = (mags.len() as f32 * 0.7) as usize;
+        Ok(mags[idx.min(mags.len() - 1)])
+    }
+
+    fn spmv<S: Storage<f32> + 'static>(
+        &self,
+        row_ptr: &[u32],
+        col_indices: &[u32],
+        values: &[f32],
+        x: &Tensor<f32, S>,
+    ) -> crate::Result<Tensor<f32, S>> {
+        let x_slice = x.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("X not on CPU".into()))?;
+        let rows = row_ptr.len() - 1;
+        let mut y_storage = S::new(rows, 0.0);
+        let y_slice = y_storage.as_mut_slice().unwrap();
+
+        y_slice.par_iter_mut().enumerate().for_each(|(i, val)| {
+            let start = row_ptr[i] as usize;
+            let end = row_ptr[i + 1] as usize;
+            let mut sum = 0.0;
+            for j in start..end {
+                sum += values[j] * x_slice[col_indices[j] as usize];
+            }
+            *val = sum;
+        });
+
+        Ok(Tensor {
+            storage: y_storage,
+            shape: cv_core::TensorShape::new(1, rows, 1),
+            dtype: x.dtype,
+            _phantom: std::marker::PhantomData,
+        })
     }
 }
 

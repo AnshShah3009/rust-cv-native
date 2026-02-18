@@ -1,4 +1,4 @@
-use cv_core::{Tensor, CpuStorage, TensorShape, DataType};
+use cv_core::{Tensor, CpuStorage};
 use crate::storage::GpuStorage;
 use crate::gpu::GpuContext;
 use crate::gpu_kernels::buffer_utils;
@@ -38,6 +38,11 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T> for Tenso
     }
 }
 
+impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T> for Tensor<T, GpuStorage<T>> {
+    fn to_gpu(&self) -> crate::Result<Tensor<T, GpuStorage<T>>> { Ok(self.clone()) }
+    fn to_gpu_ctx(&self, _ctx: &GpuContext) -> crate::Result<Tensor<T, GpuStorage<T>>> { Ok(self.clone()) }
+}
+
 /// Extension trait for transferring data back to the CPU.
 pub trait TensorToCpu<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> {
     /// Downloads the tensor from the GPU using the global context.
@@ -66,5 +71,109 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToCpu<T> for Tenso
         ))?;
 
         Ok(Tensor::from_vec(data, self.shape))
+    }
+}
+
+impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToCpu<T> for Tensor<T, CpuStorage<T>> {
+    fn to_cpu(&self) -> crate::Result<Tensor<T, CpuStorage<T>>> { Ok(self.clone()) }
+    fn to_cpu_ctx(&self, _ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>> { Ok(self.clone()) }
+}
+
+/// Extension trait for type casting on GPU
+pub trait TensorCast {
+    fn to_f32_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<f32, GpuStorage<f32>>>;
+    fn to_u8_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<u8, GpuStorage<u8>>>;
+}
+
+impl TensorCast for Tensor<u8, GpuStorage<u8>> {
+    fn to_f32_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<f32, GpuStorage<f32>>> {
+        let size = self.shape.len();
+        let out_byte_size = (size * 4) as u64;
+        let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cast u8->f32 Output"),
+            size: out_byte_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let shader_source = include_str!("../shaders/cast.wgsl");
+        let pipeline = ctx.create_compute_pipeline(shader_source, "u8_to_f32");
+
+        let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cast u8->f32 Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.storage.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: output_buffer.as_entire_binding() },
+            ],
+        });
+
+        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            let workgroups = (size as u32 + 255) / 256;
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+        ctx.submit(encoder);
+
+        Ok(Tensor {
+            storage: GpuStorage::from_buffer(Arc::new(output_buffer), size),
+            shape: self.shape,
+            dtype: cv_core::DataType::F32,
+            _phantom: PhantomData,
+        })
+    }
+
+    fn to_u8_ctx(&self, _ctx: &GpuContext) -> crate::Result<Tensor<u8, GpuStorage<u8>>> {
+        Ok(self.clone())
+    }
+}
+
+impl TensorCast for Tensor<f32, GpuStorage<f32>> {
+    fn to_f32_ctx(&self, _ctx: &GpuContext) -> crate::Result<Tensor<f32, GpuStorage<f32>>> {
+        Ok(self.clone())
+    }
+
+    fn to_u8_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<u8, GpuStorage<u8>>> {
+        let size = self.shape.len();
+        let out_byte_size = ((size + 3) & !3) as u64; // Pack 4 bytes per u32
+        let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cast f32->u8 Output"),
+            size: out_byte_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let shader_source = include_str!("../shaders/cast.wgsl");
+        let pipeline = ctx.create_compute_pipeline(shader_source, "f32_to_u8");
+
+        let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cast f32->u8 Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                // Note: Bindings 2 and 3 in shader
+                wgpu::BindGroupEntry { binding: 2, resource: self.storage.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: output_buffer.as_entire_binding() },
+            ],
+        });
+
+        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            let workgroups = ((size as u32 / 4) + 255) / 256;
+            pass.dispatch_workgroups(workgroups.max(1), 1, 1);
+        }
+        ctx.submit(encoder);
+
+        Ok(Tensor {
+            storage: GpuStorage::from_buffer(Arc::new(output_buffer), size),
+            shape: self.shape,
+            dtype: cv_core::DataType::U8,
+            _phantom: PhantomData,
+        })
     }
 }

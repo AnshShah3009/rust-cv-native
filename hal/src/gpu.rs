@@ -208,7 +208,6 @@ impl ComputeContext for GpuContext {
     ) -> crate::Result<Tensor<f32, S>> {
         use std::any::TypeId;
         use crate::storage::GpuStorage;
-        use nalgebra::{Matrix4, Vector3};
 
         if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
             let input_ptr = points as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
@@ -352,19 +351,57 @@ impl ComputeContext for GpuContext {
 
     fn gaussian_blur<S: Storage<u8> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
-        _sigma: f32,
-        _k_size: usize,
+        input: &Tensor<u8, S>,
+        sigma: f32,
+        k_size: usize,
     ) -> crate::Result<Tensor<u8, S>> {
-        Err(crate::Error::NotSupported("GPU gaussian_blur pending implementation".into()))
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+        use crate::tensor_ext::TensorCast;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
+            let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            // We need f32 for blur accuracy
+            let input_f32 = input_gpu.to_f32_ctx(self)?;
+            let blurred_f32 = crate::gpu_kernels::convolve::gaussian_blur(self, &input_f32, sigma, k_size)?;
+            
+            // Convert back to u8
+            // TODO: Optimize this with a dedicated cast kernel if performance is an issue
+            let blurred_u8 = blurred_f32.to_u8_ctx(self)?;
+
+            let result = unsafe { std::ptr::read(&blurred_u8 as *const _ as *const Tensor<u8, S>) };
+            std::mem::forget(blurred_u8);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
     }
 
     fn subtract<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug, S: Storage<T> + 'static>(
         &self,
-        _a: &Tensor<T, S>,
-        _b: &Tensor<T, S>,
+        a: &Tensor<T, S>,
+        b: &Tensor<T, S>,
     ) -> crate::Result<Tensor<T, S>> {
-        Err(crate::Error::NotSupported("GPU subtract pending implementation".into()))
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<T>() == TypeId::of::<f32>() && TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let a_ptr = a as *const Tensor<T, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let b_ptr = b as *const Tensor<T, S> as *const Tensor<f32, GpuStorage<f32>>;
+            
+            let a_gpu = unsafe { &*a_ptr };
+            let b_gpu = unsafe { &*b_ptr };
+
+            let result_gpu = crate::gpu_kernels::subtract::subtract(self, a_gpu, b_gpu)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<T, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::NotSupported("GPU subtract only supports f32 for now".into()))
+        }
     }
 
     fn match_descriptors<S: Storage<u8> + 'static>(
@@ -523,6 +560,123 @@ impl ComputeContext for GpuContext {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
     }
+
+    fn icp_accumulate<S: Storage<f32> + 'static>(
+        &self,
+        source: &Tensor<f32, S>,
+        target: &Tensor<f32, S>,
+        target_normals: &Tensor<f32, S>,
+        correspondences: &[(u32, u32)],
+        transform: &nalgebra::Matrix4<f32>,
+    ) -> crate::Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let src_ptr = source as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let tgt_ptr = target as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let n_ptr = target_normals as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            
+            let src_gpu = unsafe { &*src_ptr };
+            let tgt_gpu = unsafe { &*tgt_ptr };
+            let n_gpu = unsafe { &*n_ptr };
+
+            crate::gpu_kernels::icp::icp_accumulate(self, src_gpu, tgt_gpu, n_gpu, correspondences, transform)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn akaze_diffusion<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+        k: f32,
+        tau: f32,
+    ) -> crate::Result<Tensor<f32, S>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let input_ptr = input as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            let result_gpu = crate::gpu_kernels::akaze::akaze_diffusion(self, input_gpu, k, tau)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<f32, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn akaze_derivatives<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+    ) -> crate::Result<(Tensor<f32, S>, Tensor<f32, S>, Tensor<f32, S>)> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let input_ptr = input as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            let (lx_gpu, ly_gpu, ldet_gpu) = crate::gpu_kernels::akaze::akaze_derivatives(self, input_gpu)?;
+
+            let lx = unsafe { std::ptr::read(&lx_gpu as *const _ as *const Tensor<f32, S>) };
+            let ly = unsafe { std::ptr::read(&ly_gpu as *const _ as *const Tensor<f32, S>) };
+            let ldet = unsafe { std::ptr::read(&ldet_gpu as *const _ as *const Tensor<f32, S>) };
+            
+            std::mem::forget(lx_gpu);
+            std::mem::forget(ly_gpu);
+            std::mem::forget(ldet_gpu);
+            
+            Ok((lx, ly, ldet))
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn akaze_contrast_k<S: Storage<f32> + 'static>(
+        &self,
+        input: &Tensor<f32, S>,
+    ) -> crate::Result<f32> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let input_ptr = input as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let input_gpu = unsafe { &*input_ptr };
+
+            crate::gpu_kernels::akaze::akaze_contrast_k(self, input_gpu)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn spmv<S: Storage<f32> + 'static>(
+        &self,
+        row_ptr: &[u32],
+        col_indices: &[u32],
+        values: &[f32],
+        x: &Tensor<f32, S>,
+    ) -> crate::Result<Tensor<f32, S>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let x_ptr = x as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let x_gpu = unsafe { &*x_ptr };
+
+            let result_gpu = crate::gpu_kernels::sparse::spmv(self, row_ptr, col_indices, values, x_gpu)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<f32, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
 }
 
 impl GpuContext {
@@ -652,5 +806,41 @@ mod tests {
             Ok(c) => println!("GPU Context created: {:?}", c.device),
             Err(e) => println!("GPU initialization failed (expected on some CI): {}", e),
         }
+    }
+
+    #[test]
+    fn test_gaussian_blur_gpu_parity() {
+        let gpu = if let Some(g) = GpuContext::global() { g } else { return; };
+        let cpu = crate::cpu::CpuBackend::new().unwrap();
+        
+        let width = 64usize;
+        let height = 64usize;
+        let mut data = vec![0u8; width * height];
+        for i in 0..data.len() { data[i] = (i % 255) as u8; }
+        
+        let shape = cv_core::TensorShape::new(1, height, width);
+        let tensor_cpu = cv_core::CpuTensor::from_vec(data, shape);
+        
+        // GPU execution
+        use crate::tensor_ext::{TensorToGpu, TensorToCpu};
+        let tensor_gpu = tensor_cpu.to_gpu_ctx(gpu).unwrap();
+        let blurred_gpu = gpu.gaussian_blur(&tensor_gpu, 1.5, 7).unwrap();
+        let res_gpu = blurred_gpu.to_cpu_ctx(gpu).unwrap();
+        
+        // CPU execution
+        let res_cpu = cpu.gaussian_blur(&tensor_cpu, 1.5, 7).unwrap();
+        
+        // Check equality
+        let slice_gpu = res_gpu.as_slice();
+        let slice_cpu = res_cpu.as_slice();
+        
+        let mut diff_count = 0;
+        for i in 0..slice_gpu.len() {
+            if (slice_gpu[i] as i32 - slice_cpu[i] as i32).abs() > 1 {
+                diff_count += 1;
+            }
+        }
+        
+        assert!(diff_count < (width * height) / 100, "Too many differences between GPU and CPU blur: {}", diff_count);
     }
 }
