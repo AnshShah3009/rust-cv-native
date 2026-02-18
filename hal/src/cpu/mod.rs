@@ -306,19 +306,64 @@ impl ComputeContext for CpuBackend {
         let (kh, kw) = kernel.shape.hw();
         let (cx, cy) = (kw / 2, kh / 2);
 
-        let mut current_data = src_data.to_vec();
-        let mut next_data = vec![0u8; src_data.len()];
+        if iterations == 0 {
+            return Ok(input.clone());
+        }
+
+        let pool = cv_core::BufferPool::global();
+        let mut current_vec = pool.get(src_data.len());
+        current_vec.copy_from_slice(src_data);
+        
+        let mut next_vec = pool.get(src_data.len());
 
         for _ in 0..iterations {
-            next_data.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
-                for x in 0..w {
+            let src = &current_vec;
+            next_vec.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
+                let y = y as isize;
+                let mut x = 0;
+                
+                // SIMD path (32 pixels at a time)
+                while x + 32 <= w {
+                    let mut res_v = if typ == MorphologyType::Erode { u8x32::splat(255) } else { u8x32::ZERO };
+                    
+                    for ky in 0..kh {
+                        let sy = (y + ky as isize - cy as isize).clamp(0, h as isize - 1) as usize;
+                        let row_src = &src[sy * w .. (sy + 1) * w];
+                        
+                        for kx in 0..kw {
+                            if k_data[ky * kw + kx] == 0 { continue; }
+                            let sx_base = x as isize + kx as isize - cx as isize;
+                            
+                            // Load 32 bytes with clamping
+                            let mut bytes = [0u8; 32];
+                            for i in 0..32 {
+                                let sx = (sx_base + i as isize).clamp(0, w as isize - 1) as usize;
+                                bytes[i] = row_src[sx];
+                            }
+                            
+                            let v = u8x32::from(bytes);
+                            if typ == MorphologyType::Erode {
+                                res_v = res_v.min(v);
+                            } else {
+                                res_v = res_v.max(v);
+                            }
+                        }
+                    }
+                    
+                    let res_arr: [u8; 32] = res_v.into();
+                    row_out[x..x+32].copy_from_slice(&res_arr);
+                    x += 32;
+                }
+
+                // Scalar tail
+                for cx_idx in x..w {
                     let mut val = if typ == MorphologyType::Erode { 255u8 } else { 0u8 };
-                    for j in 0..kh {
-                        for i in 0..kw {
-                            if k_data[j * kw + i] == 0 { continue; }
-                            let sy = (y as isize + j as isize - cy as isize).clamp(0, h as isize - 1) as usize;
-                            let sx = (x as isize + i as isize - cx as isize).clamp(0, w as isize - 1) as usize;
-                            let v = current_data[sy * w + sx];
+                    for ky in 0..kh {
+                        let sy = (y + ky as isize - cy as isize).clamp(0, h as isize - 1) as usize;
+                        for kx in 0..kw {
+                            if k_data[ky * kw + kx] == 0 { continue; }
+                            let sx = (cx_idx as isize + kx as isize - cx as isize).clamp(0, w as isize - 1) as usize;
+                            let v = src[sy * w + sx];
                             if typ == MorphologyType::Erode {
                                 val = val.min(v);
                             } else {
@@ -326,18 +371,23 @@ impl ComputeContext for CpuBackend {
                             }
                         }
                     }
-                    row_out[x] = val;
+                    row_out[cx_idx] = val;
                 }
             });
-            std::mem::swap(&mut current_data, &mut next_data);
+            std::mem::swap(&mut current_vec, &mut next_vec);
         }
 
-        Ok(Tensor {
-            storage: S::from_vec(current_data),
+        let result = Tensor {
+            storage: S::from_vec(current_vec.clone()),
             shape: input.shape,
             dtype: input.dtype,
             _phantom: std::marker::PhantomData,
-        })
+        };
+        
+        pool.return_buffer(current_vec);
+        pool.return_buffer(next_vec);
+        
+        Ok(result)
     }
 
     fn warp<S: Storage<u8> + 'static>(
@@ -686,15 +736,70 @@ impl ComputeContext for CpuBackend {
 
     fn tsdf_integrate<S: Storage<f32> + 'static>(
         &self,
-        _depth_image: &Tensor<f32, S>,
-        _camera_pose: &[[f32; 4]; 4],
-        _intrinsics: &[f32; 4],
-        _tsdf_volume: &mut Tensor<f32, S>,
-        _weight_volume: &mut Tensor<f32, S>,
-        _voxel_size: f32,
-        _truncation: f32,
+        depth_image: &Tensor<f32, S>,
+        camera_pose: &[[f32; 4]; 4], // World-to-camera
+        intrinsics: &[f32; 4],
+        tsdf_volume: &mut Tensor<f32, S>,
+        weight_volume: &mut Tensor<f32, S>,
+        voxel_size: f32,
+        truncation: f32,
     ) -> Result<()> {
-        Err(crate::Error::NotSupported("CPU tsdf_integrate pending implementation".into()))
+        let depth = depth_image.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Depth not on CPU".into()))?;
+        let tsdf = tsdf_volume.storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("TSDF not on CPU".into()))?;
+        let weights = weight_volume.storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Weights not on CPU".into()))?;
+
+        let (img_h, img_w) = depth_image.shape.hw();
+        let (vx, vy, vz) = (tsdf_volume.shape.width, tsdf_volume.shape.height, tsdf_volume.shape.channels);
+        
+        let fx = intrinsics[0];
+        let fy = intrinsics[1];
+        let cx = intrinsics[2];
+        let cy = intrinsics[3];
+
+        // Rayon processes planes of the volume
+        tsdf.par_chunks_mut(vx * vy).zip(weights.par_chunks_mut(vx * vy)).enumerate().for_each(|(z_idx, (tsdf_plane, weight_plane))| {
+            for y_idx in 0..vy {
+                for x_idx in 0..vx {
+                    // Voxel world position
+                    let p_world = [
+                        (x_idx as f32 + 0.5) * voxel_size,
+                        (y_idx as f32 + 0.5) * voxel_size,
+                        (z_idx as f32 + 0.5) * voxel_size,
+                    ];
+
+                    // Transform to camera space
+                    let px = camera_pose[0][0] * p_world[0] + camera_pose[0][1] * p_world[1] + camera_pose[0][2] * p_world[2] + camera_pose[0][3];
+                    let py = camera_pose[1][0] * p_world[0] + camera_pose[1][1] * p_world[1] + camera_pose[1][2] * p_world[2] + camera_pose[1][3];
+                    let pz = camera_pose[2][0] * p_world[0] + camera_pose[2][1] * p_world[1] + camera_pose[2][2] * p_world[2] + camera_pose[2][3];
+
+                    if pz <= 0.0 { continue; }
+
+                    // Project to image
+                    let u = (px * fx / pz + cx).round() as i32;
+                    let v = (py * fy / pz + cy).round() as i32;
+
+                    if u < 0 || u >= img_w as i32 || v < 0 || v >= img_h as i32 { continue; }
+
+                    let d = depth[v as usize * img_w + u as usize];
+                    if d <= 0.0 || d > 10.0 { continue; }
+
+                    let dist = d - pz;
+                    if dist < -truncation { continue; }
+
+                    let tsdf_val = (dist / truncation).clamp(-1.0, 1.0);
+                    let idx = y_idx * vx + x_idx;
+                    
+                    let old_w = weight_plane[idx];
+                    let old_v = tsdf_plane[idx];
+                    
+                    let new_w = (old_w + 1.0).min(50.0);
+                    tsdf_plane[idx] = (old_v * old_w + tsdf_val) / new_w;
+                    weight_plane[idx] = new_w;
+                }
+            }
+        });
+
+        Ok(())
     }
 
     fn cvt_color<S: Storage<u8> + 'static>(

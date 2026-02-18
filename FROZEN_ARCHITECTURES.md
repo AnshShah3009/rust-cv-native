@@ -28,6 +28,13 @@ This document tracks the core architectural components that have been stabilized
     4.  Return buffer to `BufferPool`.
 *   **Rationale:** Provides $O(K)$ complexity (vs $O(K^2)$) and minimizes allocation overhead. This pattern is the mandatory standard for all separable linear filters on CPU.
 
+## 12. SIMD Morphology & Parallel TSDF (`hal/src/cpu/mod.rs`)
+*   **Status:** Frozen (Feb 19, 2026)
+*   **Definition:** 
+    - **Morphology:** Vectorized `u8x32` min/max operations for erosion and dilation.
+    - **TSDF:** Voxel-centric integration parallelized over volume planes using Rayon.
+*   **Rationale:** Ensures that the CPU backend remains a viable high-performance fallback for systems without compatible GPUs, maintaining algorithmic parity with the GPU kernels.
+
 ## 4. GPU Multi-Pass Orchestration (`hal/src/gpu_kernels/radix_sort.rs`)
 *   **Status:** Frozen (Feb 19, 2026)
 *   **Definition:** The recursive GPU-side orchestration for algorithms requiring global state (e.g., Radix Sort and Prefix Sum).
