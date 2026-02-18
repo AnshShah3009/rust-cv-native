@@ -191,6 +191,17 @@ pub trait ComputeContext: Send + Sync {
         train: &Tensor<u8, S>,
         ratio_threshold: f32,
     ) -> Result<cv_core::Matches>;
+
+    /// SIFT Local Extrema Detection
+    /// Finds local maxima/minima in 3x3x3 scale-space neighborhood
+    fn sift_extrema<S: Storage<f32> + 'static>(
+        &self,
+        dog_prev: &Tensor<f32, S>,
+        dog_curr: &Tensor<f32, S>,
+        dog_next: &Tensor<f32, S>,
+        threshold: f32,
+        edge_threshold: f32,
+    ) -> Result<Tensor<u8, S>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

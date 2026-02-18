@@ -243,6 +243,20 @@ impl<'a> ComputeDevice<'a> {
             ComputeDevice::Gpu(gpu) => gpu.match_descriptors(query, train, ratio_threshold),
         }
     }
+
+    pub fn sift_extrema<S: Storage<f32> + 'static>(
+        &self,
+        dog_prev: &Tensor<f32, S>,
+        dog_curr: &Tensor<f32, S>,
+        dog_next: &Tensor<f32, S>,
+        threshold: f32,
+        edge_threshold: f32,
+    ) -> Result<Tensor<u8, S>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold),
+            ComputeDevice::Gpu(gpu) => gpu.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold),
+        }
+    }
 }
 
 /// Get the best available compute device.

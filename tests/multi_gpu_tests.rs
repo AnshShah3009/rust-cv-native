@@ -52,7 +52,48 @@ fn test_cross_device_parity() {
         test_resize_parity(&cpu, &gpu, &info.name);
         test_bilateral_parity(&cpu, &gpu, &info.name);
         test_fast_parity(&cpu, &gpu, &info.name);
+        test_matching_parity(&cpu, &gpu, &info.name);
     }
+}
+
+fn test_matching_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
+    let q_len = 50;
+    let t_len = 100;
+    let d_size = 32;
+    
+    let mut q_data = vec![0u8; q_len * d_size];
+    let mut t_data = vec![0u8; t_len * d_size];
+    
+    // Create some exact matches
+    for i in 0..q_len {
+        for j in 0..d_size {
+            let val = (i + j) as u8;
+            q_data[i * d_size + j] = val;
+            t_data[i * d_size + j] = val; // Direct match at same index
+        }
+    }
+    
+    let query_cpu = Tensor::from_vec(q_data, TensorShape::new(1, q_len, d_size));
+    let train_cpu = Tensor::from_vec(t_data, TensorShape::new(1, t_len, d_size));
+    
+    let query_gpu = query_cpu.to_gpu_ctx(gpu).unwrap();
+    let train_gpu = train_cpu.to_gpu_ctx(gpu).unwrap();
+    
+    let ratio = 0.8f32;
+    
+    // CPU
+    let res_cpu = cpu.match_descriptors(&query_cpu, &train_cpu, ratio).unwrap();
+    
+    // GPU
+    let res_gpu = gpu.match_descriptors(&query_gpu, &train_gpu, ratio).unwrap();
+    
+    assert_eq!(res_cpu.matches.len(), res_gpu.matches.len(), "Match count mismatch on {}", gpu_name);
+    for i in 0..res_cpu.matches.len() {
+        assert_eq!(res_cpu.matches[i].query_idx, res_gpu.matches[i].query_idx);
+        assert_eq!(res_cpu.matches[i].train_idx, res_gpu.matches[i].train_idx);
+        assert_eq!(res_cpu.matches[i].distance, res_gpu.matches[i].distance);
+    }
+    println!("  ✓ Matching parity passed for {}", gpu_name);
 }
 
 fn test_fast_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {

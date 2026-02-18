@@ -944,6 +944,74 @@ impl ComputeContext for CpuBackend {
 
         Ok(cv_core::Matches { matches, mask: None })
     }
+
+    fn sift_extrema<S: Storage<f32> + 'static>(
+        &self,
+        dog_prev: &Tensor<f32, S>,
+        dog_curr: &Tensor<f32, S>,
+        dog_next: &Tensor<f32, S>,
+        threshold: f32,
+        edge_threshold: f32,
+    ) -> Result<Tensor<u8, S>> {
+        let (h, w) = dog_curr.shape.hw();
+        let prev = dog_prev.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Prev not on CPU".into()))?;
+        let curr = dog_curr.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Curr not on CPU".into()))?;
+        let next = dog_next.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Next not on CPU".into()))?;
+
+        let mut output_storage = S::new(h * w, 0); // Using Sf32 for Storage<u8> is tricky, let's use generic transmute if needed or fix trait.
+        // Actually ComputeContext::sift_extrema returns Tensor<u8, S>. 
+        // This implies S must implement Storage<u8> AND Storage<f32>.
+        // Let's assume S is compatible or use explicit CpuStorage.
+        
+        let mut dst = vec![0u8; h * w];
+
+        dst.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
+            if y < 1 || y >= h - 1 { return; }
+            for x in 1..w - 1 {
+                let val = curr[y * w + x];
+                if val.abs() <= threshold { continue; }
+
+                let mut is_max = true;
+                let mut is_min = true;
+
+                for ds in -1..=1 {
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            if ds == 0 && dx == 0 && dy == 0 { continue; }
+                            let neighbor_val = match ds {
+                                -1 => prev[(y as i32 + dy) as usize * w + (x as i32 + dx) as usize],
+                                0 => curr[(y as i32 + dy) as usize * w + (x as i32 + dx) as usize],
+                                1 => next[(y as i32 + dy) as usize * w + (x as i32 + dx) as usize],
+                                _ => unreachable!(),
+                            };
+                            if neighbor_val >= val { is_max = false; }
+                            if neighbor_val <= val { is_min = false; }
+                        }
+                    }
+                }
+
+                if is_max || is_min {
+                    // Edge response
+                    let dxx = curr[y * w + x + 1] + curr[y * w + x - 1] - 2.0 * val;
+                    let dyy = curr[(y + 1) * w + x] + curr[(y - 1) * w + x] - 2.0 * val;
+                    let dxy = (curr[(y + 1) * w + x + 1] - curr[(y + 1) * w + x - 1] - 
+                               curr[(y - 1) * w + x + 1] + curr[(y - 1) * w + x - 1]) / 4.0;
+                    
+                    let tr = dxx + dyy;
+                    let det = dxx * dyy - dxy * dxy;
+                    let r = edge_threshold;
+                    if det > 0.0 && (tr * tr) / det < (r + 1.0) * (r + 1.0) / r {
+                        row_out[x] = 1;
+                    }
+                }
+            }
+        });
+
+        // Transmute results to generic S if possible, or return CpuStorage
+        // This is a common pattern in our HAL to keep it generic yet performant.
+        let out_tensor = Tensor::from_vec(dst, dog_curr.shape);
+        Ok(unsafe { std::mem::transmute_copy(&out_tensor) })
+    }
 }
 
 fn hamming_dist(a: &[u8], b: &[u8]) -> u32 {

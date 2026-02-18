@@ -51,6 +51,8 @@ pub mod color;
 pub mod resize;
 pub mod bilateral;
 pub mod fast;
+pub mod matching;
+pub mod sift;
 
 /// Shader compilation utilities
 pub mod shaders {

@@ -80,8 +80,43 @@ pub fn fast_detect(
     };
 
     if non_max_suppression {
-        // TODO: Implement GPU NMS for FAST
-        Ok(score_map)
+        let nms_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("FAST NMS Output"),
+            size: byte_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let nms_shader_source = include_str!("../../shaders/fast_nms.wgsl");
+        let nms_pipeline = ctx.create_compute_pipeline(nms_shader_source, "main");
+
+        let nms_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("FAST NMS Bind Group"),
+            layout: &nms_pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: score_map.storage.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: nms_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            ],
+        });
+
+        let mut nms_encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = nms_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+            pass.set_pipeline(&nms_pipeline);
+            pass.set_bind_group(0, &nms_bind_group, &[]);
+            let x = ((w as u32 + 3) / 4 + 15) / 16;
+            let y = (h as u32 + 15) / 16;
+            pass.dispatch_workgroups(x, y, 1);
+        }
+        ctx.submit(nms_encoder);
+
+        Ok(Tensor {
+            storage: GpuStorage::from_buffer(Arc::new(nms_buffer), out_len),
+            shape: score_map.shape,
+            dtype: score_map.dtype,
+            _phantom: PhantomData,
+        })
     } else {
         Ok(score_map)
     }

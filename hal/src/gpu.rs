@@ -368,11 +368,53 @@ impl ComputeContext for GpuContext {
 
     fn match_descriptors<S: Storage<u8> + 'static>(
         &self,
-        _query: &Tensor<u8, S>,
-        _train: &Tensor<u8, S>,
-        _ratio_threshold: f32,
+        query: &Tensor<u8, S>,
+        train: &Tensor<u8, S>,
+        ratio_threshold: f32,
     ) -> crate::Result<cv_core::Matches> {
-        Err(crate::Error::NotSupported("GPU match_descriptors pending implementation".into()))
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
+            let q_ptr = query as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+            let t_ptr = train as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
+            let q_gpu = unsafe { &*q_ptr };
+            let t_gpu = unsafe { &*t_ptr };
+
+            crate::gpu_kernels::matching::match_descriptors(self, q_gpu, t_gpu, ratio_threshold)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn sift_extrema<S: Storage<f32> + 'static>(
+        &self,
+        dog_prev: &Tensor<f32, S>,
+        dog_curr: &Tensor<f32, S>,
+        dog_next: &Tensor<f32, S>,
+        threshold: f32,
+        edge_threshold: f32,
+    ) -> crate::Result<Tensor<u8, S>> {
+        use std::any::TypeId;
+        use crate::storage::GpuStorage;
+
+        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
+            let p_ptr = dog_prev as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let c_ptr = dog_curr as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            let n_ptr = dog_next as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
+            
+            let p_gpu = unsafe { &*p_ptr };
+            let c_gpu = unsafe { &*c_ptr };
+            let n_gpu = unsafe { &*n_ptr };
+
+            let result_gpu = crate::gpu_kernels::sift::sift_extrema(self, p_gpu, c_gpu, n_gpu, threshold, edge_threshold)?;
+
+            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<u8, S>) };
+            std::mem::forget(result_gpu);
+            Ok(result)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
     }
 }
 
