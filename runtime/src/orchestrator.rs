@@ -68,6 +68,7 @@ pub struct ResourceGroup {
     pub cores: Vec<usize>,
     pub policy: GroupPolicy,
     device: ComputeDevice<'static>,
+    active_tasks: AtomicUsize,
 }
 
 impl ResourceGroup {
@@ -93,6 +94,7 @@ impl ResourceGroup {
             cores: core_ids.clone().unwrap_or_default(),
             policy,
             device: device.unwrap_or_else(get_device),
+            active_tasks: AtomicUsize::new(0),
         })
     }
 
@@ -155,6 +157,34 @@ impl ResourceGroup {
     {
         self.backend.read().unwrap().install(f)
     }
+
+    /// Run a task in this resource group. 
+    /// If this is an isolated group, it uses `install` to ensure all parallel subtasks 
+    /// (e.g. from Rayon) run on this group's threads.
+    pub fn run<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send,
+        R: Send,
+    {
+        self.active_tasks.fetch_add(1, Ordering::SeqCst);
+        let result = self.install(f);
+        self.active_tasks.fetch_sub(1, Ordering::SeqCst);
+        result
+    }
+
+    /// Parallel join using this group's thread pool.
+    pub fn join<A, B, RA, RB>(&self, oper_a: A, oper_b: B) -> (RA, RB)
+    where
+        A: FnOnce() -> RA + Send,
+        B: FnOnce() -> RB + Send,
+        RA: Send,
+        RB: Send,
+    {
+        self.active_tasks.fetch_add(1, Ordering::SeqCst);
+        let result = self.install(|| rayon::join(oper_a, oper_b));
+        self.active_tasks.fetch_sub(1, Ordering::SeqCst);
+        result
+    }
     
     pub fn current_num_threads(&self) -> usize {
         self.backend.read().unwrap().current_num_threads()
@@ -162,6 +192,10 @@ impl ResourceGroup {
 
     pub fn device(&self) -> ComputeDevice<'static> {
         self.device
+    }
+
+    pub fn load(&self) -> usize {
+        self.active_tasks.load(Ordering::Relaxed)
     }
 }
 
@@ -230,6 +264,47 @@ impl TaskScheduler {
         Ok(self.groups.lock()
             .map_err(|_| crate::Error::ConcurrencyError("groups mutex poisoned".to_string()))?
             .get(name).cloned())
+    }
+
+    /// Finds the best available resource group for a given device type.
+    /// Prefers groups with the least active tasks.
+    pub fn get_best_group(&self, backend_type: cv_hal::BackendType) -> Result<Option<Arc<ResourceGroup>>> {
+        let groups = self.groups.lock()
+            .map_err(|_| crate::Error::ConcurrencyError("groups mutex poisoned".to_string()))?;
+        
+        let mut best_group: Option<Arc<ResourceGroup>> = None;
+        let mut min_load = usize::MAX;
+
+        for group in groups.values() {
+            let device = group.device();
+            let matches = match (backend_type, device) {
+                (cv_hal::BackendType::Cpu, ComputeDevice::Cpu(_)) => true,
+                // Any GPU backend matches a GPU device for now
+                (t, ComputeDevice::Gpu(_)) if t != cv_hal::BackendType::Cpu => true,
+                _ => false,
+            };
+
+            if matches {
+                let load = group.load();
+                if load < min_load {
+                    min_load = load;
+                    best_group = Some(group.clone());
+                }
+            }
+        }
+
+        Ok(best_group)
+    }
+
+    pub fn get_default_group(&self) -> Arc<ResourceGroup> {
+        self.get_group("default").unwrap().expect("default group must exist")
+    }
+
+    pub fn best_gpu_or_cpu(&self) -> Arc<ResourceGroup> {
+        // Try WebGPU first (as it's our primary accelerator)
+        self.get_best_group(cv_hal::BackendType::WebGPU).unwrap()
+            .or_else(|| self.get_best_group(cv_hal::BackendType::Vulkan).unwrap())
+            .unwrap_or_else(|| self.get_default_group())
     }
 
     pub fn submit<F>(&self, group_name: &str, f: F) -> Result<()>
@@ -333,6 +408,71 @@ mod tests {
         }).unwrap();
         
         assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), 42);
+    }
+
+    #[test]
+    fn test_load_aware_steering() {
+        let s = TaskScheduler::new();
+        let policy = GroupPolicy {
+            allow_work_stealing: false,
+            allow_dynamic_scaling: false,
+        };
+        
+        // Create two CPU groups explicitly
+        let cpu_dev = cv_hal::compute::get_device(); // Usually this is GPU if available, let's force CPU context
+        // We can't easily force CPU if global is GPU without mocking, but we can check what get_best_group matches.
+        // Actually, let's just make sure we pass None for device so it uses default,
+        // and check if the returned device is indeed what we asked for.
+        
+        let g1 = s.create_group_with_device("g1", 2, None, policy, Some(cpu_dev)).unwrap();
+        let g2 = s.create_group_with_device("g2", 2, None, policy, Some(cpu_dev)).unwrap();
+        
+        // Find out which backend type cpu_dev is
+        let backend_type = cpu_dev.backend_type();
+        
+        // Initially both have 0 load
+        assert_eq!(g1.load(), 0);
+        assert_eq!(g2.load(), 0);
+        
+        // Run a "long" task in g1
+        let (tx, rx) = std::sync::mpsc::channel();
+        let g1_cloned = g1.clone();
+        std::thread::spawn(move || {
+            g1_cloned.run(|| {
+                tx.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(200));
+            });
+        });
+        
+        rx.recv().unwrap();
+        assert_eq!(g1.load(), 1);
+        
+        // get_best_group for the matching backend should now return g2 (load 0) instead of g1 (load 1)
+        let best = s.get_best_group(backend_type).unwrap().unwrap();
+        assert_eq!(best.name, "g2");
+    }
+
+    #[test]
+    fn test_rayon_isolation_steering() {
+        use rayon::prelude::*;
+        let s = TaskScheduler::new();
+        let policy = GroupPolicy {
+            allow_work_stealing: false,
+            allow_dynamic_scaling: false,
+        };
+        
+        let group = s.create_group("isolated", 2, None, policy).unwrap();
+        
+        group.run(|| {
+            // This inner parallel iterator MUST run on the 'isolated' pool
+            let thread_names: Vec<String> = (0..10).into_par_iter().map(|_| {
+                std::thread::current().name().unwrap_or_default().to_string()
+            }).collect();
+            
+            for name in thread_names {
+                assert!(name.contains("cv-isolated-"), "Thread name '{}' does not match group name", name);
+            }
+        });
     }
 
     #[test]
