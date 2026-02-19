@@ -13,20 +13,117 @@ pub struct EssentialSolver;
 impl EssentialSolver {
     /// Estimate Essential Matrix E from 5 point correspondences.
     /// Points must be in normalized camera coordinates (K-inv * pixels).
+    /// Estimate Essential Matrix E from 5 point correspondences.
+    /// Points must be in normalized camera coordinates (K-inv * pixels).
     pub fn estimate_5point(pts1: &[[f64; 2]], pts2: &[[f64; 2]]) -> Vec<Matrix3<f64>> {
-        if pts1.len() < 5 { return vec![]; }
+        if pts1.len() < 5 || pts1.len() != pts2.len() {
+            return vec![];
+        }
+
+        // 1. Form 5x9 matrix A
+        let mut a = nalgebra::DMatrix::<f64>::zeros(pts1.len(), 9);
+        for i in 0..pts1.len() {
+            let u1 = pts1[i][0];
+            let v1 = pts1[i][1];
+            let u2 = pts2[i][0];
+            let v2 = pts2[i][1];
+
+            a[(i, 0)] = u2 * u1;
+            a[(i, 1)] = u2 * v1;
+            a[(i, 2)] = u2;
+            a[(i, 3)] = v2 * u1;
+            a[(i, 4)] = v2 * v1;
+            a[(i, 5)] = v2;
+            a[(i, 6)] = u1;
+            a[(i, 7)] = v1;
+            a[(i, 8)] = 1.0;
+        }
+
+        // 2. Find nullspace (4 basis matrices E1, E2, E3, E4)
+        let svd = SVD::new(a, false, true);
+        let v_t = svd.v_t.unwrap();
         
-        // 1. Form linear system for 4 basis matrices E1, E2, E3, E4
-        // (Simplified for brevity, full Nister is 100+ lines of matrix manipulation)
-        // In a real implementation, we'd solve for the nullspace of a 5x9 matrix.
+        let get_e = |row_idx: usize| {
+            let r = v_t.row(row_idx);
+            Matrix3::new(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8])
+        };
+
+        let e1 = get_e(8);
+        let e2 = get_e(7);
+        let e3 = get_e(6);
+        let e4 = get_e(5);
+
+        // 3. Solve 10th degree polynomial using Gauss-Jordan on the 10x20 constraint matrix
+        // (This part is extremely lengthy and involves symbolic expansion of det(E) = 0 
+        // and the trace constraint 2EE^T E - tr(EE^T)E = 0)
         
-        // For now, we'll provide a placeholder that falls back to 8-point logic 
-        // if more points are available, or returns empty if only 5 are given 
-        // until the full polynomial solver is implemented.
-        // NOTE: Full implementation requires a 10th degree polynomial solver (Sturm sequences or Eigen).
+        // For production readiness, we'll implement a robust numeric solver 
+        // using the method of Li and Hartley (2006) which is more stable.
         
-        // TODO: Implement full Nistér polynomial solver.
+        // TODO: Full numeric implementation of the 10x10 polynomial system.
+        // For now, return empty or fallback to 8-point if more than 8 points.
+        if pts1.len() >= 8 {
+            if let Some(f) = FundamentalSolver::estimate(pts1, pts2) {
+                return vec![f];
+            }
+        }
         vec![] 
+    }
+}
+
+/// Homography Matrix solver using the 4-point Direct Linear Transform (DLT) algorithm.
+pub struct HomographySolver;
+
+impl HomographySolver {
+    /// Estimate the Homography Matrix H from at least 4 point correspondences.
+    /// Points should be in (x, y) coordinates.
+    pub fn estimate(pts1: &[[f64; 2]], pts2: &[[f64; 2]]) -> Option<Matrix3<f64>> {
+        if pts1.len() < 4 || pts1.len() != pts2.len() {
+            return None;
+        }
+
+        let n = pts1.len();
+        let mut a = nalgebra::DMatrix::<f64>::zeros(2 * n, 9);
+
+        for i in 0..n {
+            let x = pts1[i][0];
+            let y = pts1[i][1];
+            let u = pts2[i][0];
+            let v = pts2[i][1];
+
+            // Row 2i: [-x, -y, -1, 0, 0, 0, ux, uy, u]
+            a[(2 * i, 0)] = -x;
+            a[(2 * i, 1)] = -y;
+            a[(2 * i, 2)] = -1.0;
+            a[(2 * i, 6)] = u * x;
+            a[(2 * i, 7)] = u * y;
+            a[(2 * i, 8)] = u;
+
+            // Row 2i+1: [0, 0, 0, -x, -y, -1, vx, vy, v]
+            a[(2 * i + 1, 3)] = -x;
+            a[(2 * i + 1, 4)] = -y;
+            a[(2 * i + 1, 5)] = -1.0;
+            a[(2 * i + 1, 6)] = v * x;
+            a[(2 * i + 1, 7)] = v * y;
+            a[(2 * i + 1, 8)] = v;
+        }
+
+        let svd = SVD::new(a, false, true);
+        let v_t = svd.v_t.unwrap();
+        let h_vec = v_t.row(8);
+
+        let h = Matrix3::new(
+            h_vec[0], h_vec[1], h_vec[2],
+            h_vec[3], h_vec[4], h_vec[5],
+            h_vec[6], h_vec[7], h_vec[8],
+        );
+
+        // Normalize such that h[2,2] = 1
+        if h[(2, 2)].abs() > 1e-9 {
+            Some(h / h[(2, 2)])
+        } else {
+            Some(h)
+        }
     }
 }
 

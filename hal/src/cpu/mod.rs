@@ -15,9 +15,14 @@ pub struct CpuBackend {
 
 impl CpuBackend {
     pub fn new() -> Option<Self> {
+        let num_threads = std::env::var("RUSTCV_CPU_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| rayon::current_num_threads());
+
         Some(Self {
             device_id: DeviceId(0),
-            num_threads: rayon::current_num_threads(),
+            num_threads,
             simd_available: true,
         })
     }

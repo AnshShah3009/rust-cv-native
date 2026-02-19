@@ -66,6 +66,15 @@ impl TensorShape {
     }
 }
 
+/// N-dimensional array abstraction.
+///
+/// **Layout Convention:**
+/// `rust-cv-native` strictly uses the **CHW (Channel-Height-Width)** layout (also known as channel-first).
+/// Data is stored contiguously in memory with Width as the fastest-varying dimension, 
+/// followed by Height, and then Channels.
+///
+/// For a 3D tensor with dimensions (C, H, W), the element at (c, h, w) is located at:
+/// `index = c * (H * W) + h * W + w`
 #[derive(Debug, Clone)]
 pub struct Tensor<T: Clone + Copy + 'static, S: Storage<T> = CpuStorage<T>> {
     pub storage: S,
@@ -77,8 +86,10 @@ pub struct Tensor<T: Clone + Copy + 'static, S: Storage<T> = CpuStorage<T>> {
 pub type CpuTensor<T> = Tensor<T, CpuStorage<T>>;
 
 impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> Tensor<T, S> {
-    pub fn from_vec(data: Vec<T>, shape: TensorShape) -> Self {
-        assert_eq!(data.len(), shape.len(), "Data size mismatch with shape");
+    pub fn from_vec(data: Vec<T>, shape: TensorShape) -> crate::Result<Self> {
+        if data.len() != shape.len() {
+            return Err(crate::Error::RuntimeError(format!("Data size mismatch: got {}, expected {}", data.len(), shape.len())));
+        }
         let dtype = match std::any::type_name::<T>() {
             "u8" => DataType::U8,
             "u16" => DataType::U16,
@@ -88,12 +99,12 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> Tensor<T, S> {
             "f64" => DataType::F64,
             _ => DataType::F32,
         };
-        Self {
-            storage: S::from_vec(data),
+        Ok(Self {
+            storage: S::from_vec(data).map_err(crate::Error::RuntimeError)?,
             shape,
             dtype,
             _phantom: PhantomData,
-        }
+        })
     }
 
     pub fn reshape(&self, new_shape: TensorShape) -> Self {
@@ -121,6 +132,8 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> Tensor<T, S> {
     }
 
     pub fn index(&self, c: usize, h: usize, w: usize) -> T {
+        // Enforce packed CHW layout: length must match shape
+        assert_eq!(self.storage.len(), self.shape.len(), "Tensor storage is not contiguous or size mismatch");
         let idx = c * self.shape.height * self.shape.width + h * self.shape.width + w;
         self.as_slice()[idx]
     }
@@ -155,7 +168,7 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> Tensor<T, S> {
 }
 
 impl<T: Clone + Copy + Default + fmt::Debug + 'static> Tensor<T> {
-    pub fn new(shape: TensorShape) -> Self {
+    pub fn new(shape: TensorShape) -> crate::Result<Self> {
         let dtype = match std::any::type_name::<T>() {
             "u8" => DataType::U8,
             "u16" => DataType::U16,
@@ -166,29 +179,29 @@ impl<T: Clone + Copy + Default + fmt::Debug + 'static> Tensor<T> {
             _ => DataType::F32,
         };
 
-        Self {
-            storage: CpuStorage::new(shape.len(), T::default()),
+        Ok(Self {
+            storage: CpuStorage::new(shape.len(), T::default()).map_err(crate::Error::RuntimeError)?,
             shape,
             dtype,
             _phantom: PhantomData,
-        }
+        })
     }
 
-    pub fn zeros(shape: TensorShape) -> Self {
+    pub fn zeros(shape: TensorShape) -> crate::Result<Self> {
         Self::new(shape)
     }
 
-    pub fn ones(shape: TensorShape) -> Self {
-        let mut t = Self::new(shape);
+    pub fn ones(shape: TensorShape) -> crate::Result<Self> {
+        let mut t = Self::new(shape)?;
         if let Some(s) = t.storage.as_mut_slice() {
             s.fill(T::default());
         }
-        t
+        Ok(t)
     }
 }
 
 impl Tensor<f32> {
-    pub fn from_image_gray(data: &[u8], width: usize, height: usize) -> Self {
+    pub fn from_image_gray(data: &[u8], width: usize, height: usize) -> crate::Result<Self> {
         let mut float_data = Vec::with_capacity(width * height);
         for &pixel in data {
             float_data.push(pixel as f32 / 255.0);
@@ -196,7 +209,7 @@ impl Tensor<f32> {
         Self::from_vec(float_data, TensorShape::new(1, height, width))
     }
 
-    pub fn from_image_rgb(data: &[u8], width: usize, height: usize) -> Self {
+    pub fn from_image_rgb(data: &[u8], width: usize, height: usize) -> crate::Result<Self> {
         let mut float_data = Vec::with_capacity(3 * width * height);
         for chunk in data.chunks(3) {
             float_data.push(chunk[0] as f32 / 255.0);
@@ -243,7 +256,7 @@ impl<T: Clone + Copy + fmt::Debug + 'static> DerefMut for Tensor<T, CpuStorage<T
 pub type Tensor3f = Tensor<f32>;
 pub type Tensor4f = Tensor<f64>;
 
-pub fn create_tensor_2d<T: Clone + Copy + Default + fmt::Debug + 'static>(height: usize, width: usize) -> Tensor<T> {
+pub fn create_tensor_2d<T: Clone + Copy + Default + fmt::Debug + 'static>(height: usize, width: usize) -> crate::Result<Tensor<T>> {
     Tensor::new(TensorShape::new(1, height, width))
 }
 
@@ -251,6 +264,6 @@ pub fn create_tensor_3d<T: Clone + Copy + Default + fmt::Debug + 'static>(
     channels: usize,
     height: usize,
     width: usize,
-) -> Tensor<T> {
+) -> crate::Result<Tensor<T>> {
     Tensor::new(TensorShape::new(channels, height, width))
 }

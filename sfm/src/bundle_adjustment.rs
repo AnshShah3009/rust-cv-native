@@ -167,7 +167,31 @@ impl SfMState {
     }
 
     pub fn numerical_jacobian(&self) -> DMatrix<f64> {
-        self.numerical_jacobian_ctx(&scheduler().get_default_group())
+        if let Ok(s) = scheduler() {
+            if let Ok(group) = s.get_default_group() {
+                return self.numerical_jacobian_ctx(&group);
+            }
+        }
+        
+        // Fallback to sequential execution if scheduler fails
+        let params = self.to_parameters();
+        let n_res = self.residuals().len();
+        let n_params = params.len();
+        let eps = 1e-6;
+
+        let mut jacobian_data = vec![0.0; n_res * n_params];
+        for j in 0..n_params {
+            let mut params_plus = params.clone();
+            let mut params_minus = params.clone();
+            params_plus[j] += eps;
+            params_minus[j] -= eps;
+
+            let (res_plus, res_minus) = self.compute_residuals_for_param(&params_plus, &params_minus);
+            for i in 0..n_res {
+                jacobian_data[j * n_res + i] = (res_plus.get(i).unwrap_or(&0.0) - res_minus.get(i).unwrap_or(&0.0)) / (2.0 * eps);
+            }
+        }
+        DMatrix::from_vec(n_res, n_params, jacobian_data)
     }
 
     pub fn numerical_jacobian_ctx(&self, group: &ResourceGroup) -> DMatrix<f64> {
@@ -332,7 +356,61 @@ impl Default for BundleAdjustmentConfig {
 }
 
 pub fn bundle_adjust(state: &mut SfMState, config: &BundleAdjustmentConfig) {
-    bundle_adjust_ctx(state, config, &scheduler().get_default_group())
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            bundle_adjust_ctx(state, config, &group);
+            return;
+        }
+    }
+    
+    // Fallback: Use a temporary dummy group or implement a sequential version of bundle_adjust_ctx.
+    // For now, since bundle_adjust_ctx doesn't use the group for much other than calling numerical_jacobian_ctx,
+    // we can implement a basic loop.
+    let mut current_params = state.to_parameters();
+    let mut current_residuals = state.residuals();
+    let mut current_err = current_residuals.norm_squared();
+    let mut lambda = config.lambda;
+
+    for iteration in 0..config.max_iterations {
+        // Use the sequential version of numerical_jacobian() which handles its own fallback
+        let j = state.numerical_jacobian();
+        let r = current_residuals.clone();
+
+        let jtj = &j.transpose() * &j;
+        let jtr = j.transpose() * r;
+
+        let mut lhs = jtj.clone();
+        for i in 0..lhs.nrows() {
+            lhs[(i, i)] *= 1.0 + lambda;
+        }
+
+        let neg_jtr = -&jtr;
+        let delta = if let Some(ch) = lhs.clone().cholesky() {
+            ch.solve(&neg_jtr)
+        } else {
+            lhs.lu().solve(&neg_jtr).unwrap_or_else(|| DVector::zeros(jtr.len()))
+        };
+
+        let next_params = &current_params + &delta;
+        state.from_parameters(&next_params);
+        let next_residuals = state.residuals();
+        let next_err = next_residuals.norm_squared();
+
+        if next_err < current_err {
+            current_params = next_params;
+            current_residuals = next_residuals;
+            current_err = next_err;
+            lambda /= 10.0;
+            if delta.norm() < config.convergence_threshold { break; }
+        } else {
+            lambda *= 10.0;
+            state.from_parameters(&current_params);
+        }
+
+        if config.robust_kernel && iteration % 5 == 0 {
+            state.remove_outliers(10.0);
+        }
+    }
 }
 
 pub fn bundle_adjust_ctx(state: &mut SfMState, config: &BundleAdjustmentConfig, group: &ResourceGroup) {

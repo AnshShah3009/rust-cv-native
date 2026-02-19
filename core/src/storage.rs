@@ -31,10 +31,10 @@ pub trait Storage<T: 'static>: Debug + Clone + Any {
     fn as_mut_slice(&mut self) -> Option<&mut [T]>;
 
     /// Creates a new storage with the given size and default value.
-    fn new(size: usize, default_value: T) -> Self where T: Clone;
+    fn new(size: usize, default_value: T) -> std::result::Result<Self, String> where T: Clone;
 
     /// Creates a new storage from a vector.
-    fn from_vec(data: Vec<T>) -> Self;
+    fn from_vec(data: Vec<T>) -> std::result::Result<Self, String>;
 
     /// NEW: For safe downcasting
     fn as_any(&self) -> &dyn Any;
@@ -65,14 +65,14 @@ impl<T: Clone + Debug + Any + 'static> Storage<T> for CpuStorage<T> {
         Some(&mut self.data)
     }
 
-    fn new(size: usize, default_value: T) -> Self {
-        Self {
+    fn new(size: usize, default_value: T) -> std::result::Result<Self, String> {
+        Ok(Self {
             data: vec![default_value; size],
-        }
+        })
     }
 
-    fn from_vec(data: Vec<T>) -> Self {
-        Self { data }
+    fn from_vec(data: Vec<T>) -> std::result::Result<Self, String> {
+        Ok(Self { data })
     }
 
     fn as_any(&self) -> &dyn Any {

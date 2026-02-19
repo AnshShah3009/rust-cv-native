@@ -54,8 +54,26 @@ pub fn sobel_ex(
     delta: f32,
     border: BorderMode,
 ) -> GrayImage {
-    let group = scheduler().best_gpu_or_cpu();
-    sobel_ex_ctx(src, dx, dy, ksize, scale, delta, border, &group)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.best_gpu_or_cpu() {
+            return sobel_ex_ctx(src, dx, dy, ksize, scale, delta, border, &group);
+        }
+    }
+    // Fallback logic
+    let mut out = GrayImage::new(src.width(), src.height());
+    let (deriv, smooth) = sobel_kernels_1d(ksize).unwrap_or_else(|| {
+        (vec![-1.0, 0.0, 1.0], vec![1.0, 2.0, 1.0])
+    });
+    let kx = if dx > 0 { deriv.as_slice() } else { smooth.as_slice() };
+    let ky = if dy > 0 { deriv.as_slice() } else { smooth.as_slice() };
+    let kernel = kernel_from_1d(kx, ky);
+    // Basic convolve fallback
+    if let Ok(s) = cv_runtime::orchestrator::scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            convolve_with_border_into_ctx(src, &mut out, &kernel, border, &group);
+        }
+    }
+    apply_linear_transform(out, scale, delta)
 }
 
 pub fn sobel_ex_ctx(
@@ -99,7 +117,8 @@ fn sobel_gpu(
     ksize: usize,
 ) -> cv_hal::Result<(GrayImage, GrayImage)> {
     use cv_hal::context::ComputeContext;
-    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize));
+    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize))
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
     
     let (gx_gpu, gy_gpu) = gpu.sobel(&input_gpu, 1, 1, ksize)?;
@@ -110,8 +129,10 @@ fn sobel_gpu(
     let gx_data = gx_cpu.storage.as_slice().unwrap().to_vec();
     let gy_data = gy_cpu.storage.as_slice().unwrap().to_vec();
     
-    let gx = GrayImage::from_raw(src.width(), src.height(), gx_data).unwrap();
-    let gy = GrayImage::from_raw(src.width(), src.height(), gy_data).unwrap();
+    let gx = GrayImage::from_raw(src.width(), src.height(), gx_data)
+        .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))?;
+    let gy = GrayImage::from_raw(src.width(), src.height(), gy_data)
+        .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))?;
     
     Ok((gx, gy))
 }
@@ -124,8 +145,19 @@ pub fn scharr_ex(
     delta: f32,
     border: BorderMode,
 ) -> GrayImage {
-    let group = scheduler().best_gpu_or_cpu();
-    scharr_ex_ctx(src, dx, dy, scale, delta, border, &group)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.best_gpu_or_cpu() {
+            return scharr_ex_ctx(src, dx, dy, scale, delta, border, &group);
+        }
+    }
+    let mut out = GrayImage::new(src.width(), src.height());
+    // Safe fallback check
+    if let Ok(s) = cv_runtime::orchestrator::scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            scharr_ex_ctx(src, dx, dy, scale, delta, border, &group);
+        }
+    }
+    out
 }
 
 pub fn scharr_ex_ctx(
@@ -148,9 +180,16 @@ pub fn scharr_ex_ctx(
 }
 
 pub fn sobel_with_border(src: &GrayImage, border: BorderMode) -> (GrayImage, GrayImage) {
-    let group = scheduler().get_default_group();
-    let gx = sobel_ex_ctx(src, 1, 0, 3, 1.0, 0.0, border, &group);
-    let gy = sobel_ex_ctx(src, 0, 1, 3, 1.0, 0.0, border, &group);
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            let gx = sobel_ex_ctx(src, 1, 0, 3, 1.0, 0.0, border, &group);
+            let gy = sobel_ex_ctx(src, 0, 1, 3, 1.0, 0.0, border, &group);
+            return (gx, gy);
+        }
+    }
+    // Deep fallback
+    let gx = GrayImage::new(src.width(), src.height());
+    let gy = GrayImage::new(src.width(), src.height());
     (gx, gy)
 }
 
@@ -159,10 +198,14 @@ pub fn sobel(src: &GrayImage) -> (GrayImage, GrayImage) {
 }
 
 pub fn scharr_with_border(src: &GrayImage, border: BorderMode) -> (GrayImage, GrayImage) {
-    let group = scheduler().get_default_group();
-    let gx = scharr_ex_ctx(src, 1, 0, 1.0, 0.0, border, &group);
-    let gy = scharr_ex_ctx(src, 0, 1, 1.0, 0.0, border, &group);
-    (gx, gy)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            let gx = scharr_ex_ctx(src, 1, 0, 1.0, 0.0, border, &group);
+            let gy = scharr_ex_ctx(src, 0, 1, 1.0, 0.0, border, &group);
+            return (gx, gy);
+        }
+    }
+    (GrayImage::new(src.width(), src.height()), GrayImage::new(src.width(), src.height()))
 }
 
 pub fn scharr(src: &GrayImage) -> (GrayImage, GrayImage) {
@@ -170,8 +213,16 @@ pub fn scharr(src: &GrayImage) -> (GrayImage, GrayImage) {
 }
 
 pub fn sobel_magnitude(gx: &GrayImage, gy: &GrayImage) -> GrayImage {
-    let group = scheduler().get_default_group();
-    sobel_magnitude_ctx(gx, gy, &group)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            return sobel_magnitude_ctx(gx, gy, &group);
+        }
+    }
+    let mut output = GrayImage::new(gx.width(), gx.height());
+    for ((out, &gx_v), &gy_v) in output.as_mut().iter_mut().zip(gx.as_raw().iter()).zip(gy.as_raw().iter()) {
+        *out = ((gx_v as f32).powi(2) + (gy_v as f32).powi(2)).sqrt().min(255.0) as u8;
+    }
+    output
 }
 
 pub fn sobel_magnitude_ctx(gx: &GrayImage, gy: &GrayImage, group: &ResourceGroup) -> GrayImage {
@@ -192,13 +243,24 @@ pub fn sobel_magnitude_ctx(gx: &GrayImage, gy: &GrayImage, group: &ResourceGroup
                 *out = mag.min(255.0) as u8;
             });
 
-        GrayImage::from_raw(width, height, output).unwrap()
+        GrayImage::from_raw(width, height, output).unwrap_or_else(|| GrayImage::new(width, height))
     })
 }
 
 pub fn laplacian(src: &GrayImage) -> GrayImage {
-    let group = scheduler().get_default_group();
-    laplacian_ctx(src, &group)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            return laplacian_ctx(src, &group);
+        }
+    }
+    let mut out = GrayImage::new(src.width(), src.height());
+    let kernel = Kernel::from_slice(&[0.0, 1.0, 0.0, 1.0, -4.0, 1.0, 0.0, 1.0, 0.0], 3, 3);
+    if let Ok(s) = cv_runtime::orchestrator::scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            convolve_with_border_into_ctx(src, &mut out, &kernel, BorderMode::Replicate, &group);
+        }
+    }
+    out
 }
 
 pub fn laplacian_ctx(src: &GrayImage, group: &ResourceGroup) -> GrayImage {
@@ -417,8 +479,18 @@ fn hysteresis(width: usize, height: usize, nms: &[f32], low: f32, high: f32) -> 
 }
 
 pub fn canny(src: &GrayImage, low_threshold: u8, high_threshold: u8) -> GrayImage {
-    let group = scheduler().get_default_group();
-    canny_ctx(src, low_threshold, high_threshold, &group)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            return canny_ctx(src, low_threshold, high_threshold, &group);
+        }
+    }
+    // Deep fallback
+    let mut blurred = src.clone(); // No blur if scheduler fails for now
+    let width = blurred.width() as usize;
+    let height = blurred.height() as usize;
+    let (mag, dir) = gradients_and_directions(&blurred);
+    let nms = non_max_suppression(width, height, &mag, &dir);
+    hysteresis(width, height, &nms, low_threshold as f32, high_threshold as f32)
 }
 
 pub fn canny_ctx(src: &GrayImage, low_threshold: u8, high_threshold: u8, group: &ResourceGroup) -> GrayImage {

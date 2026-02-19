@@ -190,8 +190,15 @@ pub fn dilate_with_border(
     iterations: u32,
     border: BorderMode,
 ) -> GrayImage {
-    let group = scheduler().get_group("default").unwrap().unwrap();
-    morphology_ctx(src, HalMorphType::Dilate, kernel, iterations, border, &group)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            return morphology_ctx(src, HalMorphType::Dilate, kernel, iterations, border, &group);
+        }
+    }
+    // Fallback to basic parallel CPU if scheduler fails
+    let mut out = GrayImage::new(src.width(), src.height());
+    dilate_with_border_into(src, &mut out, kernel, iterations, border);
+    out
 }
 
 pub fn erode_with_border(
@@ -200,8 +207,15 @@ pub fn erode_with_border(
     iterations: u32,
     border: BorderMode,
 ) -> GrayImage {
-    let group = scheduler().get_group("default").unwrap().unwrap();
-    morphology_ctx(src, HalMorphType::Erode, kernel, iterations, border, &group)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            return morphology_ctx(src, HalMorphType::Erode, kernel, iterations, border, &group);
+        }
+    }
+    // Fallback
+    let mut out = GrayImage::new(src.width(), src.height());
+    erode_with_border_into(src, &mut out, kernel, iterations, border);
+    out
 }
 
 pub fn morphology_ctx(
@@ -239,7 +253,8 @@ fn morphology_gpu(
 ) -> cv_hal::Result<GrayImage> {
     use cv_hal::context::ComputeContext;
     
-    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), TensorShape::new(1, src.height() as usize, src.width() as usize));
+    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), TensorShape::new(1, src.height() as usize, src.width() as usize))
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
     
     // Convert (i32, i32) kernel to Tensor<u8> mask
@@ -256,7 +271,8 @@ fn morphology_gpu(
         let ky = (y as isize + cy as isize) as usize;
         k_data[ky * kw + kx] = 1;
     }
-    let kernel_tensor = cv_core::CpuTensor::from_vec(k_data, TensorShape::new(1, kh, kw));
+    let kernel_tensor = cv_core::CpuTensor::from_vec(k_data, TensorShape::new(1, kh, kw))
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let kernel_gpu = kernel_tensor.to_gpu_ctx(gpu)?;
     
     let output_gpu = gpu.morphology(&input_gpu, typ, &kernel_gpu, iterations)?;

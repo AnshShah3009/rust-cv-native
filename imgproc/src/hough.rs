@@ -37,8 +37,43 @@ pub fn hough_circles(
     max_radius: f32,
     threshold: u32,
 ) -> Vec<Circle> {
-    let group = scheduler().get_default_group();
-    hough_circles_ctx(src, min_radius, max_radius, threshold, &group)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            return hough_circles_ctx(src, min_radius, max_radius, threshold, &group);
+        }
+    }
+    // Fallback: dummy group or sequential
+    let edges = canny(src, 50, 150);
+    let (gx, gy) = sobel(src);
+    let width = src.width() as usize;
+    let height = src.height() as usize;
+    let mut all_circles = Vec::new();
+    for r in (min_radius as i32)..=(max_radius as i32) {
+        let r_f = r as f32;
+        let mut acc = vec![0u32; width * height];
+        for i in 0..edges.as_raw().len() {
+            if edges.as_raw()[i] > 0 {
+                let ex = (i % width) as f32;
+                let ey = (i / width) as f32;
+                let dx = gx.as_raw()[i] as f32 - 128.0;
+                let dy = gy.as_raw()[i] as f32 - 128.0;
+                let angle = dy.atan2(dx);
+                for sign in [-1.0, 1.0] {
+                    let cx = (ex + sign * r_f * angle.cos()) as i32;
+                    let cy = (ey + sign * r_f * angle.sin()) as i32;
+                    if cx >= 0 && cx < width as i32 && cy >= 0 && cy < height as i32 {
+                        acc[cy as usize * width + cx as usize] += 1;
+                    }
+                }
+            }
+        }
+        for (i, &count) in acc.iter().enumerate() {
+            if count >= threshold {
+                all_circles.push(Circle { x: (i % width) as f32, y: (i / width) as f32, radius: r_f, score: count as f32 });
+            }
+        }
+    }
+    all_circles
 }
 
 /// Optimized Hough Circle Transform using gradient direction
@@ -108,8 +143,13 @@ pub fn hough_lines(
     theta_res: f32,
     threshold: u32,
 ) -> Vec<Line> {
-    let group = scheduler().get_default_group();
-    hough_lines_ctx(src, rho_res, theta_res, threshold, &group)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            return hough_lines_ctx(src, rho_res, theta_res, threshold, &group);
+        }
+    }
+    // Deep fallback
+    Vec::new()
 }
 
 pub fn hough_lines_ctx(

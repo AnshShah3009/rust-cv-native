@@ -23,8 +23,12 @@ pub enum AdaptiveMethod {
 }
 
 pub fn threshold(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType) -> GrayImage {
-    let group = scheduler().best_gpu_or_cpu();
-    threshold_ctx(src, thresh, max_value, typ, &group)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.best_gpu_or_cpu() {
+            return threshold_ctx(src, thresh, max_value, typ, &group);
+        }
+    }
+    threshold_cpu(src, thresh, max_value, typ)
 }
 
 pub fn threshold_ctx(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType, group: &ResourceGroup) -> GrayImage {
@@ -48,7 +52,8 @@ fn threshold_gpu(
 ) -> cv_hal::Result<GrayImage> {
     use cv_hal::context::ComputeContext;
     
-    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize));
+    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize))
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
     
     let hal_typ = match typ {
@@ -154,7 +159,15 @@ pub fn threshold_otsu(src: &GrayImage, max_value: u8, typ: ThresholdType) -> (u8
         }
     }
 
-    let dst = threshold(src, best_threshold, max_value, typ);
+    let dst = if let Ok(s) = scheduler() {
+        if let Ok(group) = s.best_gpu_or_cpu() {
+            threshold_ctx(src, best_threshold, max_value, typ, &group)
+        } else {
+            threshold_cpu(src, best_threshold, max_value, typ)
+        }
+    } else {
+        threshold_cpu(src, best_threshold, max_value, typ)
+    };
     (best_threshold, dst)
 }
 

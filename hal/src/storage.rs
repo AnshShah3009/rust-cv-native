@@ -67,35 +67,35 @@ impl<T: bytemuck::Pod + fmt::Debug + Any> Storage<T> for GpuStorage<T> {
         None
     }
 
-    fn new(size: usize, _default_value: T) -> Self where T: Clone {
-        let ctx = GpuContext::global().expect("GPU not available for GpuStorage::new");
+    fn new(size: usize, _default_value: T) -> std::result::Result<Self, String> where T: Clone {
+        let ctx = GpuContext::global().map_err(|e| e.to_string())?;
         let byte_size = (size * std::mem::size_of::<T>()) as u64;
         let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
         
         let buffer = ctx.get_buffer(byte_size, usage);
 
-        Self {
+        Ok(Self {
             buffer: Some(Arc::new(buffer)),
             len: size,
             usage,
             _phantom: PhantomData,
-        }
+        })
     }
 
-    fn from_vec(data: Vec<T>) -> Self {
-        let ctx = GpuContext::global().expect("GPU not available for GpuStorage::from_vec");
+    fn from_vec(data: Vec<T>) -> std::result::Result<Self, String> {
+        let ctx = GpuContext::global().map_err(|e| e.to_string())?;
         let byte_size = (data.len() * std::mem::size_of::<T>()) as u64;
         let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
         
         let buffer = ctx.get_buffer(byte_size, usage);
         ctx.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&data));
 
-        Self {
+        Ok(Self {
             buffer: Some(Arc::new(buffer)),
             len: data.len(),
             usage,
             _phantom: PhantomData,
-        }
+        })
     }
 
     fn as_any(&self) -> &dyn Any {

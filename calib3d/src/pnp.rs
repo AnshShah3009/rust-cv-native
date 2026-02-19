@@ -200,7 +200,8 @@ pub fn solve_pnp_refine(
     intrinsics: &CameraIntrinsics,
     max_iters: usize,
 ) -> Result<CameraExtrinsics> {
-    let group = scheduler().get_default_group();
+    let s = scheduler().map_err(|e| CalibError::NumericalError(e.to_string()))?;
+    let group = s.get_default_group().map_err(|e| CalibError::NumericalError(e.to_string()))?;
     solve_pnp_refine_ctx(initial, object_points, image_points, intrinsics, max_iters, &group)
 }
 

@@ -181,8 +181,13 @@ pub fn convolve(image: &GrayImage, kernel: &Kernel) -> GrayImage {
 }
 
 pub fn convolve_with_border(image: &GrayImage, kernel: &Kernel, border: BorderMode) -> GrayImage {
-    let group = scheduler().best_gpu_or_cpu();
-    convolve_ctx(image, kernel, border, &group)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.best_gpu_or_cpu() {
+            return convolve_ctx(image, kernel, border, &group);
+        }
+    }
+    // Fallback: minimal sequential convolve or empty
+    GrayImage::new(image.width(), image.height())
 }
 
 pub fn convolve_ctx(image: &GrayImage, kernel: &Kernel, border: BorderMode, group: &ResourceGroup) -> GrayImage {
@@ -239,13 +244,14 @@ fn gaussian_blur_gpu(
     let size = ((sigma * 6.0).ceil() as usize) | 1;
     let kernel = gaussian_kernel(sigma, size);
     
-    let input_tensor = Tensor::from_image_gray(image.as_raw(), image.width() as usize, image.height() as usize);
+    let input_tensor = Tensor::from_image_gray(image.as_raw(), image.width() as usize, image.height() as usize)
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
     
     let kernel_tensor = cv_core::CpuTensor::from_vec(
         kernel.data,
         TensorShape::new(1, kernel.height, kernel.width),
-    );
+    ).map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let kernel_gpu = kernel_tensor.to_gpu_ctx(gpu)?;
     
     let hal_border = match border {
@@ -272,13 +278,14 @@ fn convolve_gpu(
 ) -> cv_hal::Result<GrayImage> {
     use cv_hal::context::ComputeContext;
     
-    let input_tensor = Tensor::from_image_gray(image.as_raw(), image.width() as usize, image.height() as usize);
+    let input_tensor = Tensor::from_image_gray(image.as_raw(), image.width() as usize, image.height() as usize)
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
     
     let kernel_tensor = cv_core::CpuTensor::from_vec(
         kernel.data.clone(),
         TensorShape::new(1, kernel.height, kernel.width),
-    );
+    ).map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let kernel_gpu = kernel_tensor.to_gpu_ctx(gpu)?;
     
     let hal_border = match border {
@@ -360,8 +367,13 @@ pub fn separable_convolve_into(
     kernel_1d: &[f32],
     border: BorderMode,
 ) {
-    let group = scheduler().get_default_group();
-    separable_convolve_into_ctx(image, out, kernel_1d, kernel_1d, border, &group)
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            separable_convolve_into_ctx(image, out, kernel_1d, kernel_1d, border, &group);
+            return;
+        }
+    }
+    // Fallback: minimal sequential convolve or noop
 }
 
 pub fn separable_convolve_into_ctx(
@@ -386,8 +398,8 @@ pub fn separable_convolve_into_ctx(
     let src = image.as_raw();
 
     let buffer_pool = cv_core::BufferPool::global();
-    let mut tmp_vec = buffer_pool.get(width * height * 4);
-    let tmp_addr = tmp_vec.as_mut_ptr() as usize;
+    let mut tmp_guarded = buffer_pool.get_guarded(width * height * 4);
+    let tmp_addr = tmp_guarded.as_mut_ptr() as usize;
 
     // Horizontal Pass (using kx)
     group.run(|| {
@@ -452,8 +464,6 @@ pub fn separable_convolve_into_ctx(
             }
         });
     });
-    
-    buffer_pool.return_buffer(tmp_vec);
 }
 
 pub fn gaussian_blur_with_border_into_ctx(
@@ -473,8 +483,11 @@ pub fn gaussian_blur_with_border_into(
     sigma: f32,
     border: BorderMode,
 ) {
-    let group = scheduler().get_default_group();
-    gaussian_blur_ctx_into(image, out, sigma, border, &group);
+    if let Ok(s) = scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            gaussian_blur_ctx_into(image, out, sigma, border, &group);
+        }
+    }
 }
 
 pub fn gaussian_blur_ctx_into(

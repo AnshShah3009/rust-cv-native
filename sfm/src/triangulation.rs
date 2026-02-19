@@ -72,7 +72,8 @@ pub fn triangulate_points(
     proj1: &Matrix3x4<f64>,
     proj2: &Matrix3x4<f64>,
 ) -> Result<Vec<Point3<f64>>> {
-    let group = cv_runtime::orchestrator::scheduler().get_default_group();
+    let s = cv_runtime::orchestrator::scheduler().map_err(|e| SfmError::TriangulationFailed(e.to_string()))?;
+    let group = s.get_default_group().map_err(|e| SfmError::TriangulationFailed(e.to_string()))?;
     triangulate_points_ctx(points1, points2, proj1, proj2, &group)
 }
 

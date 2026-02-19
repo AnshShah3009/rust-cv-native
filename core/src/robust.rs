@@ -213,3 +213,234 @@ impl<D, M: RobustModel<D>> LMedS<D, M> {
         }
     }
 }
+
+/// Generic PROSAC (Progressive Sample Consensus) engine
+pub struct Prosac<D, M: RobustModel<D>> {
+    config: RobustConfig,
+    _phantom: PhantomData<(D, M)>,
+}
+
+impl<D, M: RobustModel<D>> Prosac<D, M> {
+    pub fn new(config: RobustConfig) -> Self {
+        Self {
+            config,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Run PROSAC estimation. 
+    /// data: The data points, MUST BE SORTED BY QUALITY (best first).
+    pub fn run(&self, estimator: &M, data: &[D]) -> RobustResult<M::Model> {
+        let n = data.len();
+        let m = estimator.min_sample_size();
+
+        if n < m {
+            return RobustResult {
+                model: None,
+                inliers: vec![false; n],
+                num_inliers: 0,
+                residual: f64::INFINITY,
+            };
+        }
+
+        let mut best_model = None;
+        let mut best_inliers = vec![false; n];
+        let mut best_num_inliers = 0;
+        let mut best_residual = f64::INFINITY;
+
+        let mut rng = rand::thread_rng();
+        
+        // PROSAC parameters
+        let t_max = self.config.max_iterations;
+        let mut n_sub = m;
+        let mut t_n = 1.0;
+        
+        for t in 1..=t_max {
+            // 1. Determine size of subset to sample from (Growth Function)
+            // Progressive sampling: starts with small subset of high-quality data
+            if t > t_n as usize && n_sub < n {
+                let n_prev = n_sub;
+                n_sub += 1;
+                let mut num = 1.0;
+                for i in 0..m {
+                    num *= (n_sub - i) as f64 / (m - i) as f64;
+                }
+                t_n = num * t_max as f64 / n as f64; 
+            }
+
+            // 2. Sample
+            let mut sample_indices = Vec::with_capacity(m);
+            if n_sub < n {
+                // Choice of m-1 points from n_sub-1 and 1 point being the n_sub-th
+                sample_indices.push(n_sub - 1);
+                let mut pool: Vec<usize> = (0..n_sub-1).collect();
+                pool.shuffle(&mut rng);
+                for i in 0..m-1 {
+                    sample_indices.push(pool[i]);
+                }
+            } else {
+                // Standard RANSAC sampling if subset reached full data
+                let mut pool: Vec<usize> = (0..n).collect();
+                pool.shuffle(&mut rng);
+                for i in 0..m {
+                    sample_indices.push(pool[i]);
+                }
+            }
+
+            let sample: Vec<&D> = sample_indices.iter().map(|&idx| &data[idx]).collect();
+
+            // 3. Estimate & Score
+            if let Some(model) = estimator.estimate(&sample) {
+                let mut inliers = vec![false; n];
+                let mut num_inliers = 0;
+                let mut total_error = 0.0;
+
+                for (j, d) in data.iter().enumerate() {
+                    let err = estimator.compute_error(&model, d);
+                    if err < self.config.threshold {
+                        inliers[j] = true;
+                        num_inliers += 1;
+                        total_error += err;
+                    }
+                }
+
+                let residual = if num_inliers > 0 { total_error / num_inliers as f64 } else { f64::INFINITY };
+
+                if num_inliers > best_num_inliers || (num_inliers == best_num_inliers && residual < best_residual) {
+                    best_num_inliers = num_inliers;
+                    best_inliers = inliers;
+                    best_model = Some(model);
+                    best_residual = residual;
+
+                    // Standard PROSAC early exit check
+                    if num_inliers as f64 > n as f64 * self.config.confidence {
+                        break;
+                    }
+                }
+            }
+        }
+
+        RobustResult {
+            model: best_model,
+            inliers: best_inliers,
+            num_inliers: best_num_inliers,
+            residual: best_residual,
+        }
+    }
+}
+
+/// Generic PROSAC (Progressive Sample Consensus) engine
+pub struct Prosac<D, M: RobustModel<D>> {
+    config: RobustConfig,
+    _phantom: PhantomData<(D, M)>,
+}
+
+impl<D, M: RobustModel<D>> Prosac<D, M> {
+    pub fn new(config: RobustConfig) -> Self {
+        Self {
+            config,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Run PROSAC estimation. 
+    /// data: The data points, MUST BE SORTED BY QUALITY (best first).
+    pub fn run(&self, estimator: &M, data: &[D]) -> RobustResult<M::Model> {
+        let n = data.len();
+        let m = estimator.min_sample_size();
+
+        if n < m {
+            return RobustResult {
+                model: None,
+                inliers: vec![false; n],
+                num_inliers: 0,
+                residual: f64::INFINITY,
+            };
+        }
+
+        let mut best_model = None;
+        let mut best_inliers = vec![false; n];
+        let mut best_num_inliers = 0;
+        let mut best_residual = f64::INFINITY;
+
+        let mut rng = rand::thread_rng();
+        
+        // PROSAC growth function parameters
+        let t_n = self.config.max_iterations as f64;
+        let mut n_star = n;
+        let mut t_n_star = t_n;
+        
+        for t in 1..=self.config.max_iterations {
+            // 1. Determine size of subset to sample from
+            let mut n_sub = m;
+            let mut t_sub = 1.0;
+            
+            // Growth function (simplified version of Chum & Matas)
+            // n_sub increases as t increases
+            let growth_factor = (t as f64 / t_n).powf(1.0 / m as f64);
+            n_sub = (m as f64 + (n as f64 - m as f64) * growth_factor).floor() as usize;
+            n_sub = n_sub.clamp(m, n);
+
+            // 2. Sample: m-1 points from n_sub-1, plus the n_sub-th point
+            let mut sample_indices = Vec::with_capacity(m);
+            if t < t_n as usize && n_sub < n {
+                sample_indices.push(n_sub - 1);
+                let mut pool: Vec<usize> = (0..n_sub-1).collect();
+                pool.shuffle(&mut rng);
+                for i in 0..m-1 {
+                    sample_indices.push(pool[i]);
+                }
+            } else {
+                // Regular RANSAC sampling if growth is finished
+                let mut pool: Vec<usize> = (0..n).collect();
+                pool.shuffle(&mut rng);
+                for i in 0..m {
+                    sample_indices.push(pool[i]);
+                }
+            }
+
+            let sample: Vec<&D> = sample_indices.iter().map(|&idx| &data[idx]).collect();
+
+            // 3. Estimate & Score
+            if let Some(model) = estimator.estimate(&sample) {
+                let mut inliers = vec![false; n];
+                let mut num_inliers = 0;
+                let mut total_error = 0.0;
+
+                for (j, d) in data.iter().enumerate() {
+                    let err = estimator.compute_error(&model, d);
+                    if err < self.config.threshold {
+                        inliers[j] = true;
+                        num_inliers += 1;
+                        total_error += err;
+                    }
+                }
+
+                let residual = if num_inliers > 0 { total_error / num_inliers as f64 } else { f64::INFINITY };
+
+                if num_inliers > best_num_inliers || (num_inliers == best_num_inliers && residual < best_residual) {
+                    best_num_inliers = num_inliers;
+                    best_inliers = inliers;
+                    best_model = Some(model);
+                    best_residual = residual;
+
+                    // Update n_star and t_n_star based on new best inliers (early exit logic)
+                    if num_inliers > m {
+                        // Standard PROSAC termination is more involved, 
+                        // using RANSAC early exit for now.
+                        if num_inliers as f64 > n as f64 * self.config.confidence {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        RobustResult {
+            model: best_model,
+            inliers: best_inliers,
+            num_inliers: best_num_inliers,
+            residual: best_residual,
+        }
+    }
+}

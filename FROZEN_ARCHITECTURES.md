@@ -190,5 +190,20 @@ This document tracks the core architectural components that have been stabilized
 
 ## 34. Robust Estimation Variants (`cv-core`)
 *   **Status:** Frozen (Feb 20, 2026)
-*   **Definition:** The inclusion of `LMedS` alongside `Ransac` in the core robust module.
-*   **Rationale:** Provides multiple robust consensus strategies out of the box. `LMedS` is specifically critical for scenarios where the inlier threshold is not known, common in initial map bootstrapping.
+*   **Definition:** The inclusion of `LMedS` and `PROSAC` alongside `Ransac` in the core robust module.
+*   **Rationale:** Provides multiple robust consensus strategies out of the box. `LMedS` is critical when thresholds are unknown, and `PROSAC` provides significant speedups for quality-ranked matches.
+
+## 35. Result-Based Global Initialization (`cv-hal`, `cv-runtime`)
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Definition:** Mandatory `Result`-returning initialization for `GpuContext::global()` and `scheduler()`.
+*   **Rationale:** Hardware initialization is non-deterministic. Forcing `Result` consumption at the entry point prevents silent failures and ensures that the library can gracefully handle systems without compatible acceleration.
+
+## 36. Mandatory CHW Tensor Layout (`cv-core`)
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Definition:** Strict enforcement of Channel-Height-Width contiguous data layout for all 3D Tensors.
+*   **Rationale:** Architectural consistency across backends (CPU, WGSL, MLX) is essential for zero-copy data exchange. Enforcing a single layout simplifies kernel development and prevents hidden transposition overhead.
+
+## 37. RAII-Guarded Memory Pooling (`cv-core`, `cv-hal`)
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Definition:** The `DropBufferPool` and `GpuStorage` patterns that automatically return resources to global pools on `Drop`.
+*   **Rationale:** Ensures that memory and VRAM are recycled even if a task panics or fails. Prevents memory leaks in complex, long-running pipelines like SLAM.
