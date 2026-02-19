@@ -128,3 +128,88 @@ impl<D, M: RobustModel<D>> Ransac<D, M> {
         }
     }
 }
+
+/// Generic LMedS (Least Median of Squares) engine
+pub struct LMedS<D, M: RobustModel<D>> {
+    config: RobustConfig,
+    _phantom: PhantomData<(D, M)>,
+}
+
+impl<D, M: RobustModel<D>> LMedS<D, M> {
+    pub fn new(config: RobustConfig) -> Self {
+        Self {
+            config,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn run(&self, estimator: &M, data: &[D]) -> RobustResult<M::Model> {
+        let n = data.len();
+        let k = estimator.min_sample_size();
+
+        if n < k {
+            return RobustResult {
+                model: None,
+                inliers: vec![false; n],
+                num_inliers: 0,
+                residual: f64::INFINITY,
+            };
+        }
+
+        let mut best_model = None;
+        let mut best_median_error = f64::INFINITY;
+
+        let mut rng = rand::thread_rng();
+        let mut indices: Vec<usize> = (0..n).collect();
+
+        for _ in 0..self.config.max_iterations {
+            indices.shuffle(&mut rng);
+            let sample: Vec<&D> = (0..k).map(|i| &data[indices[i]]).collect();
+
+            if let Some(model) = estimator.estimate(&sample) {
+                let mut errors: Vec<f64> = data.iter()
+                    .map(|d| estimator.compute_error(&model, d))
+                    .collect();
+                
+                // Sort errors to find median
+                errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                
+                let median_error = errors[n / 2];
+
+                if median_error < best_median_error {
+                    best_median_error = median_error;
+                    best_model = Some(model);
+                }
+            }
+        }
+
+        // Final inlier count based on the best model and a derived threshold
+        // Standard LMedS threshold: 2.5 * 1.4826 * (1 + 5/(n-k)) * sqrt(best_median_error)
+        let mut inliers = vec![false; n];
+        let mut num_inliers = 0;
+        let mut best_residual = f64::INFINITY;
+
+        if let Some(ref model) = best_model {
+            let sigma = 1.4826 * (1.0 + 5.0 / (n - k) as f64) * best_median_error.sqrt();
+            let threshold = 2.5 * sigma;
+            let mut total_error = 0.0;
+
+            for (j, d) in data.iter().enumerate() {
+                let err = estimator.compute_error(model, d);
+                if err < threshold {
+                    inliers[j] = true;
+                    num_inliers += 1;
+                    total_error += err;
+                }
+            }
+            best_residual = if num_inliers > 0 { total_error / num_inliers as f64 } else { f64::INFINITY };
+        }
+
+        RobustResult {
+            model: best_model,
+            inliers,
+            num_inliers,
+            residual: best_residual,
+        }
+    }
+}

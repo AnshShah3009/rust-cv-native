@@ -5,6 +5,16 @@ use crate::Result;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use cv_hal::compute::{ComputeDevice, get_device};
 
+/// Priority level for a resource group
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TaskPriority {
+    Background = 0,
+    Low = 1,
+    Normal = 2,
+    High = 3,
+    Critical = 4,
+}
+
 /// Policy for a resource group
 #[derive(Debug, Clone, Copy)]
 pub struct GroupPolicy {
@@ -12,6 +22,8 @@ pub struct GroupPolicy {
     pub allow_work_stealing: bool,
     /// If true, the pool can be resized at runtime
     pub allow_dynamic_scaling: bool,
+    /// Priority level for tasks in this group
+    pub priority: TaskPriority,
 }
 
 impl Default for GroupPolicy {
@@ -19,6 +31,7 @@ impl Default for GroupPolicy {
         Self {
             allow_work_stealing: true,
             allow_dynamic_scaling: true,
+            priority: TaskPriority::Normal,
         }
     }
 }
@@ -174,7 +187,7 @@ impl TaskScheduler {
     }
 
     /// Finds the best available resource group for a given device type.
-    /// Prefers groups with the least active tasks.
+    /// Prefers groups with higher priority, then those with the least active tasks.
     pub fn get_best_group(&self, backend_type: cv_hal::BackendType) -> Result<Option<Arc<ResourceGroup>>> {
         let groups = match self.groups.lock() {
             Ok(g) => g,
@@ -182,6 +195,7 @@ impl TaskScheduler {
         };
         
         let mut best_group: Option<Arc<ResourceGroup>> = None;
+        let mut max_priority = TaskPriority::Background;
         let mut min_load = usize::MAX;
 
         for group in groups.values() {
@@ -194,10 +208,18 @@ impl TaskScheduler {
             };
 
             if matches {
+                let priority = group.policy.priority;
                 let load = group.load();
-                if load < min_load {
+                
+                if priority > max_priority {
+                    max_priority = priority;
                     min_load = load;
                     best_group = Some(group.clone());
+                } else if priority == max_priority {
+                    if load < min_load {
+                        min_load = load;
+                        best_group = Some(group.clone());
+                    }
                 }
             }
         }

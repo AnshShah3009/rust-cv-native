@@ -38,6 +38,7 @@ pub mod geometry;
 pub mod integrate;
 pub mod jit;
 pub mod matching;
+pub mod multiview;
 pub mod point_cloud;
 pub mod special;
 
@@ -45,6 +46,7 @@ pub use geometry::*;
 pub use integrate::*;
 pub use jit::*;
 pub use matching::*;
+pub use multiview::*;
 pub use point_cloud::*;
 pub use special::*;
 

@@ -172,3 +172,23 @@ This document tracks the core architectural components that have been stabilized
 *   **Target File:** `cv-core/src/runtime.rs`
 *   **Definition:** `BufferPool::get` utilizing `iter().position` to selectively `swap_remove` validly sized buffers without draining the pool.
 *   **Rationale:** Image processing pipelines generate extreme memory churn. Freezing the strict re-use rules in the `BufferPool` ensures that memory fragmentation remains low during long-running tasks like Video stream processing or SLAM.
+
+## 31. Multi-View Geometry Solvers (`cv-scientific`)
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Definition:** The `FundamentalSolver` (8-point) and `Triangulator` (Linear/Refined) implementations in `cv-scientific`.
+*   **Rationale:** These algorithms provide the geometric foundation for SfM and SLAM. Freezing them in the `scientific` crate ensures that all high-level modules share a consistent, optimized, and standalone mathematical bedrock.
+
+## 32. Priority-Aware Task Scheduling (`cv-runtime`)
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Definition:** The `TaskPriority` enum and priority-first `get_best_group` heuristic in `TaskScheduler`.
+*   **Rationale:** Prevents background tasks (e.g., global map optimization) from starving real-time maintenance or UI tasks. Enforces deterministic resource allocation based on task criticality.
+
+## 33. Marching Cubes Isosurface Extraction (`cv-hal`)
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Definition:** The full 256-case `TRI_TABLE` implementation following the Paul Bourke standard.
+*   **Rationale:** Correctness of volumetric reconstruction depends on the integrity of this table. Freezing it prevents topological artifacts in generated meshes.
+
+## 34. Robust Estimation Variants (`cv-core`)
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Definition:** The inclusion of `LMedS` alongside `Ransac` in the core robust module.
+*   **Rationale:** Provides multiple robust consensus strategies out of the box. `LMedS` is specifically critical for scenarios where the inlier threshold is not known, common in initial map bootstrapping.
