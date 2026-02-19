@@ -14,107 +14,59 @@ This review is a static scout only (no compile/run), focused on:
 
 ## High-Priority Findings
 
-1. Empty core affinity list can panic worker thread startup
+1. Empty core affinity list can panic worker thread startup [RESOLVED in Phase 14]
 - File: `runtime/src/orchestrator.rs:33`
 - `cores.get(i % cores.len())` will divide by zero when `cores = Some(vec![])`.
-- Impact: runtime panic during pool worker startup.
-- Recommendation:
-  - Reject empty core lists in `create_group`/`ResourceGroup::new` with a clear error.
-  - Keep `None` as "no affinity".
+- Status: Fixed by wrapping core affinity logic in `if let Some(cores) = core_ids` and ensuring `cores.len() > 0`.
 
-2. Public GPU APIs can panic at runtime due to `todo!()`
+2. Public GPU APIs can panic at runtime due to `todo!()` [PARTIALLY RESOLVED]
 - File: `hal/src/gpu_kernels/mod.rs:252`
-- Many public entry points are `todo!()` (point cloud, TSDF, ICP, spatial, mesh, raycasting, odometry, unified GPU dispatch).
-- Impact: hard panic if any caller reaches these functions.
-- Recommendation:
-  - Replace `todo!()` in public APIs with typed errors (`Result<T, cv_hal::Error>`).
-  - Gate unfinished modules behind feature flags or make experimental APIs explicitly internal.
+- Many public entry points are `todo!()`.
+- Status: Transitioning to `Result<T, Error>` and returning `NotSupported`.
 
-3. GPU readback helper returns silent wrong results
+3. GPU readback helper returns silent wrong results [RESOLVED in Phase 13]
 - File: `hal/src/gpu_kernels/mod.rs:203`
-- `read_buffer` currently returns `vec![]` placeholder.
-- Impact: callers may treat empty output as valid data.
-- Recommendation:
-  - Return `Result<Vec<T>>` and an explicit `NotSupported`/`NotImplemented` error until implemented.
+- `read_buffer` now uses an async polling loop and returns `Result`.
 
-4. Sparse matrix CSR conversion lacks bounds validation
+4. Sparse matrix CSR conversion lacks bounds validation [RESOLVED in Phase 14]
 - File: `hal/src/gpu_sparse.rs:87`
-- `triplets_to_csr` does not validate `row < rows` / `col < cols`.
-- Impact:
-  - Out-of-bounds indexing panic for invalid `row`.
-  - silent truncation risk on `usize -> u32` casts.
-- Recommendation:
-  - Validate all triplets and return `Result<Self>`.
-  - Check `rows`, `cols`, `nnz` against `u32::MAX` before casting.
+- Status: Added validation for row/col bounds and integer overflow checks.
 
 ## Medium-Priority Findings
 
-1. Lock poisoning causes panic via `unwrap()`
-- Files:
-  - `runtime/src/orchestrator.rs:77`
-  - `runtime/src/memory.rs:29`
-  - `core/src/runtime.rs:69`
-- Impact: one panic in a lock holder can cascade into future panics.
-- Recommendation:
-  - Replace raw `unwrap()` on locks with error mapping or poison recovery strategy.
-  - At minimum, convert to crate error types.
+1. Lock poisoning causes panic via `unwrap()` [RESOLVED in Phase 14]
+- Files: `runtime/src/orchestrator.rs`, `core/src/runtime.rs`
+- Status: Replaced `unwrap()` with poison recovery (`into_inner()`).
 
-2. `submit_to!` silently drops work if group is missing
+2. `submit_to!` silently drops work if group is missing [RESOLVED in Phase 14]
 - File: `runtime/src/lib.rs:24`
-- If group does not exist, macro does nothing.
-- Impact: difficult-to-debug task loss.
-- Recommendation:
-  - Return `Result<()>` variant of submit API/macros.
-  - Optionally log warning in debug builds.
+- Status: Replaced with `submit()` which returns `Result<()>`.
 
-3. Resource group replacement semantics are implicit
+3. Resource group replacement semantics are implicit [RESOLVED in Phase 14]
 - File: `runtime/src/orchestrator.rs:75`
-- `create_group` with same name overwrites existing entry without warning.
-- Impact: surprising behavior and possible accidental pool replacement.
-- Recommendation:
-  - Add `create_group_if_absent` or explicit `replace_group`.
-  - Return an error on duplicate by default.
+- Status: `create_group` now returns an error on duplicate names.
 
-4. `GpuContext::new` loses useful diagnostics
+4. `GpuContext::new` loses useful diagnostics [RESOLVED in Phase 14]
 - File: `hal/src/gpu.rs:15`
-- Returns `Option<Self>`, discarding adapter/device creation errors.
-- Impact: poor operability and debugging.
-- Recommendation:
-  - Return `Result<Self, cv_hal::Error>` with source error message.
+- Status: Returns `Result<Self, Error>` with descriptive error messages.
 
-5. `block_on` in GPU init can block async runtimes
+5. `block_on` in GPU init can block async runtimes [RESOLVED in Phase 14]
 - File: `hal/src/gpu.rs:23`
-- `futures::executor::block_on` is used directly.
-- Impact: potential performance/latency issues if called on async executor threads.
-- Recommendation:
-  - Provide an async constructor (`async fn new_async`) and keep sync wrapper for non-async callers.
+- Status: Provided `new_async` and `new_with_policy` methods.
 
-6. Runtime/core thread-pool lifecycle can conflict
-- Files:
-  - `core/src/runtime.rs:13`
-  - `runtime/src/orchestrator.rs:92`
-- `cv-core` uses Rayon global pool; `cv-runtime` creates dedicated pools. Without policy, users can oversubscribe CPU by mixing both.
-- Recommendation:
-  - Document intended ownership model:
-    - either global pool first-class, or resource groups first-class.
-  - Add guidance in README/API docs for mixed usage.
+6. Runtime/core thread-pool lifecycle can conflict [RESOLVED in Phase 14]
+- Status: ResourceGroups now use isolated `rayon::ThreadPool` instances.
 
 ## Low-Priority Findings / Design Gaps
 
 1. `TaskPriority` exists but is unused
-- File: `runtime/src/orchestrator.rs:9`
-- No scheduling policy currently consumes priority.
-- Suggestion: remove for now or introduce a priority queue/executor semantics.
+- Status: Removed or moved to experimental.
 
 2. `UnifiedBuffer` device side is placeholder-only
-- File: `runtime/src/memory.rs:14`
-- `device_data` is type-erased and never concretely synchronized.
-- Suggestion: either narrow this to explicit typed backend buffers or mark API experimental.
+- Status: Frozen in Phase 13/14 as a manual sync state machine.
 
-3. Buffer pool policy is simplistic and can miss reuse
-- File: `core/src/runtime.rs:68`
-- Pool pops one buffer and discards it if too small.
-- Suggestion: size-bucketed pool or scan for sufficient capacity before allocating.
+3. Buffer pool policy is simplistic and can miss reuse [RESOLVED in Phase 14]
+- Status: Implemented size-bucketed pool with `swap_remove`.
 
 4. `3d` async wrappers may panic on join failures
 - File: `3d/src/async_ops/mod.rs:74`

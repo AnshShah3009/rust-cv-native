@@ -38,15 +38,17 @@ impl ResourceGroup {
         let mut builder = rayon::ThreadPoolBuilder::new().num_threads(num_threads);
         
         if let Some(cores) = core_ids {
-            builder = builder.start_handler(move |thread_idx| {
-                if let Some(&core_id) = cores.get(thread_idx % cores.len()) {
-                    if let Some(system_cores) = core_affinity::get_core_ids() {
-                        if let Some(target_core) = system_cores.into_iter().find(|c| c.id == core_id) {
-                            core_affinity::set_for_current(target_core);
+            if !cores.is_empty() {
+                builder = builder.start_handler(move |thread_idx| {
+                    if let Some(&core_id) = cores.get(thread_idx % cores.len()) {
+                        if let Some(system_cores) = core_affinity::get_core_ids() {
+                            if let Some(target_core) = system_cores.into_iter().find(|c| c.id == core_id) {
+                                core_affinity::set_for_current(target_core);
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
         }
 
         let pool = Arc::new(builder.build().map_err(|e| crate::Error::RuntimeError(e.to_string()))?);

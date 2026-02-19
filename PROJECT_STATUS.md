@@ -1,6 +1,6 @@
 # Rust Computer Vision Library - Project Status
 
-**Last Updated:** February 16, 2026
+**Last Updated:** February 20, 2026
 
 ## Project Overview
 
@@ -26,41 +26,50 @@ Building a **native Rust computer vision library** as a complete replacement for
 
 ---
 
-## Current Status: Phase 13 - Core Consolidation and Feature Hardening (February 18, 2026)
+## Current Status: Phase 14 - Orchestration, Hardening & MLX Support (February 20, 2026)
 
-### ✅ Completed: Video I/O and Native Codecs
-**Location:** `cv-videoio`
-- Switched from V4L2 skeleton to **FFmpeg-next** (v7.1) integration.
-- Implemented `PyVideoCapture` for native Python video decoding.
-- Resolved build system issues related to system headers in CI.
+### ✅ Completed: Isolated ResourceGroup Thread Pools
+**Location:** `cv-runtime`
+- Replaced semaphore-based global pool throttling with **strictly isolated `rayon::ThreadPool`** instances per `ResourceGroup`.
+- Implemented **core affinity pinning** using the `core_affinity` crate, allowing hardware-level thread steering to specific CPU cores.
+- Added drop guards to ensure task counters are correctly decremented even during panics.
 
-### ✅ Completed: Background Subtraction Refactor
-**Location:** `cv-video`, `cv-hal`
-- Implemented **MOG2 (Mixture of Gaussians)** with full GPU acceleration.
-- **Interleaved Storage:** Refactored pixel models to `[H, W, N_MIXTURES, 3]` to resolve parallel borrow checker conflicts.
-- Verified CPU/GPU numerical parity for background masks.
+### ✅ Completed: Size-Bucketed BufferPool Optimization
+**Location:** `cv-core`
+- Refactored `BufferPool::get` to use `position()` and `swap_remove()` instead of simple pops.
+- Prevents premature dropping of valid buffers when multiple sizes are requested in a hot loop (e.g., 60fps SLAM).
+- Formally frozen as **Architecture #30**.
 
-### ✅ Completed: Feature Descriptor Fixes
-**Location:** `cv-features`
-- Fixed **LBD (Line Binary Descriptor)** bit-packing; expanded from 32-bit stub to full **256-bit** (32-byte) implementation.
-- Optimized line gradient sampling with Rayon parallel iterators.
-
-### ✅ Completed: PointCloud Unification
-**Location:** `cv-core`, `cv-stereo`
-- Eliminated redundant `PointCloud` definitions.
-- Standardized on `cv_core::PointCloud<T>` (aliased to `PointCloudf32/f64`).
-- Updated `cv-stereo` depth estimation to utilize core types.
-
-### ✅ Completed: CPU HAL Expansion
+### ✅ Completed: MLX Backend Foundation (Apple Silicon)
 **Location:** `cv-hal`
-- Implemented **CPU PointCloud Normals** estimation using `rstar` KD-trees and PCA.
-- Provides fallback for systems without compatible wgpu adapters.
+- Introduced experimental **MLX (Apple Silicon)** backend gated by the `mlx` feature flag.
+- Unified `ComputeDevice` dispatch to support Cpu, Gpu (WebGPU), and Mlx backends with static dispatch.
+- Implementation currently consists of high-level stubs and trait implementations for `ComputeContext`.
 
-### ✅ Completed: RANSAC Centralization
-**Location:** `cv-core`, `cv-features`, `cv-calib3d`, `cv-registration`
-- Implemented generic **RANSAC engine** and `RobustModel` trait in `cv-core`.
-- Consolidated redundant RANSAC loops from three crates into a unified implementation.
-- Standardized robust estimation results and configurations across the workspace.
+### ✅ Completed: Core Hardening & UB Eradication
+**Location:** `cv-hal`, `cv-features`, `cv-imgproc`
+- **UB Eradication:** Replaced unsafe `transmute` on fat pointers with safe `bytemuck::cast_slice` in subtraction kernels and Hough Transform.
+- **Async Polling:** Implemented an async-friendly polling loop in `read_buffer` using `wgpu::PollType::Poll` and `tokio::task::yield_now()` to prevent executor starvation.
+- **Coordinate Scaling:** Fixed ORB pyramid coordinate scaling (switched from division to multiplication).
+
+### ✅ Completed: Architecture Freezes (#23 - #30)
+**Location:** `FROZEN_ARCHITECTURES.md`
+- Stabilized contracts for:
+  - **#28: Isolated ResourceGroup Thread Pools**
+  - **#29: ComputeDevice Static Dispatch Enum**
+  - **#30: Size-Bucketed Lazy Buffer Pooling**
+  - #23-27: Zero-cost dispatch, R-Tree indexing, UnifiedBuffer state machine, Python JIT hashing, and Separable filter architecture.
+
+---
+
+## Current Validation Snapshot (February 20, 2026 - Phase 14 Complete)
+
+- ✅ `cargo check --workspace --all-features` - Successful
+- ✅ `ResourceGroup` thread isolation verified via current thread name capturing.
+- ✅ `BufferPool` reuse verified via unit tests (zero unexpected drops).
+- ✅ WGPU async polling verified to prevent Tokio executor deadlocks.
+- ✅ All Phase 13/14 high-priority threading and safety findings from the scout review are [RESOLVED].
+- ✅ **MLX Compilation Check:** `cargo check --features "mlx"` passes (stubs verified).
 
 ### ✅ Completed: Python Bindings for calib3d and stereo
 
