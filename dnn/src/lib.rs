@@ -82,11 +82,13 @@ impl DnnNet {
             
             let shape = view.shape();
             
-            let tensor_shape = cv_core::TensorShape::new(
-                if shape.len() > 1 { shape[1] as usize } else { 1 },
-                if shape.len() > 2 { shape[2] as usize } else { 1 },
-                if shape.len() > 3 { shape[3] as usize } else { 1 }
-            );
+            let tensor_shape = match shape.len() {
+                1 => cv_core::TensorShape::new(1, 1, shape[0] as usize),
+                2 => cv_core::TensorShape::new(1, shape[0] as usize, shape[1] as usize),
+                3 => cv_core::TensorShape::new(shape[0] as usize, shape[1] as usize, shape[2] as usize),
+                4 => cv_core::TensorShape::new(shape[1] as usize, shape[2] as usize, shape[3] as usize), // Assuming NCHW
+                _ => cv_core::TensorShape::new(1, 1, shape.iter().map(|&s| s as usize).product()),
+            };
             
             results.push(Tensor::from_vec(view.as_slice().unwrap().to_vec(), tensor_shape));
         }

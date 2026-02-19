@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::any::Any;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceType {
@@ -14,7 +15,7 @@ pub enum DeviceType {
 ///
 /// This allows a `Tensor` to hold data on different devices (CPU, GPU, etc.)
 /// while providing a common interface for metadata and (where applicable) access.
-pub trait Storage<T>: Debug + Clone {
+pub trait Storage<T: 'static>: Debug + Clone + Any {
     /// The device where this storage resides.
     fn device(&self) -> DeviceType;
 
@@ -31,6 +32,10 @@ pub trait Storage<T>: Debug + Clone {
 
     /// Creates a new storage from a vector.
     fn from_vec(data: Vec<T>) -> Self;
+
+    /// NEW: For safe downcasting
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 /// Standard CPU-based storage using `Vec<T>`.
@@ -39,7 +44,7 @@ pub struct CpuStorage<T> {
     pub data: Vec<T>,
 }
 
-impl<T: Clone + Debug> Storage<T> for CpuStorage<T> {
+impl<T: Clone + Debug + Any + 'static> Storage<T> for CpuStorage<T> {
     fn device(&self) -> DeviceType {
         DeviceType::Cpu
     }
@@ -60,5 +65,13 @@ impl<T: Clone + Debug> Storage<T> for CpuStorage<T> {
 
     fn from_vec(data: Vec<T>) -> Self {
         Self { data }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }

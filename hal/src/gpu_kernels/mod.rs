@@ -255,7 +255,10 @@ pub mod buffer_utils {
 
         pub fn get(&self, device: &Device, size: u64, usage: BufferUsages) -> Buffer {
             let bucket_size = Self::get_size_bucket(size);
-            let mut buckets = self.buckets.lock().unwrap();
+            let mut buckets = match self.buckets.lock() {
+                Ok(b) => b,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             
             let usage_map = buckets.entry(usage).or_insert_with(HashMap::new);
             if let Some(pool) = usage_map.get_mut(&bucket_size) {
@@ -274,7 +277,10 @@ pub mod buffer_utils {
 
         pub fn return_buffer(&self, buffer: Buffer, usage: BufferUsages) {
             let size = buffer.size();
-            let mut buckets = self.buckets.lock().unwrap();
+            let mut buckets = match self.buckets.lock() {
+                Ok(b) => b,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             let usage_map = buckets.entry(usage).or_insert_with(HashMap::new);
             let pool = usage_map.entry(size).or_insert_with(Vec::new);
             if pool.len() < 8 {
@@ -325,15 +331,11 @@ pub mod buffer_utils {
         offset: u64,
         size: usize,
     ) -> crate::Result<Vec<T>> {
-        let aligned_size = (size + 3) & !3;
+        let pool = global_pool();
+        let aligned_size = ((size + 3) & !3) as u64;
         
-        // Create a staging buffer
-        let staging_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Staging Buffer"),
-            size: aligned_size as u64,
-            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // Use pooled staging buffer instead of creating one every time
+        let staging_buffer = pool.get(&device, aligned_size, BufferUsages::MAP_READ | BufferUsages::COPY_DST);
 
         // Copy from source to staging
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -345,7 +347,7 @@ pub mod buffer_utils {
             offset,
             &staging_buffer,
             0,
-            aligned_size as u64,
+            aligned_size,
         );
 
         let index = queue.submit(std::iter::once(encoder.finish()));
@@ -357,17 +359,22 @@ pub mod buffer_utils {
             tx.send(res).ok();
         });
 
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
+        // Use poll without Wait if we want to be truly non-blocking on this thread,
+        // but since this is an async function, it's expected to be awaited.
+        // WGPU requires polling to progress mapping.
+        device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
 
         rx.await
             .map_err(|_| crate::Error::DeviceError("Readback channel closed".to_string()))?
             .map_err(|e| crate::Error::DeviceError(format!("Buffer mapping failed: {}", e)))?;
 
         let data = slice.get_mapped_range();
-        // Cast to aligned slice then truncate to original size if needed
         let result_full: Vec<T> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         staging_buffer.unmap();
+
+        // Return to pool!
+        pool.return_buffer(staging_buffer, BufferUsages::MAP_READ | BufferUsages::COPY_DST);
 
         let num_elements = size / std::mem::size_of::<T>();
         Ok(result_full[..num_elements].to_vec())

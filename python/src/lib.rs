@@ -55,6 +55,7 @@ impl From<PyLineSegment> for RustLineSegment {
 
 #[pyfunction]
 fn hough_lines_p(
+    py: Python<'_>,
     image: Bound<'_, PyArray2<u8>>,
     rho: f32,
     theta: f32,
@@ -67,7 +68,9 @@ fn hough_lines_p(
     let mut gray = image::GrayImage::new(shape[1] as u32, shape[0] as u32);
     gray.copy_from_slice(view.as_slice()?);
     
-    let segments = rust_hough_lines_p(&gray, rho, theta, threshold, min_line_len, max_line_gap);
+    let segments = py.allow_threads(|| {
+        rust_hough_lines_p(&gray, rho, theta, threshold, min_line_len, max_line_gap)
+    });
     Ok(segments.into_iter().map(|s| s.into()).collect())
 }
 
@@ -87,6 +90,7 @@ impl PyLineDescriptor {
 
 #[pyfunction]
 fn compute_lbd(
+    py: Python<'_>,
     image: Bound<'_, PyArray2<u8>>,
     segments: Vec<PyLineSegment>,
 ) -> PyResult<Vec<PyLineDescriptor>> {
@@ -97,7 +101,9 @@ fn compute_lbd(
     
     let rust_segments: Vec<RustLineSegment> = segments.iter().map(|s| (*s).into()).collect();
     let lbd = RustLbd::new(LbdParams::default());
-    let descriptors = lbd.compute(&gray, &rust_segments);
+    let descriptors = py.allow_threads(|| {
+        lbd.compute(&gray, &rust_segments)
+    });
     
     Ok(descriptors.into_iter().map(|d| PyLineDescriptor {
         data: d.data,
@@ -118,6 +124,7 @@ pub struct PyLineMatch {
 
 #[pyfunction]
 fn match_lines(
+    py: Python<'_>,
     query: Vec<PyLineDescriptor>,
     train: Vec<PyLineDescriptor>,
     threshold: f32,
@@ -132,7 +139,9 @@ fn match_lines(
     }).collect();
     
     let matcher = RustLineMatcher::new(threshold);
-    let matches = matcher.match_lines(&q_rust, &t_rust);
+    let matches = py.allow_threads(|| {
+        matcher.match_lines(&q_rust, &t_rust)
+    });
     
     matches.into_iter().map(|m| PyLineMatch {
         query_idx: m.query_idx,

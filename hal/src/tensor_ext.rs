@@ -44,14 +44,19 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T> for Tenso
 }
 
 /// Extension trait for transferring data back to the CPU.
-pub trait TensorToCpu<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> {
+pub trait TensorToCpu<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> {
     /// Downloads the tensor from the GPU using the global context.
     fn to_cpu(&self) -> crate::Result<Tensor<T, CpuStorage<T>>>;
     /// Downloads the tensor from the GPU using a specific context.
     fn to_cpu_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>>;
+    
+    /// ASYNC: Downloads the tensor from the GPU using the global context.
+    async fn to_cpu_async(&self) -> crate::Result<Tensor<T, CpuStorage<T>>>;
+    /// ASYNC: Downloads the tensor from the GPU using a specific context.
+    async fn to_cpu_ctx_async(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>>;
 }
 
-impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToCpu<T> for Tensor<T, GpuStorage<T>> {
+impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCpu<T> for Tensor<T, GpuStorage<T>> {
     fn to_cpu(&self) -> crate::Result<Tensor<T, CpuStorage<T>>> {
         let ctx = GpuContext::global().ok_or_else(|| {
             crate::Error::InitError("GPU context not initialized".into())
@@ -72,11 +77,35 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToCpu<T> for Tenso
 
         Ok(Tensor::from_vec(data, self.shape))
     }
+
+    async fn to_cpu_async(&self) -> crate::Result<Tensor<T, CpuStorage<T>>> {
+        let ctx = GpuContext::global().ok_or_else(|| {
+            crate::Error::InitError("GPU context not initialized".into())
+        })?;
+        self.to_cpu_ctx_async(ctx).await
+    }
+
+    async fn to_cpu_ctx_async(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>> {
+        let byte_size = self.storage.len * std::mem::size_of::<T>();
+        
+        let data: Vec<T> = buffer_utils::read_buffer(
+            ctx.device.clone(),
+            &ctx.queue,
+            &self.storage.buffer,
+            0,
+            byte_size,
+        ).await?;
+
+        Ok(Tensor::from_vec(data, self.shape))
+    }
 }
 
-impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToCpu<T> for Tensor<T, CpuStorage<T>> {
+impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCpu<T> for Tensor<T, CpuStorage<T>> {
     fn to_cpu(&self) -> crate::Result<Tensor<T, CpuStorage<T>>> { Ok(self.clone()) }
     fn to_cpu_ctx(&self, _ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>> { Ok(self.clone()) }
+    
+    async fn to_cpu_async(&self) -> crate::Result<Tensor<T, CpuStorage<T>>> { Ok(self.clone()) }
+    async fn to_cpu_ctx_async(&self, _ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>> { Ok(self.clone()) }
 }
 
 /// Extension trait for type casting on GPU

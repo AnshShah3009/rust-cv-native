@@ -4,6 +4,7 @@ use wgpu::util::DeviceExt;
 use std::sync::Arc;
 use std::marker::PhantomData;
 use std::fmt;
+use std::any::Any;
 
 /// GPU storage using wgpu buffers.
 ///
@@ -52,11 +53,8 @@ impl<T> Drop for GpuStorage<T> {
     }
 }
 
-impl<T: bytemuck::Pod + fmt::Debug> Storage<T> for GpuStorage<T> {
+impl<T: bytemuck::Pod + fmt::Debug + Any> Storage<T> for GpuStorage<T> {
     fn device(&self) -> DeviceType {
-        // We assume Vulkan or Metal based on platform, but for now just say "Vulkan" or generic "GPU"
-        // core::DeviceType has Cuda, Vulkan, Metal.
-        // We can't easily know specific backend from Buffer alone without context.
         DeviceType::Vulkan 
     }
 
@@ -97,6 +95,14 @@ impl<T: bytemuck::Pod + fmt::Debug> Storage<T> for GpuStorage<T> {
             usage,
             _phantom: PhantomData,
         }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 

@@ -6,71 +6,6 @@ use cv_runtime::orchestrator::{ResourceGroup, scheduler};
 use cv_optimize::sparse::{SparseMatrix, Triplet};
 
 pub struct Landmark {
-...
-    pub fn numerical_jacobian_sparse(&self) -> SparseMatrix {
-        let params = self.to_parameters();
-        let n_res = self.residuals().len();
-        let n_params = params.len();
-        let n_cam = self.cameras.len();
-        let eps = 1e-6;
-
-        let mut triplets = Vec::new();
-
-        let mut res_idx = 0;
-        for (lm_idx, lm) in self.landmarks.iter().enumerate() {
-            if !lm.is_valid { continue; }
-            for (cam_idx, obs) in &lm.observations {
-                // Compute local Jacobian for this camera-landmark pair
-                // This is much faster than full numerical Jacobian
-                
-                // Camera block (6 params)
-                for k in 0..6 {
-                    let mut p_perturbed = params.clone();
-                    p_perturbed[6 * cam_idx + k] += eps;
-                    let (res_plus, _) = self.compute_residuals_for_param_local(&p_perturbed, cam_idx, lm_idx);
-                    
-                    let base_pt = self.cameras[*cam_idx].rotation * lm.position + self.cameras[*cam_idx].translation;
-                    let base_proj = self.intrinsics.project(&base_pt.into());
-                    
-                    triplets.push(Triplet::new(res_idx, 6 * cam_idx + k, (res_plus.x - base_proj.x) / eps));
-                    triplets.push(Triplet::new(res_idx + 1, 6 * cam_idx + k, (res_plus.y - base_proj.y) / eps));
-                }
-
-                // Landmark block (3 params)
-                let offset = 6 * n_cam;
-                for k in 0..3 {
-                    let mut p_perturbed = params.clone();
-                    p_perturbed[offset + 3 * lm_idx + k] += eps;
-                    let (res_plus, _) = self.compute_residuals_for_param_local(&p_perturbed, cam_idx, lm_idx);
-                    
-                    let base_pt = self.cameras[*cam_idx].rotation * lm.position + self.cameras[*cam_idx].translation;
-                    let base_proj = self.intrinsics.project(&base_pt.into());
-
-                    triplets.push(Triplet::new(res_idx, offset + 3 * lm_idx + k, (res_plus.x - base_proj.x) / eps));
-                    triplets.push(Triplet::new(res_idx + 1, offset + 3 * lm_idx + k, (res_plus.y - base_proj.y) / eps));
-                }
-                res_idx += 2;
-            }
-        }
-
-        SparseMatrix::from_triplets(n_res, n_params, &triplets)
-    }
-
-    fn compute_residuals_for_param_local(&self, params: &DVector<f64>, cam_idx: usize, lm_idx: usize) -> (Point2<f64>, Point2<f64>) {
-        let axis_angle = Vector3::new(params[6 * cam_idx], params[6 * cam_idx + 1], params[6 * cam_idx + 2]);
-        let rot = Rotation3::new(axis_angle).into_inner();
-        let trans = Vector3::new(params[6 * cam_idx + 3], params[6 * cam_idx + 4], params[6 * cam_idx + 5]);
-        
-        let n_cam = self.cameras.len();
-        let offset = 6 * n_cam;
-        let lm_pos = Point3::new(params[offset + 3 * lm_idx], params[offset + 3 * lm_idx + 1], params[offset + 3 * lm_idx + 2]);
-        
-        let pt_cam = rot * lm_pos + trans;
-        let proj = self.intrinsics.project(&pt_cam.into());
-        (proj, proj) // Dummy second for signature parity
-    }
-...
-}
     pub position: Point3<f64>,
     pub observations: Vec<(usize, Point2<f64>)>,
     pub is_valid: bool,
@@ -260,6 +195,66 @@ impl SfMState {
 
         // DMatrix is column-major by default in nalgebra for from_vec
         DMatrix::from_vec(n_res, n_params, jacobian_data)
+    }
+
+    pub fn numerical_jacobian_sparse(&self) -> SparseMatrix {
+        let params = self.to_parameters();
+        let n_res = self.residuals().len();
+        let n_params = params.len();
+        let n_cam = self.cameras.len();
+        let eps = 1e-6;
+
+        let mut triplets = Vec::new();
+
+        let mut res_idx = 0;
+        for (lm_idx, lm) in self.landmarks.iter().enumerate() {
+            if !lm.is_valid { continue; }
+            for (cam_idx, obs) in &lm.observations {
+                // Camera block (6 params)
+                for k in 0..6 {
+                    let mut p_perturbed = params.clone();
+                    p_perturbed[6 * cam_idx + k] += eps;
+                    let (res_plus, _) = self.compute_residuals_for_param_local(&p_perturbed, *cam_idx, lm_idx);
+                    
+                    let base_pt = self.cameras[*cam_idx].rotation * lm.position + self.cameras[*cam_idx].translation;
+                    let base_proj = self.intrinsics.project(&base_pt.into());
+                    
+                    triplets.push(Triplet::new(res_idx, 6 * cam_idx + k, (res_plus.x - base_proj.x) / eps));
+                    triplets.push(Triplet::new(res_idx + 1, 6 * cam_idx + k, (res_plus.y - base_proj.y) / eps));
+                }
+
+                // Landmark block (3 params)
+                let offset = 6 * n_cam;
+                for k in 0..3 {
+                    let mut p_perturbed = params.clone();
+                    p_perturbed[offset + 3 * lm_idx + k] += eps;
+                    let (res_plus, _) = self.compute_residuals_for_param_local(&p_perturbed, *cam_idx, lm_idx);
+                    
+                    let base_pt = self.cameras[*cam_idx].rotation * lm.position + self.cameras[*cam_idx].translation;
+                    let base_proj = self.intrinsics.project(&base_pt.into());
+
+                    triplets.push(Triplet::new(res_idx, offset + 3 * lm_idx + k, (res_plus.x - base_proj.x) / eps));
+                    triplets.push(Triplet::new(res_idx + 1, offset + 3 * lm_idx + k, (res_plus.y - base_proj.y) / eps));
+                }
+                res_idx += 2;
+            }
+        }
+
+        SparseMatrix::from_triplets(n_res, n_params, &triplets)
+    }
+
+    fn compute_residuals_for_param_local(&self, params: &DVector<f64>, cam_idx: usize, lm_idx: usize) -> (Point2<f64>, Point2<f64>) {
+        let axis_angle = Vector3::new(params[6 * cam_idx], params[6 * cam_idx + 1], params[6 * cam_idx + 2]);
+        let rot = Rotation3::new(axis_angle).into_inner();
+        let trans = Vector3::new(params[6 * cam_idx + 3], params[6 * cam_idx + 4], params[6 * cam_idx + 5]);
+        
+        let n_cam = self.cameras.len();
+        let offset = 6 * n_cam;
+        let lm_pos = Point3::new(params[offset + 3 * lm_idx], params[offset + 3 * lm_idx + 1], params[offset + 3 * lm_idx + 2]);
+        
+        let pt_cam = rot * lm_pos + trans;
+        let proj = self.intrinsics.project(&pt_cam.into());
+        (proj, proj) // Dummy second for signature parity
     }
 
     fn compute_residuals_for_param(

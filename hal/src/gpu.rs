@@ -35,26 +35,34 @@ impl ComputeContext for GpuContext {
         kernel: &Tensor<f32, S>,
         border_mode: BorderMode,
     ) -> crate::Result<Tensor<f32, S>> {
-        use std::any::TypeId;
         use crate::storage::GpuStorage;
+        use std::marker::PhantomData;
 
-        if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
-            // SAFETY: TypeId check ensures S is GpuStorage<f32>, so memory layout is identical
-            let input_ptr = input as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
-            let kernel_ptr = kernel as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
-            
-            let input_gpu = unsafe { &*input_ptr };
-            let kernel_gpu = unsafe { &*kernel_ptr };
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+            if let Some(kernel_storage) = kernel.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
+                let kernel_gpu = Tensor {
+                    storage: kernel_storage.clone(),
+                    shape: kernel.shape,
+                    dtype: kernel.dtype,
+                    _phantom: PhantomData,
+                };
 
-            let result_gpu = crate::gpu_kernels::convolve::convolve_2d(self, input_gpu, kernel_gpu, border_mode)?;
+                let result_gpu = crate::gpu_kernels::convolve::convolve_2d(self, &input_gpu, &kernel_gpu, border_mode)?;
 
-            // Move result_gpu into Tensor<f32, S>
-            let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<f32, S>) };
-            std::mem::forget(result_gpu);
-            Ok(result)
-        } else {
-            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into()))
+                // SAFETY: downcast_ref above proved S is GpuStorage<f32>
+                let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<f32, S>) };
+                std::mem::forget(result_gpu);
+                return Ok(result);
+            }
         }
+        
+        Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into()))
     }
 
     fn dispatch<S: Storage<u8> + 'static>(
@@ -75,23 +83,26 @@ impl ComputeContext for GpuContext {
         max_value: u8,
         typ: ThresholdType,
     ) -> crate::Result<Tensor<u8, S>> {
-        use std::any::TypeId;
         use crate::storage::GpuStorage;
+        use std::marker::PhantomData;
 
-        if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
-            // SAFETY: TypeId check ensures S is GpuStorage<u8>, so memory layout is identical
-            let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
-            let input_gpu = unsafe { &*input_ptr };
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
+            let input_gpu = Tensor {
+                storage: input_storage.clone(),
+                shape: input.shape,
+                dtype: input.dtype,
+                _phantom: PhantomData,
+            };
 
-            let result_gpu = crate::gpu_kernels::threshold::threshold(self, input_gpu, thresh, max_value, typ)?;
+            let result_gpu = crate::gpu_kernels::threshold::threshold(self, &input_gpu, thresh, max_value, typ)?;
 
-            // Move result_gpu into Tensor<u8, S>
+            // SAFETY: downcast_ref check above proved S is GpuStorage<u8>
             let result = unsafe { std::ptr::read(&result_gpu as *const _ as *const Tensor<u8, S>) };
             std::mem::forget(result_gpu);
-            Ok(result)
-        } else {
-            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into()))
+            return Ok(result);
         }
+        
+        Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into()))
     }
 
     fn sobel<S: Storage<u8> + 'static>(

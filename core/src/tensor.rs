@@ -67,7 +67,7 @@ impl TensorShape {
 }
 
 #[derive(Debug, Clone)]
-pub struct Tensor<T: Clone + Copy, S: Storage<T> = CpuStorage<T>> {
+pub struct Tensor<T: Clone + Copy + 'static, S: Storage<T> = CpuStorage<T>> {
     pub storage: S,
     pub shape: TensorShape,
     pub dtype: DataType,
@@ -76,7 +76,7 @@ pub struct Tensor<T: Clone + Copy, S: Storage<T> = CpuStorage<T>> {
 
 pub type CpuTensor<T> = Tensor<T, CpuStorage<T>>;
 
-impl<T: Clone + Copy + fmt::Debug, S: Storage<T>> Tensor<T, S> {
+impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> Tensor<T, S> {
     pub fn from_vec(data: Vec<T>, shape: TensorShape) -> Self {
         assert_eq!(data.len(), shape.len(), "Data size mismatch with shape");
         let dtype = match std::any::type_name::<T>() {
@@ -147,7 +147,7 @@ impl<T: Clone + Copy + fmt::Debug, S: Storage<T>> Tensor<T, S> {
     }
 }
 
-impl<T: Clone + Copy + Default + fmt::Debug> Tensor<T> {
+impl<T: Clone + Copy + Default + fmt::Debug + 'static> Tensor<T> {
     pub fn new(shape: TensorShape) -> Self {
         let dtype = match std::any::type_name::<T>() {
             "u8" => DataType::U8,
@@ -208,7 +208,7 @@ impl Tensor<f32> {
     }
 }
 
-impl<T: Clone + Copy + fmt::Debug, S: Storage<T>> fmt::Display for Tensor<T, S> {
+impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> fmt::Display for Tensor<T, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -219,7 +219,7 @@ impl<T: Clone + Copy + fmt::Debug, S: Storage<T>> fmt::Display for Tensor<T, S> 
 }
 
 // Deref coercion for CpuStorage tensors
-impl<T: Clone + Copy + fmt::Debug> Deref for Tensor<T, CpuStorage<T>> {
+impl<T: Clone + Copy + fmt::Debug + 'static> Deref for Tensor<T, CpuStorage<T>> {
     type Target = [T];
 
     fn deref(&self) -> &Self::Target {
@@ -227,7 +227,7 @@ impl<T: Clone + Copy + fmt::Debug> Deref for Tensor<T, CpuStorage<T>> {
     }
 }
 
-impl<T: Clone + Copy + fmt::Debug> DerefMut for Tensor<T, CpuStorage<T>> {
+impl<T: Clone + Copy + fmt::Debug + 'static> DerefMut for Tensor<T, CpuStorage<T>> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.as_mut_slice()
     }
@@ -236,11 +236,11 @@ impl<T: Clone + Copy + fmt::Debug> DerefMut for Tensor<T, CpuStorage<T>> {
 pub type Tensor3f = Tensor<f32>;
 pub type Tensor4f = Tensor<f64>;
 
-pub fn create_tensor_2d<T: Clone + Copy + Default + fmt::Debug>(height: usize, width: usize) -> Tensor<T> {
+pub fn create_tensor_2d<T: Clone + Copy + Default + fmt::Debug + 'static>(height: usize, width: usize) -> Tensor<T> {
     Tensor::new(TensorShape::new(1, height, width))
 }
 
-pub fn create_tensor_3d<T: Clone + Copy + Default + fmt::Debug>(
+pub fn create_tensor_3d<T: Clone + Copy + Default + fmt::Debug + 'static>(
     channels: usize,
     height: usize,
     width: usize,
