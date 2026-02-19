@@ -110,10 +110,10 @@ pub fn integrate(
         label: Some("TSDF BG 0"),
         layout: &bgl_0,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: depth_image.storage.buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: depth_image.storage.buffer.as_entire_binding() }, // Dummy color read
-            wgpu::BindGroupEntry { binding: 2, resource: voxel_volume.storage.buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: voxel_volume.storage.buffer.as_entire_binding() }, // Dummy color write
+            wgpu::BindGroupEntry { binding: 0, resource: depth_image.storage.buffer().as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: depth_image.storage.buffer().as_entire_binding() }, // Dummy color read
+            wgpu::BindGroupEntry { binding: 2, resource: voxel_volume.storage.buffer().as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 3, resource: voxel_volume.storage.buffer().as_entire_binding() }, // Dummy color write
         ],
     });
 
@@ -248,7 +248,7 @@ pub fn raycast(
         label: Some("Raycast Bind Group"),
         layout: &bgl,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: voxel_volume.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: voxel_volume.storage.buffer().as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: output_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 3, resource: pose_buffer.as_entire_binding() },

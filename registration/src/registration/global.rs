@@ -51,12 +51,11 @@ pub struct FPFHFeature {
     pub histogram: [f32; 33], // 33-dimensional histogram
 }
 
+use crate::registration::RegistrationError;
+
 /// Compute FPFH features for point cloud
-pub fn compute_fpfh_features(cloud: &PointCloud, radius: f32) -> Vec<FPFHFeature> {
-    let features = Vec::with_capacity(cloud.points.len());
-    // Simplified: return empty features for now
-    // Full implementation would use KDTree for neighborhood queries
-    features
+pub fn compute_fpfh_features(cloud: &PointCloud, radius: f32) -> Result<Vec<FPFHFeature>, RegistrationError> {
+    Err(RegistrationError::NotImplemented("FPFH features are currently stubbed".to_string()))
 }
 
 /// Compute Simple Point Feature Histogram
@@ -178,7 +177,7 @@ pub fn registration_ransac_based_on_feature_matching(
     max_correspondence_distance: f32,
     ransac_n: usize,
     max_iterations: usize,
-) -> Option<GlobalRegistrationResult> {
+) -> Result<GlobalRegistrationResult, RegistrationError> {
     // Find correspondences (Brute force)
     let mut correspondences: Vec<(usize, usize, f32)> = Vec::new();
     for (i, source_feature) in source_features.iter().enumerate() {
@@ -200,7 +199,9 @@ pub fn registration_ransac_based_on_feature_matching(
     correspondences.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
     let top_correspondences: Vec<_> = correspondences.into_iter().take(1000).collect();
 
-    if top_correspondences.len() < ransac_n { return None; }
+    if top_correspondences.len() < ransac_n { 
+        return Err(RegistrationError::OptimizationFailed("Insufficient correspondences".to_string())); 
+    }
 
     let config = RobustConfig {
         threshold: max_correspondence_distance as f64,
@@ -213,7 +214,7 @@ pub fn registration_ransac_based_on_feature_matching(
     let ransac = Ransac::new(config);
     let res = ransac.run(&estimator, &top_correspondences);
 
-    let final_transformation = res.model?;
+    let final_transformation = res.model.ok_or_else(|| RegistrationError::OptimizationFailed("RANSAC failed to find model".to_string()))?;
 
     // Compute fitness and RMSE
     let (fitness, rmse) = evaluate_registration(
@@ -228,7 +229,7 @@ pub fn registration_ransac_based_on_feature_matching(
         .map(|(c, _)| (c.0, c.1))
         .collect();
 
-    Some(GlobalRegistrationResult {
+    Ok(GlobalRegistrationResult {
         transformation: final_transformation,
         fitness,
         inlier_rmse: rmse,
@@ -243,7 +244,7 @@ pub fn registration_fgr_based_on_feature_matching(
     source_features: &[FPFHFeature],
     target_features: &[FPFHFeature],
     _option: FastGlobalRegistrationOption,
-) -> Option<GlobalRegistrationResult> {
+) -> Result<GlobalRegistrationResult, RegistrationError> {
     // FGR uses line process optimization instead of RANSAC
     // Placeholder - full implementation would optimize line process weights
     registration_ransac_based_on_feature_matching(

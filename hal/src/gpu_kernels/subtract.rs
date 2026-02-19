@@ -30,11 +30,11 @@ pub fn subtract(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: a.storage.buffer.as_entire_binding(),
+                resource: a.storage.buffer().as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: b.storage.buffer.as_entire_binding(),
+                resource: b.storage.buffer().as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,

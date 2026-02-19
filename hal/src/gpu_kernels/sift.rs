@@ -54,9 +54,9 @@ pub fn sift_extrema(
         label: Some("SIFT Extrema Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: dog_prev.storage.buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: dog_curr.storage.buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: dog_next.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: dog_prev.storage.buffer().as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: dog_curr.storage.buffer().as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 2, resource: dog_next.storage.buffer().as_entire_binding() },
             wgpu::BindGroupEntry { binding: 3, resource: output_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 4, resource: params_buffer.as_entire_binding() },
         ],

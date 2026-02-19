@@ -447,16 +447,6 @@ pub mod pointcloud_gpu {
         Err(crate::Error::not_supported("GPU point cloud transform"))
     }
 
-    /// Compute normals using fast GPU implementation
-    pub fn compute_normals_fast_gpu(
-        gpu: &GpuCompute,
-        points: &[Vector3<f32>],
-        k_neighbors: u32,
-    ) -> crate::Result<Vec<Vector3<f32>>> {
-        // Use Morton code optimized version
-        compute_normals_morton_gpu(gpu, points, k_neighbors)
-    }
-
     /// Compute normals from points on GPU
     pub fn compute_normals(
         gpu: &GpuCompute,
@@ -467,19 +457,19 @@ pub mod pointcloud_gpu {
         use wgpu::BufferUsages;
         use crate::gpu_kernels::buffer_utils::{create_buffer, create_buffer_uninit, read_buffer};
 
-        let device = gpu.device();
-        let queue = gpu.queue();
+        let device = gpu.device.clone();
+        let queue = &gpu.queue;
         let num_points = points.len() as u32;
 
         // 1. Create buffers
         // Convert Vector3 to [f32; 4] for 16-byte alignment (vec4 in shader)
         let points_data: Vec<[f32; 4]> = points.iter().map(|p| [p.x, p.y, p.z, 0.0]).collect();
         
-        let points_buf = create_buffer(device, &points_data, BufferUsages::STORAGE);
-        let indices_buf = create_buffer(device, neighbor_indices, BufferUsages::STORAGE);
-        let normals_buf = create_buffer_uninit(device, points.len() * 16, BufferUsages::STORAGE | BufferUsages::COPY_SRC);
-        let num_points_buf = create_buffer(device, &[num_points], BufferUsages::UNIFORM);
-        let k_buf = create_buffer(device, &[k_neighbors], BufferUsages::UNIFORM);
+        let points_buf = create_buffer(&device, &points_data, BufferUsages::STORAGE);
+        let indices_buf = create_buffer(&device, neighbor_indices, BufferUsages::STORAGE);
+        let normals_buf = create_buffer_uninit(&device, points.len() * 16, BufferUsages::STORAGE | BufferUsages::COPY_SRC);
+        let num_points_buf = create_buffer(&device, &[num_points], BufferUsages::UNIFORM);
+        let k_buf = create_buffer(&device, &[k_neighbors], BufferUsages::UNIFORM);
 
         // 2. Create pipeline
         let shader_source = include_str!("pointcloud_normals.wgsl");
@@ -526,7 +516,7 @@ pub mod pointcloud_gpu {
         gpu.submit(encoder);
 
         // 5. Read back
-        let result_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(gpu.device.clone(), queue, &normals_buf, 0, points.len() * 16))?;
+        let result_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(device.clone(), queue, &normals_buf, 0, points.len() * 16))?;
         let result: Vec<Vector3<f32>> = result_data.into_iter().map(|v| Vector3::new(v[0], v[1], v[2])).collect();
         Ok(result)
     }
@@ -541,8 +531,8 @@ pub mod pointcloud_gpu {
         use wgpu::BufferUsages;
         use crate::gpu_kernels::buffer_utils::{create_buffer, create_buffer_uninit, read_buffer};
 
-        let device = gpu.device();
-        let queue = gpu.queue();
+        let device = gpu.device.clone();
+        let queue = &gpu.queue;
         let num_points = points.len() as u32;
         let k = k_neighbors.min(32).max(3);
 
@@ -570,13 +560,13 @@ pub mod pointcloud_gpu {
         // Step 3: Create GPU buffers
         let points_data: Vec<[f32; 4]> = points.iter().map(|p| [p.x, p.y, p.z, 0.0]).collect();
         
-        let points_buf = create_buffer(device, &points_data, BufferUsages::STORAGE);
-        let normals_buf = create_buffer_uninit(device, points.len() * 16, BufferUsages::STORAGE | BufferUsages::COPY_SRC);
-        let sorted_buf = create_buffer(device, &sorted_indices, BufferUsages::STORAGE);
-        let morton_buf = create_buffer(device, &morton_codes, BufferUsages::STORAGE);
+        let points_buf = create_buffer(&device, &points_data, BufferUsages::STORAGE);
+        let normals_buf = create_buffer_uninit(&device, points.len() * 16, BufferUsages::STORAGE | BufferUsages::COPY_SRC);
+        let sorted_buf = create_buffer(&device, &sorted_indices, BufferUsages::STORAGE);
+        let morton_buf = create_buffer(&device, &morton_codes, BufferUsages::STORAGE);
         
         let params_data: [f32; 4] = [num_points as f32, k as f32, grid_size, 0.0];
-        let params_buf = create_buffer(device, &params_data, BufferUsages::UNIFORM);
+        let params_buf = create_buffer(&device, &params_data, BufferUsages::UNIFORM);
 
         // Step 4: Create pipeline
         let shader_source = include_str!("pointcloud_normals_morton.wgsl");
@@ -681,7 +671,7 @@ pub mod pointcloud_gpu {
         queue.submit(std::iter::once(encoder.finish()));
 
         // Step 6: Read back
-        let result_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(gpu.device.clone(), queue, &normals_buf, 0, points.len() * 16))?;
+        let result_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(device.clone(), queue, &normals_buf, 0, points.len() * 16))?;
         let result: Vec<Vector3<f32>> = result_data.into_iter().map(|v| Vector3::new(v[0], v[1], v[2])).collect();
         Ok(result)
     }

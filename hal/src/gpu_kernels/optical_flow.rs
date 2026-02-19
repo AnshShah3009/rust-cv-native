@@ -97,8 +97,8 @@ pub fn lucas_kanade(
             label: Some("LK Bind Group"),
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: prev_img.storage.buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: next_img.storage.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: prev_img.storage.buffer().as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: next_img.storage.buffer().as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: buffer_a.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: buffer_b.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 4, resource: params_buffer.as_entire_binding() },

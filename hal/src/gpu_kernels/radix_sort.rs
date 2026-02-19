@@ -53,7 +53,7 @@ pub fn radix_sort_u32(
     let result_buffer = ctx.get_buffer(buffer_size, usages);
     
     let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Copy Sort Input") });
-    encoder.copy_buffer_to_buffer(&input.storage.buffer, 0, &result_buffer, 0, buffer_size);
+    encoder.copy_buffer_to_buffer(input.storage.buffer(), 0, &result_buffer, 0, buffer_size);
     ctx.submit(encoder);
     
     let mut in_ref: &wgpu::Buffer = &result_buffer;

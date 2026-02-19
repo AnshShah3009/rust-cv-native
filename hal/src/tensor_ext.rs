@@ -70,7 +70,7 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCp
         let data: Vec<T> = pollster::block_on(buffer_utils::read_buffer(
             ctx.device.clone(),
             &ctx.queue,
-            &self.storage.buffer,
+            self.storage.buffer(),
             0,
             byte_size,
         ))?;
@@ -91,7 +91,7 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCp
         let data: Vec<T> = buffer_utils::read_buffer(
             ctx.device.clone(),
             &ctx.queue,
-            &self.storage.buffer,
+            self.storage.buffer(),
             0,
             byte_size,
         ).await?;
@@ -132,7 +132,7 @@ impl TensorCast for Tensor<u8, GpuStorage<u8>> {
             label: Some("Cast u8->f32 Bind Group"),
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.storage.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: self.storage.buffer().as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: output_buffer.as_entire_binding() },
             ],
         });
@@ -183,7 +183,7 @@ impl TensorCast for Tensor<f32, GpuStorage<f32>> {
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[
                 // Note: Bindings 2 and 3 in shader
-                wgpu::BindGroupEntry { binding: 2, resource: self.storage.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: self.storage.buffer().as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: output_buffer.as_entire_binding() },
             ],
         });

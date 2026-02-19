@@ -50,7 +50,7 @@ pub fn spmv(
             wgpu::BindGroupEntry { binding: 0, resource: row_ptr_buf.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: col_indices_buf.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: values_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: x.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 3, resource: x.storage.buffer().as_entire_binding() },
             wgpu::BindGroupEntry { binding: 4, resource: output_buffer.as_entire_binding() },
         ],
     });

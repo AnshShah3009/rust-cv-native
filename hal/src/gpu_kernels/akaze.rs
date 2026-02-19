@@ -54,7 +54,7 @@ pub fn akaze_diffusion(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: input.storage.buffer.as_entire_binding(),
+                resource: input.storage.buffer().as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -127,7 +127,7 @@ pub fn akaze_derivatives(
         label: Some("Deriv Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: lx_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: ly_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 3, resource: ldet_buffer.as_entire_binding() },
@@ -185,7 +185,7 @@ pub fn akaze_contrast_k(
         label: Some("K Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: hist_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
         ],

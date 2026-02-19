@@ -56,8 +56,8 @@ pub fn match_descriptors(
         label: Some("Matching Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: query.storage.buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: train.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: query.storage.buffer().as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: train.storage.buffer().as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: output_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
         ],

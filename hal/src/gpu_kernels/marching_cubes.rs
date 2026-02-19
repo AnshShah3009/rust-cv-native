@@ -116,7 +116,7 @@ pub fn extract_mesh(
         label: Some("MC Bind Group"),
         layout: &bgl,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: voxel_volume.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: voxel_volume.storage.buffer().as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: vertices_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: counter_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },

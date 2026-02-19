@@ -67,8 +67,8 @@ pub fn convolve_2d(
         label: Some("Convolve Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: kernel.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: kernel.storage.buffer().as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: output_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
         ],
@@ -145,7 +145,7 @@ pub fn gaussian_blur(
         label: Some("Horizontal Blur Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: kernel_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: temp_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 3, resource: h_params_buf.as_entire_binding() },

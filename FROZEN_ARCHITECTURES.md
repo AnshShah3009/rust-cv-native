@@ -104,3 +104,23 @@ This document tracks the core architectural components that have been stabilized
 *   **Status:** Frozen (Feb 19, 2026)
 *   **Definition:** The projective point-to-plane ICP orchestration: per-pixel Jacobian/Hessian computation followed by hierarchical parallel reduction on GPU.
 *   **Rationale:** Provides the core tracking loop for Dense SLAM. The on-device reduction minimizes data transfer to a single 6x6 matrix per frame, enabling high-frequency tracking against complex volumetric models.
+
+## 19. 3D File I/O Interfaces (`cv-io`)
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Definition:** The decoupling of 3D data parsing (`ply`, `obj`, `stl`, `pcd`) from the core representation, strictly returning `Result<T, IoError>`.
+*   **Rationale:** Keeps the core and math libraries free of string-parsing overhead. Forces all format additions to conform to a standard stream parser approach.
+
+## 20. Video I/O Backend Abstraction (`cv-videoio`)
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Definition:** The `VideoCapture` and `VideoWriter` traits, strictly decoupled from the underlying `ffmpeg-next` and `v4l` implementations.
+*   **Rationale:** Video codec ecosystems are fragile. This interface ensures future implementations (GStreamer, MediaFoundation) can be swapped seamlessly without breaking downstream SLAM modules.
+
+## 21. Python JIT Caching Bridge (`python_examples/cv_native/jit.py`)
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Definition:** Wrapper logic using `hashlib` to fingerprint function arguments and bytecode to route to cached Rust executions.
+*   **Rationale:** Establishes the standard contract between the Python frontend and Rust backend. Prevents unexpected recompilations across different pipeline nodes.
+
+## 22. Epipolar & Camera Mathematical Models (`cv-calib3d`)
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Definition:** The separation of closed-form solvers (`solve_pnp_dlt`) from iterative refiners (`solve_pnp_refine`) and robust wrappers (`solve_pnp_ransac`) using `nalgebra`.
+*   **Rationale:** These algorithms are mathematically absolute. Freezing the signatures ensures a stable geometric bedrock for future multi-camera and Bundle Adjustment features.

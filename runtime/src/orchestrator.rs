@@ -31,7 +31,7 @@ pub struct ResourceGroup {
     pub num_threads: usize,
     device: ComputeDevice<'static>,
     concurrency_limit: Arc<Semaphore>,
-    active_tasks: AtomicUsize,
+    active_tasks: Arc<AtomicUsize>,
 }
 
 impl ResourceGroup {
@@ -42,7 +42,7 @@ impl ResourceGroup {
             num_threads,
             device: device.unwrap_or_else(get_device),
             concurrency_limit: Arc::new(Semaphore::new(num_threads)),
-            active_tasks: AtomicUsize::new(0),
+            active_tasks: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -56,9 +56,20 @@ impl ResourceGroup {
     {
         let semaphore = self.concurrency_limit.clone();
         let name = self.name.clone();
+        let active_tasks_clone = self.active_tasks.clone();
+        
         self.active_tasks.fetch_add(1, Ordering::SeqCst);
         
         rayon::spawn(move || {
+            // Drop guard guarantees decrement even on panic
+            struct TaskGuard(Arc<AtomicUsize>);
+            impl Drop for TaskGuard {
+                fn drop(&mut self) {
+                    self.0.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+            let _guard = TaskGuard(active_tasks_clone);
+
             match semaphore.try_acquire() {
                 Ok(_permit) => {
                     f();
@@ -70,7 +81,6 @@ impl ResourceGroup {
                     f(); 
                 }
             }
-            // Note: active_tasks decrementing is missing here, should be in a drop guard.
         });
     }
 

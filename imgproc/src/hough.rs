@@ -59,8 +59,9 @@ pub fn hough_circles_ctx(
     
     for r in (min_radius as i32)..=(max_radius as i32) {
         let r_f = r as f32;
-        let mut acc = vec![0u32; width * height];
-        let acc_atomic: &[AtomicU32] = unsafe { std::mem::transmute(&acc[..]) };
+        let acc_atomic: Vec<AtomicU32> = std::iter::repeat_with(|| AtomicU32::new(0))
+            .take(width * height)
+            .collect();
 
         group.run(|| {
             edges.as_raw().par_iter().enumerate().for_each(|(i, &e)| {
@@ -85,13 +86,14 @@ pub fn hough_circles_ctx(
             });
         });
 
-        for (i, count) in acc.iter().enumerate() {
-            if *count >= threshold {
+        for (i, atomic_count) in acc_atomic.into_iter().enumerate() {
+            let count = atomic_count.into_inner();
+            if count >= threshold {
                 all_circles.push(Circle {
                     x: (i % width) as f32,
                     y: (i / width) as f32,
                     radius: r_f,
-                    score: *count as f32,
+                    score: count as f32,
                 });
             }
         }
@@ -125,8 +127,9 @@ pub fn hough_lines_ctx(
     let num_rho = (max_rho / rho_res) as usize * 2;
     let num_theta = (std::f32::consts::PI / theta_res) as usize;
     
-    let mut acc = vec![0u32; num_rho * num_theta];
-    let acc_atomic: &[AtomicU32] = unsafe { std::mem::transmute(&acc[..]) };
+    let acc_atomic: Vec<AtomicU32> = std::iter::repeat_with(|| AtomicU32::new(0))
+        .take(num_rho * num_theta)
+        .collect();
 
     group.run(|| {
         edges.as_raw().par_iter().enumerate().for_each(|(i, &e)| {
@@ -148,16 +151,16 @@ pub fn hough_lines_ctx(
     });
 
     let mut lines = Vec::new();
-    for r_idx in 0..num_rho {
-        for t_idx in 0..num_theta {
-            let score = acc[r_idx * num_theta + t_idx];
-            if score >= threshold {
-                lines.push(Line {
-                    rho: r_idx as f32 * rho_res - max_rho,
-                    theta: t_idx as f32 * theta_res,
-                    score,
-                });
-            }
+    for (i, atomic_count) in acc_atomic.into_iter().enumerate() {
+        let r_idx = i / num_theta;
+        let t_idx = i % num_theta;
+        let score = atomic_count.into_inner();
+        if score >= threshold {
+            lines.push(Line {
+                rho: r_idx as f32 * rho_res - max_rho,
+                theta: t_idx as f32 * theta_res,
+                score,
+            });
         }
     }
     

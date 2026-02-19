@@ -19,6 +19,9 @@ pub trait Storage<T: 'static>: Debug + Clone + Any {
     /// The device where this storage resides.
     fn device(&self) -> DeviceType;
 
+    /// The number of elements in this storage.
+    fn len(&self) -> usize;
+
     /// Get the data as a slice, if possible.
     /// Returns `None` if the data is not on CPU or not contiguous.
     fn as_slice(&self) -> Option<&[T]>;
@@ -47,6 +50,10 @@ pub struct CpuStorage<T> {
 impl<T: Clone + Debug + Any + 'static> Storage<T> for CpuStorage<T> {
     fn device(&self) -> DeviceType {
         DeviceType::Cpu
+    }
+
+    fn len(&self) -> usize {
+        self.data.len()
     }
 
     fn as_slice(&self) -> Option<&[T]> {

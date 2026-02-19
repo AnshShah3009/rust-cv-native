@@ -92,7 +92,7 @@ pub fn morphology(
     // Iteration 2: Temp -> Output.
     // ...
     
-    let mut current_src: &wgpu::Buffer = &input.storage.buffer;
+    let mut current_src: &wgpu::Buffer = input.storage.buffer();
     let mut current_dst: &wgpu::Buffer = &output_buffer;
     
     for i in 0..iterations {

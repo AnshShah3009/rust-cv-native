@@ -10,6 +10,18 @@ pub mod colored;
 pub mod global;
 pub mod gnc;
 
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum RegistrationError {
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
+    #[error("Runtime error: {0}")]
+    RuntimeError(String),
+    #[error("Invalid parameter: {0}")]
+    InvalidParameter(String),
+    #[error("Optimization failed: {0}")]
+    OptimizationFailed(String),
+}
+
 pub use colored::{registration_colored_icp, ColoredICPResult};
 pub use global::{
     registration_fgr_based_on_feature_matching, registration_ransac_based_on_feature_matching,

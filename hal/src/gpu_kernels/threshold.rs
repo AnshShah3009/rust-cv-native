@@ -68,7 +68,7 @@ pub fn threshold(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: input.storage.buffer.as_entire_binding(),
+                resource: input.storage.buffer().as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,

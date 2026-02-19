@@ -97,23 +97,7 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> Tensor<T, S> {
     }
 
     pub fn reshape(&self, new_shape: TensorShape) -> Self {
-        // Limitation: deep copy requires knowing length. 
-        // We can trust S to handle clone correctly, but we need to check constraints.
-        // For now, simple clone.
-        // But we check size.
-        // If as_slice() is None (GPU), we can't easily check size unless Storage exposes len().
-        // Storage trait does NOT have len().
-        // We should add len() to Storage trait? 
-        // For now, let's assume valid and panic if slice access fails, OR just trust the user?
-        // No, reshape checks size.
-        // GpuStorage has len field. 
-        // CpuStorage has vec.len().
-        // I should add len() to Storage trait for proper generic reshape.
-        
-        // However, for this fix, I'll stick to updating the impl signature.
-        // The panic in reshape "Reshape currently requires CPU access" will remain for GPU.
-        
-        let len = self.storage.as_slice().expect("Reshape currently requires CPU access").len();
+        let len = self.storage.len();
         
         assert_eq!(
             len,

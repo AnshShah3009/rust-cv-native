@@ -628,7 +628,7 @@ impl ComputeContext for GpuContext {
                 label: Some("SIFT Desc Bind Group"),
                 layout: &pipeline.get_bind_group_layout(0),
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: img_gpu.storage.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 0, resource: img_gpu.storage.buffer().as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 1, resource: kp_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 2, resource: output_buffer.as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
@@ -865,9 +865,9 @@ impl ComputeContext for GpuContext {
                 label: Some("MOG2 Bind Group"),
                 layout: &pipeline.get_bind_group_layout(0),
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: frame_gpu.storage.buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: model_gpu.storage.buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: mask_gpu.storage.buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 0, resource: frame_gpu.storage.buffer().as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: model_gpu.storage.buffer().as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: mask_gpu.storage.buffer().as_entire_binding() },
                     wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
                 ],
             });

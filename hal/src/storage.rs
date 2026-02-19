@@ -12,7 +12,7 @@ use std::any::Any;
 /// Use `to_cpu()` to download data (not part of Storage trait).
 #[derive(Clone)]
 pub struct GpuStorage<T> {
-    pub buffer: Arc<wgpu::Buffer>,
+    pub buffer: Option<Arc<wgpu::Buffer>>,
     pub len: usize,
     pub usage: wgpu::BufferUsages,
     _phantom: PhantomData<T>,
@@ -25,30 +25,27 @@ impl<T> GpuStorage<T> {
 
     pub fn from_buffer_with_usage(buffer: Arc<wgpu::Buffer>, len: usize, usage: wgpu::BufferUsages) -> Self {
         Self {
-            buffer,
+            buffer: Some(buffer),
             len,
             usage,
             _phantom: PhantomData,
         }
     }
+
+    /// Access the underlying buffer. Panics if the buffer has been dropped (which should not happen during normal use).
+    pub fn buffer(&self) -> &wgpu::Buffer {
+        self.buffer.as_ref().expect("GpuStorage buffer accessed after drop")
+    }
 }
 
 impl<T> Drop for GpuStorage<T> {
     fn drop(&mut self) {
-        // If this is the last reference to the buffer (count is 1 before Arc::drop),
-        // we can return it to the pool.
-        // Note: Arc::strong_count includes this reference.
-        if Arc::strong_count(&self.buffer) == 1 {
-            // We can't easily move the buffer out of the Arc in Drop because we only have &mut self.
-            // But wgpu::Buffer is just a handle.
-            // Actually, returning to pool requires ownership of the Buffer.
-            // We can use Arc::get_mut or Arc::try_unwrap if we had ownership of the Arc.
-            // Since we are in drop, we can try to take the buffer?
-            // This is tricky. 
-            
-            // Alternative: The pool stores Arc<Buffer>.
-            // If we do that, we don't need a custom Drop here.
-            // But we want to reuse the buffer handle.
+        if let Some(arc_buf) = self.buffer.take() {
+            if let Ok(buffer) = Arc::try_unwrap(arc_buf) {
+                if let Some(ctx) = GpuContext::global() {
+                    ctx.return_buffer(buffer, self.usage);
+                }
+            }
         }
     }
 }
@@ -56,6 +53,10 @@ impl<T> Drop for GpuStorage<T> {
 impl<T: bytemuck::Pod + fmt::Debug + Any> Storage<T> for GpuStorage<T> {
     fn device(&self) -> DeviceType {
         DeviceType::Vulkan 
+    }
+
+    fn len(&self) -> usize {
+        self.len
     }
 
     fn as_slice(&self) -> Option<&[T]> {
@@ -74,7 +75,7 @@ impl<T: bytemuck::Pod + fmt::Debug + Any> Storage<T> for GpuStorage<T> {
         let buffer = ctx.get_buffer(byte_size, usage);
 
         Self {
-            buffer: Arc::new(buffer),
+            buffer: Some(Arc::new(buffer)),
             len: size,
             usage,
             _phantom: PhantomData,
@@ -90,7 +91,7 @@ impl<T: bytemuck::Pod + fmt::Debug + Any> Storage<T> for GpuStorage<T> {
         ctx.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&data));
 
         Self {
-            buffer: Arc::new(buffer),
+            buffer: Some(Arc::new(buffer)),
             len: data.len(),
             usage,
             _phantom: PhantomData,
@@ -115,7 +116,11 @@ impl<T> fmt::Debug for GpuStorage<T> {
 impl<T> PartialEq for GpuStorage<T> {
     fn eq(&self, other: &Self) -> bool {
         // Pointer equality for buffer
-        Arc::ptr_eq(&self.buffer, &other.buffer) && self.len == other.len
+        match (&self.buffer, &other.buffer) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b) && self.len == other.len,
+            (None, None) => self.len == other.len,
+            _ => false,
+        }
     }
 }
 

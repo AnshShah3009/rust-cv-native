@@ -55,7 +55,7 @@ pub fn fast_detect(
         label: Some("FAST Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: output_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
         ],
@@ -94,7 +94,7 @@ pub fn fast_detect(
             label: Some("FAST NMS Bind Group"),
             layout: &nms_pipeline.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: score_map.storage.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: score_map.storage.buffer().as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: nms_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
             ],
@@ -180,7 +180,7 @@ pub fn extract_keypoints(
             label: Some("Count Bind Group"),
             layout: &count_pipeline.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: score_map.storage.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: score_map.storage.buffer().as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: counts_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
             ],
@@ -248,7 +248,7 @@ pub fn extract_keypoints(
             label: Some("Collect Bind Group"),
             layout: &collect_pipeline.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: score_map.storage.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: score_map.storage.buffer().as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: counts_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 2, resource: kp_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },

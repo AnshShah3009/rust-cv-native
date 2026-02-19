@@ -60,7 +60,7 @@ pub fn compute_orientation(
         label: Some("Orientation Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: image.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: image.storage.buffer().as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: kp_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: angle_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },

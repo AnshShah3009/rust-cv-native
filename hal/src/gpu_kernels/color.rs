@@ -59,7 +59,7 @@ pub fn cvt_color(
         label: Some("Color Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: output_buffer.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
         ],
