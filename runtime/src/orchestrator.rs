@@ -103,21 +103,6 @@ impl ResourceGroup {
         result
     }
 
-    /// Parallel join using the global pool, but respecting this group's limit.
-    pub fn join<A, B, RA, RB>(&self, oper_a: A, oper_b: B) -> (RA, RB)
-    where
-        A: FnOnce() -> RA + Send,
-        B: FnOnce() -> RB + Send,
-        RA: Send,
-        RB: Send,
-    {
-        let _permit = self.concurrency_limit.try_acquire().ok();
-        self.active_tasks.fetch_add(1, Ordering::SeqCst);
-        let result = rayon::join(oper_a, oper_b);
-        self.active_tasks.fetch_sub(1, Ordering::SeqCst);
-        result
-    }
-    
     pub fn current_num_threads(&self) -> usize {
         self.num_threads
     }

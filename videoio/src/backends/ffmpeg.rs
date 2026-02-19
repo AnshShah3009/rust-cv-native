@@ -94,3 +94,9 @@ impl VideoCapture for NativeFfmpegCapture {
         Err(VideoError::CaptureFailed("End of stream".to_string()))
     }
 }
+
+impl Drop for NativeFfmpegCapture {
+    fn drop(&mut self) {
+        cv_hal::gpu_kernels::global_pool().clear();
+    }
+}

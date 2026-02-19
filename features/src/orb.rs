@@ -90,7 +90,7 @@ impl Orb {
             let kps = fast_detect(&scaled, self.fast_threshold, self.n_features * 2);
 
             for kp in kps.keypoints {
-                let scaled_kp = KeyPoint::new(kp.x / scale as f64, kp.y / scale as f64)
+                let scaled_kp = KeyPoint::new(kp.x * scale as f64, kp.y * scale as f64)
                     .with_size(self.patch_size as f64 * scale as f64)
                     .with_octave(level as i32);
 
@@ -124,7 +124,7 @@ impl Orb {
             let kps = extract_keypoints_from_score_map(ctx, &score_map, self.n_features * 2);
 
             for kp in kps.keypoints {
-                let scaled_kp = KeyPoint::new(kp.x / scale as f64, kp.y / scale as f64)
+                let scaled_kp = KeyPoint::new(kp.x * scale as f64, kp.y * scale as f64)
                     .with_size(self.patch_size as f64 * scale as f64)
                     .with_octave(level as i32)
                     .with_response(kp.response);
@@ -178,22 +178,31 @@ impl Orb {
 }
 
 fn extract_keypoints_from_score_map<S: Storage<u8> + 'static>(ctx: &ComputeDevice, score_map: &Tensor<u8, S>, max_kps: usize) -> KeyPoints {
-    use std::any::TypeId;
     use cv_core::storage::CpuStorage;
     use cv_hal::storage::GpuStorage;
 
-    let cpu_tensor = if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
-        let input_ptr = score_map as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
-        let input_gpu = unsafe { &*input_ptr };
+    let cpu_tensor = if let Some(gpu_storage) = score_map.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
+        let input_gpu = Tensor {
+            storage: gpu_storage.clone(),
+            shape: score_map.shape,
+            dtype: score_map.dtype,
+            _phantom: std::marker::PhantomData,
+        };
         let gpu_ctx = match ctx {
             ComputeDevice::Gpu(g) => g,
             _ => panic!("Logic error: GpuStorage with CpuBackend"),
         };
         input_gpu.to_cpu_ctx(gpu_ctx).unwrap()
-    } else {
-        let input_ptr = score_map as *const Tensor<u8, S> as *const Tensor<u8, CpuStorage<u8>>;
-        let input_cpu = unsafe { &*input_ptr };
+    } else if let Some(cpu_storage) = score_map.storage.as_any().downcast_ref::<CpuStorage<u8>>() {
+        let input_cpu = Tensor {
+            storage: cpu_storage.clone(),
+            shape: score_map.shape,
+            dtype: score_map.dtype,
+            _phantom: std::marker::PhantomData,
+        };
         input_cpu.clone()
+    } else {
+        panic!("Unsupported storage type");
     };
 
     let slice = cpu_tensor.storage.as_slice().unwrap();
@@ -227,11 +236,17 @@ pub fn detect_and_compute_ctx<S: Storage<u8> + 'static>(
         // GPU Path
         use cv_hal::gpu_kernels::{pyramid, fast, orientation, brief};
         use cv_hal::storage::GpuStorage;
-        use std::any::TypeId;
 
         // Ensure input is on GPU
-        let input_gpu = if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
-            unsafe { &*(image as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>) }
+        let temp_input;
+        let input_gpu = if let Some(gpu_storage) = image.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
+            temp_input = Tensor {
+                storage: gpu_storage.clone(),
+                shape: image.shape,
+                dtype: image.dtype,
+                _phantom: std::marker::PhantomData,
+            };
+            &temp_input
         } else {
             // This case should be rare, but we handle it
             unimplemented!("Auto-migration to GPU in orb.rs not yet optimized");
@@ -313,23 +328,31 @@ fn generate_gpu_brief_pattern(patch_size: i32) -> Vec<cv_hal::gpu_kernels::brief
 }
 
 fn convert_to_cpu_image<S: Storage<u8> + 'static>(ctx: &ComputeDevice, tensor: &Tensor<u8, S>) -> Tensor<u8, cv_core::storage::CpuStorage<u8>> {
-    use std::any::TypeId;
     use cv_core::storage::CpuStorage;
     use cv_hal::storage::GpuStorage;
     use cv_hal::tensor_ext::TensorToCpu;
 
-    if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
-        let input_ptr = tensor as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
-        let input_gpu = unsafe { &*input_ptr };
+    if let Some(gpu_storage) = tensor.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
+        let input_gpu = Tensor {
+            storage: gpu_storage.clone(),
+            shape: tensor.shape,
+            dtype: tensor.dtype,
+            _phantom: std::marker::PhantomData,
+        };
         let gpu_ctx = match ctx {
             ComputeDevice::Gpu(g) => g,
             _ => panic!("Logic error"),
         };
         input_gpu.to_cpu_ctx(gpu_ctx).unwrap()
+    } else if let Some(cpu_storage) = tensor.storage.as_any().downcast_ref::<CpuStorage<u8>>() {
+        Tensor {
+            storage: cpu_storage.clone(),
+            shape: tensor.shape,
+            dtype: tensor.dtype,
+            _phantom: std::marker::PhantomData,
+        }
     } else {
-        let input_ptr = tensor as *const Tensor<u8, S> as *const Tensor<u8, CpuStorage<u8>>;
-        let input_cpu = unsafe { &*input_ptr };
-        input_cpu.clone()
+        panic!("Unsupported storage type");
     }
 }
 

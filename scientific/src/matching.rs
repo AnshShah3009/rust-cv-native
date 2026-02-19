@@ -29,7 +29,7 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
     for r in 0..n {
         for c in 0..n {
             if r >= rows || c >= cols {
-                matrix[r][c] = max_val * 10.0 + 100.0;
+                matrix[r][c] = max_val + 1.0;
             }
         }
     }

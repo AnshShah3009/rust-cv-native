@@ -124,3 +124,33 @@ This document tracks the core architectural components that have been stabilized
 *   **Status:** Frozen (Feb 20, 2026)
 *   **Definition:** The separation of closed-form solvers (`solve_pnp_dlt`) from iterative refiners (`solve_pnp_refine`) and robust wrappers (`solve_pnp_ransac`) using `nalgebra`.
 *   **Rationale:** These algorithms are mathematically absolute. Freezing the signatures ensures a stable geometric bedrock for future multi-camera and Bundle Adjustment features.
+
+## 23. ComputeDevice Zero-Cost Dispatch
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Target File:** `cv-hal/src/compute.rs`
+*   **Definition:** The `enum ComputeDevice<'a> { Cpu(&'a CpuBackend), Gpu(&'a GpuContext) }` pattern.
+*   **Rationale:** Provides static dispatch across the library without the viral `Box<dyn ComputeContext>` allocation overhead. This prevents the trait-object virtualization penalty in hot loops like FAST detection.
+
+## 24. R-Tree Spatial Indexing
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Target File:** `cv-scientific/src/geometry.rs`
+*   **Definition:** Wrapping generic geometric queries inside `rstar` using the `IndexedPolygon` AABB wrapper.
+*   **Rationale:** Stabilizes the collision and bounding-box evaluation pipeline. Guarantees $O(\log n)$ performance for SLAM clustering and prevents breakages from underlying spatial-engine swaps.
+
+## 25. UnifiedBuffer State Machine
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Target File:** `cv-runtime/src/memory.rs`
+*   **Definition:** The explicitly managed `BufferLocation` state machine (`Host`, `Device`, `Both`) taking `&mut self` to manually synchronize memory.
+*   **Rationale:** Implicit memory transfers are the #1 cause of performance degradation. Freezing this manual synchronization model forces developers to explicitly acknowledge PCI-e bandwidth costs.
+
+## 26. Python JIT Hashing Contract
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Target File:** `python_examples/cv_native/jit.py`
+*   **Definition:** Cryptographic hashing (`hashlib.sha256`) of function bytecode and first-1024-byte NumPy arrays to derive JIT cache keys.
+*   **Rationale:** Modifying the caching heuristic mid-development will cause massive cache invalidations and disk space leaks in the end-user's `~/.cv_native/jit_cache` directory.
+
+## 27. Separable Filter Architecture
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Target File:** `cv-imgproc/src/convolve.rs`
+*   **Definition:** The separation of 2D convolutions into successive 1D horizontal and vertical passes, allocating intermediate buffers from `cv_core::BufferPool`.
+*   **Rationale:** Guarantees $O(K)$ time complexity instead of $O(K^2)$. Freezing this API ensures all future filters (Gaussian, Sobel, Scharr, etc.) are built on top of the performant, SIMD-compatible row-processor rather than naive nested loops.

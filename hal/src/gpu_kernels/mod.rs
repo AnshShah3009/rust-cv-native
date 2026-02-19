@@ -287,6 +287,14 @@ pub mod buffer_utils {
                 pool.push(buffer);
             }
         }
+
+        pub fn clear(&self) {
+            let mut buckets = match self.buckets.lock() {
+                Ok(b) => b,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            buckets.clear();
+        }
     }
 
     static GLOBAL_GPU_POOL: OnceLock<GpuBufferPool> = OnceLock::new();
@@ -359,10 +367,13 @@ pub mod buffer_utils {
             tx.send(res).ok();
         });
 
-        // Use poll without Wait if we want to be truly non-blocking on this thread,
-        // but since this is an async function, it's expected to be awaited.
-        // WGPU requires polling to progress mapping.
-        device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
+        // Use async-friendly polling loop to progress mapping.
+        // This avoids blocking the OS thread, allowing Tokio to schedule other tasks.
+        let mut rx = rx;
+        while rx.try_recv().is_err() {
+            device.poll(wgpu::PollType::Poll);
+            tokio::task::yield_now().await;
+        }
 
         rx.await
             .map_err(|_| crate::Error::DeviceError("Readback channel closed".to_string()))?

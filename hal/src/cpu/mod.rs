@@ -1114,17 +1114,17 @@ impl ComputeContext for CpuBackend {
         
         use std::any::TypeId;
         if TypeId::of::<T>() == TypeId::of::<f32>() {
-            let a_f32 = unsafe { std::mem::transmute::<&[T], &[f32]>(src_a) };
-            let b_f32 = unsafe { std::mem::transmute::<&[T], &[f32]>(src_b) };
-            let dst_f32 = unsafe { std::mem::transmute::<&mut [T], &mut [f32]>(dst) };
+            let a_f32: &[f32] = bytemuck::cast_slice(src_a);
+            let b_f32: &[f32] = bytemuck::cast_slice(src_b);
+            let dst_f32: &mut [f32] = bytemuck::cast_slice_mut(dst);
             
             dst_f32.par_iter_mut().enumerate().for_each(|(i, val)| {
                 *val = a_f32[i] - b_f32[i];
             });
         } else if TypeId::of::<T>() == TypeId::of::<u8>() {
-            let a_u8 = unsafe { std::mem::transmute::<&[T], &[u8]>(src_a) };
-            let b_u8 = unsafe { std::mem::transmute::<&[T], &[u8]>(src_b) };
-            let dst_u8 = unsafe { std::mem::transmute::<&mut [T], &mut [u8]>(dst) };
+            let a_u8: &[u8] = bytemuck::cast_slice(src_a);
+            let b_u8: &[u8] = bytemuck::cast_slice(src_b);
+            let dst_u8: &mut [u8] = bytemuck::cast_slice_mut(dst);
             
             dst_u8.par_iter_mut().enumerate().for_each(|(i, val)| {
                 *val = a_u8[i].saturating_sub(b_u8[i]);

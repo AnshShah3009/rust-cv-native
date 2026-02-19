@@ -28,6 +28,11 @@ impl<'a> Slam<'a> {
         let tensor: Tensor<u8, CpuStorage<u8>> = Tensor::from_vec(image.to_vec(), shape);
         
         // Front-end tracking
-        self.tracker.process_frame(&tensor, &self.map)
+        let res = self.tracker.process_frame(&tensor, &self.map);
+        
+        // Clear pooled buffers to avoid accumulation
+        cv_hal::gpu_kernels::global_pool().clear();
+        
+        res
     }
 }
