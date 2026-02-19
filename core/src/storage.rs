@@ -39,6 +39,7 @@ pub trait Storage<T: 'static>: Debug + Clone + Any {
     /// NEW: For safe downcasting
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn boxed_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
 /// Standard CPU-based storage using `Vec<T>`.
@@ -79,6 +80,10 @@ impl<T: Clone + Debug + Any + 'static> Storage<T> for CpuStorage<T> {
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn boxed_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
 }

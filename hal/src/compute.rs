@@ -474,12 +474,18 @@ impl<'a> ComputeDevice<'a> {
 }
 
 /// Get the best available compute device.
-pub fn get_device() -> ComputeDevice<'static> {
+pub fn get_device() -> Result<ComputeDevice<'static>> {
     if let Some(mlx) = MlxContext::new() {
-        ComputeDevice::Mlx(MLX_CONTEXT.get_or_init(|| mlx))
-    } else if let Some(gpu) = GpuContext::global() {
-        ComputeDevice::Gpu(gpu)
-    } else {
-        ComputeDevice::Cpu(CPU_CONTEXT.get_or_init(|| CpuBackend::new().unwrap()))
+        return Ok(ComputeDevice::Mlx(MLX_CONTEXT.get_or_init(|| mlx)));
+    }
+    
+    match GpuContext::global() {
+        Ok(gpu) => Ok(ComputeDevice::Gpu(gpu)),
+        Err(_) => {
+            let cpu = CPU_CONTEXT.get_or_init(|| {
+                CpuBackend::new().ok_or_else(|| crate::Error::InitError("Failed to initialize CPU backend".into())).unwrap()
+            });
+            Ok(ComputeDevice::Cpu(cpu))
+        }
     }
 }

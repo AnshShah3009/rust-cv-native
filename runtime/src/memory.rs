@@ -11,10 +11,19 @@ pub enum BufferLocation {
     Both,
 }
 
+use cv_hal::DeviceId;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BufferLocation {
+    Host,
+    Device,
+    Both,
+}
+
 pub struct UnifiedBuffer<T> {
     host_data: Arc<Mutex<Vec<T>>>,
     device_data: Option<wgpu::Buffer>,
-    device: Option<ComputeDevice<'static>>,
+    device_id: Option<DeviceId>,
     location: BufferLocation,
     len: usize,
 }
@@ -24,7 +33,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         Self {
             host_data: Arc::new(Mutex::new(vec![T::default(); len])),
             device_data: None,
-            device: None,
+            device_id: None,
             location: BufferLocation::Host,
             len,
         }
@@ -59,13 +68,13 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
             } else {
                 let new_b = device.get_buffer(size, usages)?;
                 self.device_data = Some(new_b);
-                self.device = Some(unsafe { std::mem::transmute::<ComputeDevice<'_>, ComputeDevice<'static>>(*device) });
+                self.device_id = Some(device.device_id());
                 self.device_data.as_ref().unwrap()
             }
         } else {
             let new_b = device.get_buffer(size, usages)?;
             self.device_data = Some(new_b);
-            self.device = Some(unsafe { std::mem::transmute::<ComputeDevice<'_>, ComputeDevice<'static>>(*device) });
+            self.device_id = Some(device.device_id());
             self.device_data.as_ref().unwrap()
         };
 
@@ -88,9 +97,8 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
             return Ok(());
         }
 
-        // Store the device if we haven't yet, so we can return the buffer later
-        if self.device.is_none() {
-            self.device = Some(unsafe { std::mem::transmute::<ComputeDevice<'_>, ComputeDevice<'static>>(*device) });
+        if self.device_id.is_none() {
+            self.device_id = Some(device.device_id());
         }
 
         let buffer = self.device_data.as_ref()
@@ -125,7 +133,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         if let Some(buffer) = self.device_data.take() {
             let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
             device.return_buffer(buffer, usages)?;
-            self.device = None;
+            self.device_id = None;
         }
         Ok(())
     }
@@ -137,9 +145,13 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
 
 impl<T> Drop for UnifiedBuffer<T> {
     fn drop(&mut self) {
-        if let (Some(buffer), Some(device)) = (self.device_data.take(), self.device.take()) {
-            let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
-            let _ = device.return_buffer(buffer, usages);
+        if let (Some(buffer), Some(_id)) = (self.device_data.take(), self.device_id.take()) {
+            // Safety: UnifiedBuffer is primarily used with GpuContext::global().
+            // We attempt to return to the global pool if it still exists.
+            if let Some(ctx) = GpuContext::global() {
+                let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
+                ctx.return_buffer(buffer, usages);
+            }
         }
     }
 }

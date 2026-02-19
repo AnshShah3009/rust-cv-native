@@ -57,7 +57,7 @@ impl ResourceGroup {
             name: name.to_string(),
             policy,
             num_threads,
-            device: device.unwrap_or_else(get_device),
+            device: device.map(Ok).unwrap_or_else(get_device)?,
             pool,
             active_tasks: Arc::new(AtomicUsize::new(0)),
         })
@@ -205,20 +205,25 @@ impl TaskScheduler {
         Ok(best_group)
     }
 
-    pub fn get_default_group(&self) -> Arc<ResourceGroup> {
-        self.get_group("default").unwrap().expect("default group must exist")
+    pub fn get_default_group(&self) -> Result<Arc<ResourceGroup>> {
+        self.get_group("default")?
+            .ok_or_else(|| crate::Error::RuntimeError("Default resource group not found".to_string()))
     }
 
-    pub fn best_gpu_or_cpu(&self) -> Arc<ResourceGroup> {
+    pub fn best_gpu_or_cpu(&self) -> Result<Arc<ResourceGroup>> {
         // Try WebGPU first (as it's our primary accelerator)
-        self.get_best_group(cv_hal::BackendType::WebGPU).unwrap()
-            .or_else(|| self.get_best_group(cv_hal::BackendType::Vulkan).unwrap())
-            .unwrap_or_else(|| self.get_default_group())
+        if let Some(group) = self.get_best_group(cv_hal::BackendType::WebGPU)? {
+            return Ok(group);
+        }
+        if let Some(group) = self.get_best_group(cv_hal::BackendType::Vulkan)? {
+            return Ok(group);
+        }
+        self.get_default_group()
     }
 
     /// Convenience method to get the best device directly.
-    pub fn best_device(&self) -> ComputeDevice<'static> {
-        self.best_gpu_or_cpu().device()
+    pub fn best_device(&self) -> Result<ComputeDevice<'static>> {
+        Ok(self.best_gpu_or_cpu()?.device())
     }
 
     pub fn submit<F>(&self, group_name: &str, f: F) -> Result<()>
@@ -234,15 +239,17 @@ impl TaskScheduler {
     }
 }
 
-static GLOBAL_SCHEDULER: OnceLock<TaskScheduler> = OnceLock::new();
+static GLOBAL_SCHEDULER: OnceLock<Result<TaskScheduler>> = OnceLock::new();
 
-pub fn scheduler() -> &'static TaskScheduler {
+pub fn scheduler() -> Result<&'static TaskScheduler> {
     GLOBAL_SCHEDULER.get_or_init(|| {
-        let _ = cv_core::init_global_thread_pool(None);
+        if let Err(e) = cv_core::init_global_thread_pool(None) {
+            return Err(crate::Error::RuntimeError(format!("Failed to initialize global thread pool: {}", e)));
+        }
         let s = TaskScheduler::new();
-        s.create_group("default", num_cpus::get(), None, GroupPolicy::default()).unwrap();
-        s
-    })
+        s.create_group("default", num_cpus::get(), None, GroupPolicy::default())?;
+        Ok(s)
+    }).as_ref().map_err(|e| crate::Error::RuntimeError(e.to_string()))
 }
 
 #[cfg(test)]

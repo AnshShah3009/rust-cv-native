@@ -129,6 +129,29 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> Tensor<T, S> {
         let idx = c * self.shape.height * self.shape.width + h * self.shape.width + w;
         &mut self.as_mut_slice()[idx]
     }
+
+    /// Create a new tensor with the same metadata but different storage.
+    pub fn with_storage<S2: Storage<T>>(self, storage: S2) -> Tensor<T, S2> {
+        Tensor {
+            storage,
+            shape: self.shape,
+            dtype: self.dtype,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Attempt to map the storage of this tensor to another type using a closure.
+    pub fn try_map_storage<S2: Storage<T>, E, F>(self, f: F) -> std::result::Result<Tensor<T, S2>, E>
+    where
+        F: FnOnce(S) -> std::result::Result<S2, E>,
+    {
+        Ok(Tensor {
+            storage: f(self.storage)?,
+            shape: self.shape,
+            dtype: self.dtype,
+            _phantom: PhantomData,
+        })
+    }
 }
 
 impl<T: Clone + Copy + Default + fmt::Debug + 'static> Tensor<T> {

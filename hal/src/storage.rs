@@ -105,6 +105,10 @@ impl<T: bytemuck::Pod + fmt::Debug + Any> Storage<T> for GpuStorage<T> {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+
+    fn boxed_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
 }
 
 impl<T> fmt::Debug for GpuStorage<T> {
