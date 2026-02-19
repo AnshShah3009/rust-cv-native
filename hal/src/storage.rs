@@ -42,7 +42,7 @@ impl<T> Drop for GpuStorage<T> {
     fn drop(&mut self) {
         if let Some(arc_buf) = self.buffer.take() {
             if let Ok(buffer) = Arc::try_unwrap(arc_buf) {
-                if let Some(ctx) = GpuContext::global() {
+                if let Ok(ctx) = GpuContext::global() {
                     ctx.return_buffer(buffer, self.usage);
                 }
             }

@@ -15,6 +15,44 @@ pub struct GpuContext {
     pub queue: Arc<Queue>,
 }
 
+impl GpuContext {
+    /// Safely downcasts a GpuStorage result to the requested generic storage S.
+    /// Uses TypeId checks to avoid allocations when S is GpuStorage.
+    fn downcast_storage<T: 'static, S: Storage<T> + 'static>(
+        &self,
+        result_gpu: Tensor<T, crate::storage::GpuStorage<T>>,
+    ) -> crate::Result<Tensor<T, S>> {
+        use std::any::TypeId;
+        use std::marker::PhantomData;
+
+        if TypeId::of::<S>() == TypeId::of::<crate::storage::GpuStorage<T>>() {
+            // Target is GpuStorage, zero-cost move
+            // SAFETY: TypeId check proves S is GpuStorage<T>
+            let storage = unsafe { std::mem::transmute_copy::<crate::storage::GpuStorage<T>, S>(&result_gpu.storage) };
+            std::mem::forget(result_gpu.storage);
+            Ok(Tensor {
+                storage,
+                shape: result_gpu.shape,
+                dtype: result_gpu.dtype,
+                _phantom: PhantomData,
+            })
+        } else {
+            // Fallback to Box-based downcast for other types
+            let storage_any = Box::new(result_gpu.storage).boxed_any();
+            if let Ok(storage_s) = storage_any.downcast::<S>() {
+                Ok(Tensor {
+                    storage: *storage_s,
+                    shape: result_gpu.shape,
+                    dtype: result_gpu.dtype,
+                    _phantom: PhantomData,
+                })
+            } else {
+                Err(crate::Error::InvalidInput("Failed to downcast GPU result to original storage type".into()))
+            }
+        }
+    }
+}
+
 impl ComputeContext for GpuContext {
     fn backend_type(&self) -> BackendType {
         BackendType::WebGPU
@@ -56,19 +94,7 @@ impl ComputeContext for GpuContext {
             };
 
             let result_gpu = crate::gpu_kernels::convolve::convolve_2d(self, &input_gpu, &kernel_gpu, border_mode)?;
-
-            // Safe downcast back to S
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU result to original storage type".into()))
-            }
+            self.downcast_storage(result_gpu)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into()))
         }
@@ -104,19 +130,7 @@ impl ComputeContext for GpuContext {
             };
 
             let result_gpu = crate::gpu_kernels::threshold::threshold(self, &input_gpu, thresh, max_value, typ)?;
-
-            // Safe downcast back to S
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU result to original storage type".into()))
-            }
+            self.downcast_storage(result_gpu)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into()))
         }
@@ -141,18 +155,7 @@ impl ComputeContext for GpuContext {
             };
 
             let (gx_gpu, gy_gpu) = crate::gpu_kernels::sobel::sobel(self, &input_gpu, dx, dy, ksize)?;
-
-            let gx_any = Box::new(gx_gpu.storage).boxed_any();
-            let gy_any = Box::new(gy_gpu.storage).boxed_any();
-
-            if let (Ok(gx_s), Ok(gy_s)) = (gx_any.downcast::<S>(), gy_any.downcast::<S>()) {
-                Ok((
-                    Tensor { storage: *gx_s, shape: gx_gpu.shape, dtype: gx_gpu.dtype, _phantom: PhantomData },
-                    Tensor { storage: *gy_s, shape: gy_gpu.shape, dtype: gy_gpu.dtype, _phantom: PhantomData }
-                ))
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU Sobel results".into()))
-            }
+            Ok((self.downcast_storage(gx_gpu)?, self.downcast_storage(gy_gpu)?))
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -186,18 +189,7 @@ impl ComputeContext for GpuContext {
             };
 
             let result_gpu = crate::gpu_kernels::morphology::morphology(self, &input_gpu, typ, &kernel_gpu, iterations)?;
-
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU morphology result".into()))
-            }
+            self.downcast_storage(result_gpu)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -222,18 +214,7 @@ impl ComputeContext for GpuContext {
             };
 
             let result_gpu = crate::gpu_kernels::warp::warp(self, &input_gpu, matrix, new_shape, typ)?;
-
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU warp result".into()))
-            }
+            self.downcast_storage(result_gpu)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -257,18 +238,7 @@ impl ComputeContext for GpuContext {
             };
 
             let result_gpu = crate::gpu_kernels::nms::nms_pixel(self, &input_gpu, threshold, window_size)?;
-
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU NMS result".into()))
-            }
+            self.downcast_storage(result_gpu)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -330,18 +300,7 @@ impl ComputeContext for GpuContext {
             };
 
             let result_gpu = crate::gpu_kernels::pointcloud::transform_points(self, &input_gpu, transform)?;
-
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU pointcloud result".into()))
-            }
+            self.downcast_storage(result_gpu)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -364,18 +323,7 @@ impl ComputeContext for GpuContext {
             };
 
             let result_gpu = crate::gpu_kernels::pointcloud::compute_normals(self, &input_gpu, k_neighbors)?;
-
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU normals result".into()))
-            }
+            self.downcast_storage(result_gpu)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -440,18 +388,7 @@ impl ComputeContext for GpuContext {
             };
 
             let result_gpu = crate::gpu_kernels::tsdf::raycast(self, &input_gpu, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation)?;
-
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU TSDF result".into()))
-            }
+            self.downcast_storage(result_gpu)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -531,18 +468,7 @@ impl ComputeContext for GpuContext {
             };
 
             let result_gpu = crate::gpu_kernels::color::cvt_color(self, &input_gpu, code)?;
-
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
-            }
+            self.downcast_storage(result_gpu)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -565,18 +491,7 @@ impl ComputeContext for GpuContext {
             };
 
             let result_gpu = crate::gpu_kernels::resize::resize(self, &input_gpu, new_shape)?;
-
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
-            }
+            self.downcast_storage(result_gpu)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -601,18 +516,7 @@ impl ComputeContext for GpuContext {
             };
 
             let result_gpu = crate::gpu_kernels::bilateral::bilateral_filter(self, &input_gpu, d, sigma_color, sigma_space)?;
-
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
-            }
+            self.downcast_storage(result_gpu)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -636,18 +540,7 @@ impl ComputeContext for GpuContext {
             };
 
             let result_gpu = crate::gpu_kernels::fast::fast_detect(self, &input_gpu, threshold, non_max_suppression)?;
-
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
-            }
+            self.downcast_storage(result_gpu)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
@@ -677,18 +570,7 @@ impl ComputeContext for GpuContext {
             
             // Convert back to u8
             let blurred_u8 = blurred_f32.to_u8_ctx(self)?;
-
-            let storage_any = Box::new(blurred_u8.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: blurred_u8.shape,
-                    dtype: blurred_u8.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
-            }
+            self.downcast_storage(blurred_u8)
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into()))
         }
@@ -792,7 +674,6 @@ impl ComputeContext for GpuContext {
 
         if let Some(img_storage) = image.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
             let img_gpu = Tensor { storage: img_storage.clone(), shape: image.shape, dtype: image.dtype, _phantom: PhantomData };
-            // ... (rest of the implementation remains similar, but using img_gpu)
 
             // 1. Upload keypoints to GPU
             let kp_data: Vec<[f32; 4]> = keypoints.keypoints.iter().map(|kp| {
@@ -1095,47 +976,31 @@ impl ComputeContext for GpuContext {
     }
 }
 
-            let params_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("MOG2 Params"),
-                contents: bytemuck::cast_slice(&[*params]),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-
-            let shader_source = include_str!("../shaders/mog2_update.wgsl");
-            let pipeline = self.create_compute_pipeline(shader_source, "main");
-
-            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("MOG2 Bind Group"),
-                layout: &pipeline.get_bind_group_layout(0),
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: frame_gpu.storage.buffer().as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: model_gpu.storage.buffer().as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: mask_gpu.storage.buffer().as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
-                ],
-            });
-
-            let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-            {
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
-                pass.set_pipeline(&pipeline);
-                pass.set_bind_group(0, &bind_group, &[]);
-                pass.dispatch_workgroups((params.width + 15) / 16, (params.height + 15) / 16, 1);
-            }
-            self.submit(encoder);
-            Ok(())
-        } else {
-            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
-        }
-    }
-}
-
 impl GpuContext {
-    /// Get the global GPU context, initializing it if necessary.
+    /// Get the global GPU context. Returns an error if not yet initialized.
     pub fn global() -> crate::Result<&'static GpuContext> {
-        GLOBAL_CONTEXT.get_or_init(|| {
-            Self::new()
-        }).as_ref().map_err(|e| crate::Error::InitError(e.to_string()))
+        GLOBAL_CONTEXT.get()
+            .ok_or_else(|| crate::Error::InitError("GPU Context not initialized. Call init_global() first.".into()))?
+            .as_ref()
+            .map_err(|e| crate::Error::InitError(e.to_string()))
+    }
+
+    /// Initialize the global GPU context asynchronously.
+    pub async fn init_global() -> crate::Result<&'static GpuContext> {
+        let res = GLOBAL_CONTEXT.get_or_init(|| {
+            // We still need a sync way to call the async new_async if we are in init_global
+            // But init_global is itself async, so we can await it.
+            // Wait, get_or_init doesn't support async closures.
+            // We use a different pattern: initialize outside and then set.
+            Box::pin(Self::new_async()).now_or_never().unwrap_or_else(|| {
+                // If it wasn't ready immediately, we have a problem with get_or_init.
+                // Modern OnceCell/OnceLock don't easily support async.
+                // For now, we'll keep the block_on inside the init_global ONLY if called from a non-async thread,
+                // or use a mutex to guard the async init.
+                block_on(Self::new_async())
+            })
+        });
+        res.as_ref().map_err(|e| crate::Error::InitError(e.to_string()))
     }
 
     /// Initialize a new GPU context (synchronous wrapper).

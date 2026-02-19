@@ -148,7 +148,7 @@ impl<T> Drop for UnifiedBuffer<T> {
         if let (Some(buffer), Some(_id)) = (self.device_data.take(), self.device_id.take()) {
             // Safety: UnifiedBuffer is primarily used with GpuContext::global().
             // We attempt to return to the global pool if it still exists.
-            if let Some(ctx) = GpuContext::global() {
+            if let Ok(ctx) = GpuContext::global() {
                 let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
                 ctx.return_buffer(buffer, usages);
             }
