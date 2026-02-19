@@ -154,3 +154,21 @@ This document tracks the core architectural components that have been stabilized
 *   **Target File:** `cv-imgproc/src/convolve.rs`
 *   **Definition:** The separation of 2D convolutions into successive 1D horizontal and vertical passes, allocating intermediate buffers from `cv_core::BufferPool`.
 *   **Rationale:** Guarantees $O(K)$ time complexity instead of $O(K^2)$. Freezing this API ensures all future filters (Gaussian, Sobel, Scharr, etc.) are built on top of the performant, SIMD-compatible row-processor rather than naive nested loops.
+
+## 28. Isolated ResourceGroup Thread Pools
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Target File:** `cv-runtime/src/orchestrator.rs`
+*   **Definition:** `ResourceGroup` utilizes isolated `Arc<rayon::ThreadPool>` instances created via `ThreadPoolBuilder`, mapping to explicit `core_ids`.
+*   **Rationale:** Semaphores over a global Rayon pool fail to provide true hardware isolation and lead to false concurrency limits under load. Freezing the isolated thread pool model guarantees that Python annotations (@resource_group("high_priority", cores=)) actually result in hard OS-level thread and core steering.
+
+## 29. ComputeDevice Static Dispatch Enum
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Target File:** `cv-hal/src/compute.rs`
+*   **Definition:** The `enum ComputeDevice<'a> { Cpu(&'a CpuBackend), Gpu(&'a GpuContext), Mlx(&'a MlxContext) }` pattern.
+*   **Rationale:** The library must avoid dynamic dispatch (Box<dyn ComputeContext>) in the hot loop. Freezing this enum structure forces all new hardware backends (like MLX or CUDA) to be implemented as variants of this enum, ensuring zero-cost abstraction when passed down to algorithmic components.
+
+## 30. Size-Bucketed Lazy Buffer Pooling
+*   **Status:** Frozen (Feb 20, 2026)
+*   **Target File:** `cv-core/src/runtime.rs`
+*   **Definition:** `BufferPool::get` utilizing `iter().position` to selectively `swap_remove` validly sized buffers without draining the pool.
+*   **Rationale:** Image processing pipelines generate extreme memory churn. Freezing the strict re-use rules in the `BufferPool` ensures that memory fragmentation remains low during long-running tasks like Video stream processing or SLAM.

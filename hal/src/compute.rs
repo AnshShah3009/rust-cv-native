@@ -1,16 +1,19 @@
 use crate::gpu::GpuContext;
 use crate::cpu::CpuBackend;
+use crate::mlx::MlxContext;
 use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType, ColorConversion};
 use crate::Result;
 use cv_core::{Tensor, storage::Storage};
 use std::sync::OnceLock;
 
 static CPU_CONTEXT: OnceLock<CpuBackend> = OnceLock::new();
+static MLX_CONTEXT: OnceLock<MlxContext> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug)]
 pub enum ComputeDevice<'a> {
     Cpu(&'a CpuBackend),
     Gpu(&'a GpuContext),
+    Mlx(&'a MlxContext),
 }
 
 impl<'a> ComputeDevice<'a> {
@@ -18,6 +21,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.backend_type(),
             ComputeDevice::Gpu(gpu) => gpu.backend_type(),
+            ComputeDevice::Mlx(mlx) => mlx.backend_type(),
         }
     }
 
@@ -30,6 +34,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.convolve_2d(input, kernel, border_mode),
             ComputeDevice::Gpu(gpu) => gpu.convolve_2d(input, kernel, border_mode),
+            ComputeDevice::Mlx(mlx) => mlx.convolve_2d(input, kernel, border_mode),
         }
     }
 
@@ -43,6 +48,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.threshold(input, thresh, max_value, typ),
             ComputeDevice::Gpu(gpu) => gpu.threshold(input, thresh, max_value, typ),
+            ComputeDevice::Mlx(mlx) => mlx.threshold(input, thresh, max_value, typ),
         }
     }
 
@@ -56,6 +62,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.sobel(input, dx, dy, ksize),
             ComputeDevice::Gpu(gpu) => gpu.sobel(input, dx, dy, ksize),
+            ComputeDevice::Mlx(mlx) => mlx.sobel(input, dx, dy, ksize),
         }
     }
 
@@ -69,6 +76,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.morphology(input, typ, kernel, iterations),
             ComputeDevice::Gpu(gpu) => gpu.morphology(input, typ, kernel, iterations),
+            ComputeDevice::Mlx(mlx) => mlx.morphology(input, typ, kernel, iterations),
         }
     }
 
@@ -82,6 +90,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.warp(input, matrix, new_shape, typ),
             ComputeDevice::Gpu(gpu) => gpu.warp(input, matrix, new_shape, typ),
+            ComputeDevice::Mlx(mlx) => mlx.warp(input, matrix, new_shape, typ),
         }
     }
 
@@ -94,6 +103,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.nms(input, threshold, window_size),
             ComputeDevice::Gpu(gpu) => gpu.nms(input, threshold, window_size),
+            ComputeDevice::Mlx(mlx) => mlx.nms(input, threshold, window_size),
         }
     }
 
@@ -105,6 +115,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.nms_boxes(input, iou_threshold),
             ComputeDevice::Gpu(gpu) => gpu.nms_boxes(input, iou_threshold),
+            ComputeDevice::Mlx(mlx) => mlx.nms_boxes(input, iou_threshold),
         }
     }
 
@@ -116,6 +127,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.nms_rotated_boxes(input, iou_threshold),
             ComputeDevice::Gpu(gpu) => gpu.nms_rotated_boxes(input, iou_threshold),
+            ComputeDevice::Mlx(mlx) => mlx.nms_rotated_boxes(input, iou_threshold),
         }
     }
 
@@ -128,6 +140,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.nms_polygons(polygons, scores, iou_threshold),
             ComputeDevice::Gpu(gpu) => gpu.nms_polygons(polygons, scores, iou_threshold),
+            ComputeDevice::Mlx(mlx) => mlx.nms_polygons(polygons, scores, iou_threshold),
         }
     }
 
@@ -139,6 +152,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.pointcloud_transform(points, transform),
             ComputeDevice::Gpu(gpu) => gpu.pointcloud_transform(points, transform),
+            ComputeDevice::Mlx(mlx) => mlx.pointcloud_transform(points, transform),
         }
     }
 
@@ -150,6 +164,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.pointcloud_normals(points, k_neighbors),
             ComputeDevice::Gpu(gpu) => gpu.pointcloud_normals(points, k_neighbors),
+            ComputeDevice::Mlx(mlx) => mlx.pointcloud_normals(points, k_neighbors),
         }
     }
 
@@ -165,6 +180,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.tsdf_integrate(depth_image, camera_pose, intrinsics, voxel_volume, voxel_size, truncation),
             ComputeDevice::Gpu(gpu) => gpu.tsdf_integrate(depth_image, camera_pose, intrinsics, voxel_volume, voxel_size, truncation),
+            ComputeDevice::Mlx(mlx) => mlx.tsdf_integrate(depth_image, camera_pose, intrinsics, voxel_volume, voxel_size, truncation),
         }
     }
 
@@ -181,6 +197,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.tsdf_raycast(tsdf_volume, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation),
             ComputeDevice::Gpu(gpu) => gpu.tsdf_raycast(tsdf_volume, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation),
+            ComputeDevice::Mlx(mlx) => mlx.tsdf_raycast(tsdf_volume, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation),
         }
     }
 
@@ -194,6 +211,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles),
             ComputeDevice::Gpu(gpu) => gpu.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles),
+            ComputeDevice::Mlx(mlx) => mlx.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles),
         }
     }
 
@@ -208,6 +226,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters),
             ComputeDevice::Gpu(gpu) => gpu.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters),
+            ComputeDevice::Mlx(mlx) => mlx.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters),
         }
     }
 
@@ -219,6 +238,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.cvt_color(input, code),
             ComputeDevice::Gpu(gpu) => gpu.cvt_color(input, code),
+            ComputeDevice::Mlx(mlx) => mlx.cvt_color(input, code),
         }
     }
 
@@ -230,6 +250,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.resize(input, new_shape),
             ComputeDevice::Gpu(gpu) => gpu.resize(input, new_shape),
+            ComputeDevice::Mlx(mlx) => mlx.resize(input, new_shape),
         }
     }
 
@@ -243,6 +264,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.bilateral_filter(input, d, sigma_color, sigma_space),
             ComputeDevice::Gpu(gpu) => gpu.bilateral_filter(input, d, sigma_color, sigma_space),
+            ComputeDevice::Mlx(mlx) => mlx.bilateral_filter(input, d, sigma_color, sigma_space),
         }
     }
 
@@ -255,6 +277,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.fast_detect(input, threshold, non_max_suppression),
             ComputeDevice::Gpu(gpu) => gpu.fast_detect(input, threshold, non_max_suppression),
+            ComputeDevice::Mlx(mlx) => mlx.fast_detect(input, threshold, non_max_suppression),
         }
     }
 
@@ -267,6 +290,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.gaussian_blur(input, sigma, k_size),
             ComputeDevice::Gpu(gpu) => gpu.gaussian_blur(input, sigma, k_size),
+            ComputeDevice::Mlx(mlx) => mlx.gaussian_blur(input, sigma, k_size),
         }
     }
 
@@ -278,6 +302,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.subtract(a, b),
             ComputeDevice::Gpu(gpu) => gpu.subtract(a, b),
+            ComputeDevice::Mlx(mlx) => mlx.subtract(a, b),
         }
     }
 
@@ -290,6 +315,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.match_descriptors(query, train, ratio_threshold),
             ComputeDevice::Gpu(gpu) => gpu.match_descriptors(query, train, ratio_threshold),
+            ComputeDevice::Mlx(mlx) => mlx.match_descriptors(query, train, ratio_threshold),
         }
     }
 
@@ -304,6 +330,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold),
             ComputeDevice::Gpu(gpu) => gpu.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold),
+            ComputeDevice::Mlx(mlx) => mlx.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold),
         }
     }
 
@@ -315,6 +342,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.compute_sift_descriptors(image, keypoints),
             ComputeDevice::Gpu(gpu) => gpu.compute_sift_descriptors(image, keypoints),
+            ComputeDevice::Mlx(mlx) => mlx.compute_sift_descriptors(image, keypoints),
         }
     }
 
@@ -327,6 +355,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.icp_correspondences(src, tgt, max_dist),
             ComputeDevice::Gpu(gpu) => gpu.icp_correspondences(src, tgt, max_dist),
+            ComputeDevice::Mlx(mlx) => mlx.icp_correspondences(src, tgt, max_dist),
         }
     }
 
@@ -341,6 +370,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.icp_accumulate(source, target, target_normals, correspondences, transform),
             ComputeDevice::Gpu(gpu) => gpu.icp_accumulate(source, target, target_normals, correspondences, transform),
+            ComputeDevice::Mlx(mlx) => mlx.icp_accumulate(source, target, target_normals, correspondences, transform),
         }
     }
 
@@ -356,6 +386,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.dense_icp_step(source_depth, target_data, intrinsics, initial_guess, max_dist, max_angle),
             ComputeDevice::Gpu(gpu) => gpu.dense_icp_step(source_depth, target_data, intrinsics, initial_guess, max_dist, max_angle),
+            ComputeDevice::Mlx(mlx) => mlx.dense_icp_step(source_depth, target_data, intrinsics, initial_guess, max_dist, max_angle),
         }
     }
 
@@ -368,6 +399,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.akaze_diffusion(input, k, tau),
             ComputeDevice::Gpu(gpu) => gpu.akaze_diffusion(input, k, tau),
+            ComputeDevice::Mlx(mlx) => mlx.akaze_diffusion(input, k, tau),
         }
     }
 
@@ -378,6 +410,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.akaze_derivatives(input),
             ComputeDevice::Gpu(gpu) => gpu.akaze_derivatives(input),
+            ComputeDevice::Mlx(mlx) => mlx.akaze_derivatives(input),
         }
     }
 
@@ -388,6 +421,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.akaze_contrast_k(input),
             ComputeDevice::Gpu(gpu) => gpu.akaze_contrast_k(input),
+            ComputeDevice::Mlx(mlx) => mlx.akaze_contrast_k(input),
         }
     }
 
@@ -401,6 +435,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.spmv(row_ptr, col_indices, values, x),
             ComputeDevice::Gpu(gpu) => gpu.spmv(row_ptr, col_indices, values, x),
+            ComputeDevice::Mlx(mlx) => mlx.spmv(row_ptr, col_indices, values, x),
         }
     }
 
@@ -414,6 +449,7 @@ impl<'a> ComputeDevice<'a> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.mog2_update(frame, model, mask, params),
             ComputeDevice::Gpu(gpu) => gpu.mog2_update(frame, model, mask, params),
+            ComputeDevice::Mlx(mlx) => mlx.mog2_update(frame, model, mask, params),
         }
     }
 
@@ -421,7 +457,7 @@ impl<'a> ComputeDevice<'a> {
     pub fn get_buffer(&self, size: u64, usage: wgpu::BufferUsages) -> Result<wgpu::Buffer> {
         match self {
             ComputeDevice::Gpu(gpu) => Ok(gpu.get_buffer(size, usage)),
-            ComputeDevice::Cpu(_) => Err(crate::Error::NotSupported("GPU buffer pooling not available on CPU".into())),
+            ComputeDevice::Cpu(_) | ComputeDevice::Mlx(_) => Err(crate::Error::NotSupported("GPU buffer pooling not available".into())),
         }
     }
 
@@ -432,14 +468,16 @@ impl<'a> ComputeDevice<'a> {
                 gpu.return_buffer(buffer, usage);
                 Ok(())
             }
-            ComputeDevice::Cpu(_) => Err(crate::Error::NotSupported("GPU buffer pooling not available on CPU".into())),
+            ComputeDevice::Cpu(_) | ComputeDevice::Mlx(_) => Err(crate::Error::NotSupported("GPU buffer pooling not available".into())),
         }
     }
 }
 
 /// Get the best available compute device.
 pub fn get_device() -> ComputeDevice<'static> {
-    if let Some(gpu) = GpuContext::global() {
+    if let Some(mlx) = MlxContext::new() {
+        ComputeDevice::Mlx(MLX_CONTEXT.get_or_init(|| mlx))
+    } else if let Some(gpu) = GpuContext::global() {
         ComputeDevice::Gpu(gpu)
     } else {
         ComputeDevice::Cpu(CPU_CONTEXT.get_or_init(|| CpuBackend::new().unwrap()))

@@ -120,7 +120,8 @@ impl Mog2 {
                 
                 let u8_data: Vec<u8> = mask_cpu.as_slice().iter().map(|&v| v as u8).collect();
                 CpuTensor::from_vec(u8_data, frame.shape)
-            }
+            },
+            ComputeDevice::Mlx(_) => todo!("MOG2 not implemented for MLX"),
         }
     }
 }

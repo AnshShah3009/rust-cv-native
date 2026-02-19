@@ -14,6 +14,9 @@ pub enum Error {
     
     #[error("Concurrency error: {0}")]
     ConcurrencyError(String),
+
+    #[error("Not supported: {0}")]
+    NotSupported(String),
     
     #[error("HAL error: {0}")]
     HalError(#[from] cv_hal::Error),

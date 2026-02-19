@@ -89,13 +89,11 @@ impl BufferPool {
         // Try requested bucket and then larger buckets
         for i in idx..4 {
             if let Ok(mut bucket) = self.buckets[i].lock() {
-                if let Some(mut buf) = bucket.pop() {
-                    if buf.capacity() >= min_size {
-                        buf.clear();
-                        return buf;
-                    }
-                    // If we popped one that's too small for some reason (shouldn't happen in high buckets),
-                    // we'll just fall through and allocate or try next bucket.
+                // Find the first buffer that meets the capacity requirement
+                if let Some(pos) = bucket.iter().position(|b| b.capacity() >= min_size) {
+                    let mut buf = bucket.swap_remove(pos);
+                    buf.clear();
+                    return buf;
                 }
             }
         }

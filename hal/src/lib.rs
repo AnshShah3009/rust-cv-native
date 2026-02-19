@@ -7,6 +7,7 @@ pub mod storage;
 pub mod tensor_ext;
 pub mod device;
 pub mod gpu;
+pub mod mlx;
 pub mod gpu_utils;
 pub mod gpu_sparse;
 pub mod gpu_kernels;

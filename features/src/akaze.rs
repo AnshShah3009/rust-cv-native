@@ -140,7 +140,8 @@ impl Akaze {
                         });
                     }
                 }
-            }
+            },
+            ComputeDevice::Mlx(_) => todo!("AKAZE evolution not implemented for MLX"),
         }
         
         evolution

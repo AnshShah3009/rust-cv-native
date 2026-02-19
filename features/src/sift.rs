@@ -183,7 +183,8 @@ impl Sift {
                         all_descriptors.push(cv_core::Descriptor::new(d.data, restored_kp.clone()));
                         valid_keypoints.push(restored_kp);
                     }
-                }
+                },
+                ComputeDevice::Mlx(_) => todo!("SIFT descriptors not implemented for MLX"),
             }
         }
 
@@ -277,7 +278,7 @@ fn convert_to_f32_cpu<S: Storage<u8> + 'static>(
         let input_gpu = unsafe { &*input_ptr };
         let gpu_ctx = match ctx {
             ComputeDevice::Gpu(g) => g,
-            _ => panic!("Logic error"),
+            _ => panic!("Logic error: GpuStorage with non-GPU context"),
         };
         input_gpu.to_cpu_ctx(gpu_ctx).unwrap()
     } else {

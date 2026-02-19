@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use crate::Result;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use cv_hal::compute::{ComputeDevice, get_device};
-use tokio::sync::Semaphore;
 
 /// Policy for a resource group
 #[derive(Debug, Clone, Copy)]
@@ -30,18 +29,34 @@ pub struct ResourceGroup {
     pub policy: GroupPolicy,
     pub num_threads: usize,
     device: ComputeDevice<'static>,
-    concurrency_limit: Arc<Semaphore>,
+    pool: Arc<rayon::ThreadPool>,
     active_tasks: Arc<AtomicUsize>,
 }
 
 impl ResourceGroup {
-    pub fn new(_scheduler: &TaskScheduler, name: &str, num_threads: usize, _core_ids: Option<Vec<usize>>, policy: GroupPolicy, device: Option<ComputeDevice<'static>>) -> Result<Self> {
+    pub fn new(_scheduler: &TaskScheduler, name: &str, num_threads: usize, core_ids: Option<Vec<usize>>, policy: GroupPolicy, device: Option<ComputeDevice<'static>>) -> Result<Self> {
+        let mut builder = rayon::ThreadPoolBuilder::new().num_threads(num_threads);
+        
+        if let Some(cores) = core_ids {
+            builder = builder.start_handler(move |thread_idx| {
+                if let Some(&core_id) = cores.get(thread_idx % cores.len()) {
+                    if let Some(system_cores) = core_affinity::get_core_ids() {
+                        if let Some(target_core) = system_cores.into_iter().find(|c| c.id == core_id) {
+                            core_affinity::set_for_current(target_core);
+                        }
+                    }
+                }
+            });
+        }
+
+        let pool = Arc::new(builder.build().map_err(|e| crate::Error::RuntimeError(e.to_string()))?);
+
         Ok(Self {
             name: name.to_string(),
             policy,
             num_threads,
             device: device.unwrap_or_else(get_device),
-            concurrency_limit: Arc::new(Semaphore::new(num_threads)),
+            pool,
             active_tasks: Arc::new(AtomicUsize::new(0)),
         })
     }
@@ -54,13 +69,10 @@ impl ResourceGroup {
     where
         F: FnOnce() + Send + 'static,
     {
-        let semaphore = self.concurrency_limit.clone();
-        let name = self.name.clone();
         let active_tasks_clone = self.active_tasks.clone();
-        
         self.active_tasks.fetch_add(1, Ordering::SeqCst);
         
-        rayon::spawn(move || {
+        self.pool.spawn(move || {
             // Drop guard guarantees decrement even on panic
             struct TaskGuard(Arc<AtomicUsize>);
             impl Drop for TaskGuard {
@@ -69,18 +81,7 @@ impl ResourceGroup {
                 }
             }
             let _guard = TaskGuard(active_tasks_clone);
-
-            match semaphore.try_acquire() {
-                Ok(_permit) => {
-                    f();
-                }
-                Err(_) => {
-                    eprintln!("Warning: Resource group '{}' concurrency limit reached, task dropped or delayed?", name);
-                    // In a real system we might want to wait or queue.
-                    // For now, let's just run it anyway to avoid losing work, but warn.
-                    f(); 
-                }
-            }
+            f();
         });
     }
 
@@ -90,15 +91,8 @@ impl ResourceGroup {
         F: FnOnce() -> R + Send,
         R: Send,
     {
-        // Try acquire permit. If it fails, we might still want to run but it's a policy decision.
-        // Spec said expect("...").
-        let _permit = self.concurrency_limit.try_acquire().ok();
-        if _permit.is_none() {
-            eprintln!("Warning: Resource group '{}' concurrency limit reached", self.name);
-        }
-        
         self.active_tasks.fetch_add(1, Ordering::SeqCst);
-        let result = f();
+        let result = self.pool.install(f);
         self.active_tasks.fetch_sub(1, Ordering::SeqCst);
         result
     }

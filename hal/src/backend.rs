@@ -9,6 +9,7 @@ pub enum BackendType {
     DirectML,
     TensorRT,
     WebGPU,
+    Mlx,
 }
 
 impl fmt::Display for BackendType {
@@ -21,6 +22,7 @@ impl fmt::Display for BackendType {
             BackendType::DirectML => write!(f, "DirectML"),
             BackendType::TensorRT => write!(f, "TensorRT"),
             BackendType::WebGPU => write!(f, "WebGPU"),
+            BackendType::Mlx => write!(f, "MLX"),
         }
     }
 }

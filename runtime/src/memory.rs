@@ -67,6 +67,8 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
 
         if let ComputeDevice::Gpu(gpu) = device {
             gpu.queue.write_buffer(buffer, 0, bytemuck::cast_slice(&host_guard));
+        } else if let ComputeDevice::Mlx(_) = device {
+            return Err(crate::Error::NotSupported("UnifiedBuffer sync to MLX not yet implemented".into()));
         }
         
         self.location = BufferLocation::Both;
@@ -98,6 +100,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
                 ).await?
             }
             ComputeDevice::Cpu(_) => return Err(crate::Error::MemoryError("Cannot sync to host from CPU device".into())),
+            ComputeDevice::Mlx(_) => return Err(crate::Error::NotSupported("UnifiedBuffer sync from MLX not yet implemented".into())),
         };
 
         let mut host_guard = self.host_data.lock()
