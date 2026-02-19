@@ -87,7 +87,7 @@ impl CpuBackend {
         let ry = ky.len() / 2;
         
         let pool = cv_core::BufferPool::global();
-        let mut intermediate_vec = pool.get(w * h * 4);
+        let mut intermediate_vec = pool.get_guarded(w * h * 4);
         let intermediate_ptr = intermediate_vec.as_mut_ptr() as *mut f32;
         let intermediate = unsafe { std::slice::from_raw_parts_mut(intermediate_ptr, w * h) };
 
@@ -115,8 +115,6 @@ impl CpuBackend {
                 row_dst[x] = sum.abs().min(255.0) as u8;
             }
         });
-
-        pool.return_buffer(intermediate_vec);
     }
 }
 
@@ -311,14 +309,14 @@ impl ComputeContext for CpuBackend {
         }
 
         let pool = cv_core::BufferPool::global();
-        let mut current_vec = pool.get(src_data.len());
-        current_vec.copy_from_slice(src_data);
+        let mut current_guarded = pool.get_guarded(src_data.len());
+        current_guarded.copy_from_slice(src_data);
         
-        let mut next_vec = pool.get(src_data.len());
+        let mut next_guarded = pool.get_guarded(src_data.len());
 
         for _ in 0..iterations {
-            let src = &current_vec;
-            next_vec.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
+            let src = &*current_guarded;
+            next_guarded.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
                 let y = y as isize;
                 let mut x = 0;
                 
@@ -374,18 +372,18 @@ impl ComputeContext for CpuBackend {
                     row_out[cx_idx] = val;
                 }
             });
-            std::mem::swap(&mut current_vec, &mut next_vec);
+            // Manual swap to avoid moving out of guards
+            let tmp = current_guarded.take();
+            *current_guarded = next_guarded.take();
+            *next_guarded = tmp;
         }
 
         let result = Tensor {
-            storage: S::from_vec(current_vec.clone()),
+            storage: S::from_vec(current_guarded.to_vec()),
             shape: input.shape,
             dtype: input.dtype,
             _phantom: std::marker::PhantomData,
         };
-        
-        pool.return_buffer(current_vec);
-        pool.return_buffer(next_vec);
         
         Ok(result)
     }

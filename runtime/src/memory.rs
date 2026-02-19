@@ -14,6 +14,7 @@ pub enum BufferLocation {
 pub struct UnifiedBuffer<T> {
     host_data: Arc<Mutex<Vec<T>>>,
     device_data: Option<wgpu::Buffer>,
+    device: Option<ComputeDevice<'static>>,
     location: BufferLocation,
     len: usize,
 }
@@ -23,6 +24,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         Self {
             host_data: Arc::new(Mutex::new(vec![T::default(); len])),
             device_data: None,
+            device: None,
             location: BufferLocation::Host,
             len,
         }
@@ -57,11 +59,13 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
             } else {
                 let new_b = device.get_buffer(size, usages)?;
                 self.device_data = Some(new_b);
+                self.device = Some(unsafe { std::mem::transmute::<ComputeDevice<'_>, ComputeDevice<'static>>(*device) });
                 self.device_data.as_ref().unwrap()
             }
         } else {
             let new_b = device.get_buffer(size, usages)?;
             self.device_data = Some(new_b);
+            self.device = Some(unsafe { std::mem::transmute::<ComputeDevice<'_>, ComputeDevice<'static>>(*device) });
             self.device_data.as_ref().unwrap()
         };
 
@@ -82,6 +86,11 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
     pub async fn sync_to_host(&mut self, device: &ComputeDevice<'_>) -> Result<()> {
         if self.location == BufferLocation::Host || self.location == BufferLocation::Both {
             return Ok(());
+        }
+
+        // Store the device if we haven't yet, so we can return the buffer later
+        if self.device.is_none() {
+            self.device = Some(unsafe { std::mem::transmute::<ComputeDevice<'_>, ComputeDevice<'static>>(*device) });
         }
 
         let buffer = self.device_data.as_ref()
@@ -116,12 +125,22 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         if let Some(buffer) = self.device_data.take() {
             let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
             device.return_buffer(buffer, usages)?;
+            self.device = None;
         }
         Ok(())
     }
 
     pub fn device_buffer(&self) -> Option<&wgpu::Buffer> {
         self.device_data.as_ref()
+    }
+}
+
+impl<T> Drop for UnifiedBuffer<T> {
+    fn drop(&mut self) {
+        if let (Some(buffer), Some(device)) = (self.device_data.take(), self.device.take()) {
+            let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
+            let _ = device.return_buffer(buffer, usages);
+        }
     }
 }
 

@@ -114,4 +114,57 @@ impl BufferPool {
             }
         }
     }
+
+    /// Get a buffer wrapped in a Drop guard that returns it to the pool automatically.
+    pub fn get_guarded(&self, min_size: usize) -> DropBufferPool<'_> {
+        DropBufferPool::new(self, self.get(min_size))
+    }
+}
+
+/// RAII guard that returns a buffer to the BufferPool when dropped.
+pub struct DropBufferPool<'a> {
+    pool: &'a BufferPool,
+    buffer: Option<Vec<u8>>,
+}
+
+impl<'a> DropBufferPool<'a> {
+    pub fn new(pool: &'a BufferPool, buffer: Vec<u8>) -> Self {
+        Self {
+            pool,
+            buffer: Some(buffer),
+        }
+    }
+
+    pub fn buffer(&self) -> &Vec<u8> {
+        self.buffer.as_ref().unwrap()
+    }
+
+    pub fn buffer_mut(&mut self) -> &mut Vec<u8> {
+        self.buffer.as_mut().unwrap()
+    }
+
+    pub fn take(mut self) -> Vec<u8> {
+        self.buffer.take().unwrap()
+    }
+}
+
+impl<'a> std::ops::Deref for DropBufferPool<'a> {
+    type Target = Vec<u8>;
+    fn deref(&self) -> &Self::Target {
+        self.buffer()
+    }
+}
+
+impl<'a> std::ops::DerefMut for DropBufferPool<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.buffer_mut()
+    }
+}
+
+impl<'a> Drop for DropBufferPool<'a> {
+    fn drop(&mut self) {
+        if let Some(buf) = self.buffer.take() {
+            self.pool.return_buffer(buf);
+        }
+    }
 }
