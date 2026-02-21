@@ -43,21 +43,32 @@ pub mod backends;
 
 /// Open a video file
 pub fn open_video(path: &str) -> Result<Box<dyn VideoCapture>> {
-    #[cfg(feature = "ffmpeg")]
-    {
-        let cap = backends::NativeFfmpegCapture::new(path)?;
-        Ok(Box::new(cap))
-    }
-    #[cfg(not(feature = "ffmpeg"))]
-    {
-        // Try PNG sequence as a native fallback
-        if std::path::Path::new(path).is_dir() {
-            let cap = backends::PngSequenceCapture::new(path)?;
-            Ok(Box::new(cap))
-        } else {
-            Err(VideoError::Backend("FFmpeg backend disabled. To open video files, enable 'ffmpeg' feature or provide a directory of images.".to_string()))
+    let p = std::path::Path::new(path);
+    
+    // 1. Try Pure Rust GIF
+    if let Some(ext) = p.extension() {
+        if ext.to_string_lossy().to_lowercase() == "gif" {
+            let cap = backends::GifCapture::new(path)?;
+            return Ok(Box::new(cap));
         }
     }
+
+    // 2. Try Pure Rust Image Sequence (Directory)
+    if p.is_dir() {
+        let cap = backends::PngSequenceCapture::new(path)?;
+        return Ok(Box::new(cap));
+    }
+
+    // 3. Try FFmpeg if enabled
+    #[cfg(feature = "ffmpeg")]
+    {
+        if let Ok(cap) = backends::NativeFfmpegCapture::new(path) {
+            return Ok(Box::new(cap));
+        }
+    }
+
+    // 4. Failure
+    Err(VideoError::Backend("Could not open video. Supported Pure Rust formats: GIF, Image Sequence (Dir). Enable 'ffmpeg' feature for MP4/AVI support.".to_string()))
 }
 
 /// Open a camera device

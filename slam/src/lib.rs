@@ -26,7 +26,7 @@ impl Slam {
         let tensor: Tensor<u8, CpuStorage<u8>> = Tensor::from_vec(image.to_vec(), shape).map_err(|e| e.to_string())?;
         
         // Front-end tracking
-        let res = self.tracker.process_frame(&tensor, &self.map);
+        let res = self.tracker.process_frame(&tensor, &mut self.map);
         
         // Clear pooled buffers to avoid accumulation
         cv_hal::buffer_utils::global_pool().clear();
