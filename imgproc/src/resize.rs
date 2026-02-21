@@ -1,6 +1,6 @@
 use image::{GrayImage, RgbImage};
 use rayon::prelude::*;
-use cv_runtime::orchestrator::RuntimeRunner;
+use cv_runtime::orchestrator::ResourceGroup;
 use cv_hal::compute::ComputeDevice;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,8 +17,16 @@ pub fn resize(
     height: u32,
     interpolation: Interpolation,
 ) -> GrayImage {
-    let runner = cv_runtime::default_runner();
-    resize_ctx(src, width, height, interpolation, &runner)
+    // Attempt to get a default group, fallback to CPU only if scheduler fails (unlikely in initialized app)
+    // For now, we can create a temporary CPU-only group or panic if init failed.
+    // Better: use scheduler if available.
+    if let Ok(s) = cv_runtime::orchestrator::scheduler() {
+        if let Ok(group) = s.get_default_group() {
+            return resize_ctx(src, width, height, interpolation, &group);
+        }
+    }
+    // Fallback: minimal CPU run
+    resize_linear(src, width, height)
 }
 
 pub fn resize_ctx(
@@ -26,7 +34,7 @@ pub fn resize_ctx(
     width: u32,
     height: u32,
     interpolation: Interpolation,
-    group: &RuntimeRunner,
+    group: &ResourceGroup,
 ) -> GrayImage {
     if width == 0 || height == 0 {
         return GrayImage::new(0, 0);

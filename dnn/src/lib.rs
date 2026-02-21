@@ -1,15 +1,14 @@
 //! Deep Learning Module
 //!
 //! Provides a high-level interface for running neural network inference
-//! using ONNX Runtime (via the `ort` crate).
+//! using `tract` (Pure Rust).
 
 use cv_core::Tensor;
-use cv_runtime::orchestrator::RuntimeRunner;
+use cv_runtime::orchestrator::ResourceGroup;
 use image::DynamicImage;
-use ort::session::Session;
-use ort::value::Value;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tract_onnx::prelude::*;
 
 pub type Result<T> = std::result::Result<T, DnnError>;
 
@@ -24,72 +23,77 @@ pub enum DnnError {
     #[error("Preprocessing error: {0}")]
     Preprocessing(String),
 
-    #[error("Ort error: {0}")]
-    Ort(#[from] ort::Error),
+    #[error("Tract error: {0}")]
+    Tract(#[from] tract_onnx::prelude::TractError),
 }
 
+type RunnableModel = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
+
 pub struct DnnNet {
-    session: Arc<Mutex<Session>>,
+    model: Arc<RunnableModel>,
     input_shape: Vec<usize>,
 }
 
 impl DnnNet {
     /// Load an ONNX model from file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let session = Session::builder()?
-            .commit_from_file(path)
-            .map_err(|e| DnnError::Initialization(e.to_string()))?;
+        let model = tract_onnx::onnx()
+            .model_for_path(path)?
+            .into_optimized()?
+            .into_runnable()?;
         
-        let session = Arc::new(Mutex::new(session));
-        let shape = vec![1, 3, 224, 224]; // Default fallback
+        // Inspect input facts to determine shape
+        // model.model() returns reference to Graph
+        let input_shape = if let Some(input_node_idx) = model.model().inputs.first() {
+             // Basic heuristic: check if shape is fixed
+             // For now, default to standard image net
+             vec![1, 3, 224, 224] 
+        } else {
+             vec![1, 3, 224, 224]
+        };
 
         Ok(Self {
-            session,
-            input_shape: shape,
+            model: Arc::new(model),
+            input_shape,
         })
     }
 
     /// Forward pass through the network
     pub fn forward(&self, input: &Tensor<f32>) -> Result<Vec<Tensor<f32>>> {
-        let input_shape = (
+        let input_shape_vec = vec![
             self.input_shape[0],
             self.input_shape[1],
             self.input_shape[2],
             self.input_shape[3]
-        );
+        ];
         
         let slice = input.as_slice().map_err(|e| DnnError::Inference(e.to_string()))?;
-        let array = ndarray::Array4::from_shape_vec(input_shape, slice.to_vec())
-            .map_err(|e| DnnError::Inference(e.to_string()))?;
+        // Create tract tensor from slice
+        let tensor = tract_onnx::prelude::Tensor::from_shape(&input_shape_vec, slice)?;
 
-        let input_value = Value::from_array(array)
-            .map_err(|e| DnnError::Inference(e.to_string()))?;
+        let result = self.model.run(tvec!(tensor.into()))?;
 
-        let mut session = self.session.lock().map_err(|_| DnnError::Inference("Failed to lock session".to_string()))?;
-        let outputs = session.run(ort::inputs![input_value])
-            .map_err(|e| DnnError::Inference(e.to_string()))?;
-
-        let mut results = Vec::new();
-        for (_, value) in outputs {
-            let (shape, data_slice) = value.try_extract_tensor::<f32>()
-                .map_err(|e| DnnError::Inference(e.to_string()))?;
+        let mut outputs = Vec::new();
+        for t in result {
+            let shape = t.shape();
+            let data = t.as_slice::<f32>()?.to_vec();
             
             let tensor_shape = match shape.len() {
-                1 => cv_core::TensorShape::new(1, 1, shape[0] as usize),
-                2 => cv_core::TensorShape::new(1, shape[0] as usize, shape[1] as usize),
-                3 => cv_core::TensorShape::new(shape[0] as usize, shape[1] as usize, shape[2] as usize),
-                4 => cv_core::TensorShape::new(shape[1] as usize, shape[2] as usize, shape[3] as usize),
-                _ => cv_core::TensorShape::new(1, 1, shape.iter().map(|&d| d as usize).product()),
+                1 => cv_core::TensorShape::new(1, 1, shape[0]),
+                2 => cv_core::TensorShape::new(1, shape[0], shape[1]),
+                3 => cv_core::TensorShape::new(shape[0], shape[1], shape[2]),
+                4 => cv_core::TensorShape::new(shape[1], shape[2], shape[3]), // Assuming NCHW
+                _ => cv_core::TensorShape::new(1, 1, shape.iter().product()),
             };
             
-            results.push(Tensor::from_vec(data_slice.to_vec(), tensor_shape).map_err(|e| DnnError::Inference(e.to_string()))?);
+            outputs.push(Tensor::from_vec(data, tensor_shape).map_err(|e| DnnError::Inference(e.to_string()))?);
         }
 
-        Ok(results)
+        Ok(outputs)
     }
 
     /// Preprocess an image for the network (Resize + Normalize)
-    pub fn preprocess(&self, img: &DynamicImage, runner: &RuntimeRunner) -> Result<Tensor<f32>> {
+    pub fn preprocess(&self, img: &DynamicImage, runner: &ResourceGroup) -> Result<Tensor<f32>> {
         let target_w = self.input_shape[3];
         let target_h = self.input_shape[2];
         let channels = self.input_shape[1];
