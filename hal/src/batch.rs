@@ -34,7 +34,7 @@ impl BatchExecutor {
                 label: Some("Batch Executor Encoder (Refilled)"),
             }));
         }
-        self.encoder.as_mut().unwrap()
+        self.encoder.as_mut().expect("BatchExecutor command encoder is missing - this should be impossible given self.encoder initialization")
     }
 
     /// Record an operation count (for statistics or thresholds)

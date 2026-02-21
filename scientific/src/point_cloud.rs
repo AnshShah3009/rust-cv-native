@@ -1,76 +1,117 @@
 use cv_core::PointCloud;
 use nalgebra::{Matrix3, Point3, SymmetricEigen, Vector3};
-use rand::prelude::IteratorRandom;
 use rayon::prelude::*;
 use rstar::PointDistance;
 use rstar::{RTree, RTreeObject, AABB};
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
 /// Downsample a point cloud with a voxel grid.
 /// Returns a new point cloud with one point per voxel (the centroid).
 pub fn voxel_down_sample(pc: &PointCloud, voxel_size: f32) -> PointCloud {
-    if voxel_size <= 0.0 {
+    if voxel_size <= 0.0 || pc.is_empty() {
         return pc.clone();
     }
 
-    let mut grid: HashMap<(i32, i32, i32), (Vector3<f32>, Vector3<f32>, Vector3<f32>, usize)> =
-        HashMap::new();
-    // Key -> (sum_points, sum_colors, sum_normals, count)
+    let n = pc.len();
+    let mut indices: Vec<(i32, i32, i32, usize)> = Vec::with_capacity(n);
 
-    let has_colors = pc.colors.is_some();
-    let has_normals = pc.normals.is_some();
-
-    for i in 0..pc.len() {
+    // 1. Compute indices
+    for i in 0..n {
         let p = pc.points[i];
         let hx = (p.x / voxel_size).floor() as i32;
         let hy = (p.y / voxel_size).floor() as i32;
         let hz = (p.z / voxel_size).floor() as i32;
-        let key = (hx, hy, hz);
+        indices.push((hx, hy, hz, i));
+    }
 
-        let entry =
-            grid.entry(key)
-                .or_insert((Vector3::zeros(), Vector3::zeros(), Vector3::zeros(), 0));
-        entry.0 += p.coords;
+    // 2. Sort by voxel index
+    // Parallel sort if large enough, otherwise sequential
+    if n > 10000 {
+        indices.par_sort_unstable_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+    } else {
+        indices.sort_unstable_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+    }
+
+    // 3. Aggregate
+    let mut new_points = Vec::new();
+    let has_colors = pc.colors.is_some();
+    let has_normals = pc.normals.is_some();
+    
+    let mut new_colors = if has_colors { Some(Vec::new()) } else { None };
+    let mut new_normals = if has_normals { Some(Vec::new()) } else { None };
+
+    if indices.is_empty() {
+        return PointCloud::default();
+    }
+
+    let mut current_voxel = (indices[0].0, indices[0].1, indices[0].2);
+    let mut sum_p = Vector3::zeros();
+    let mut sum_c = Vector3::zeros();
+    let mut sum_n = Vector3::zeros();
+    let mut count = 0;
+
+    for &(hx, hy, hz, idx) in &indices {
+        if (hx, hy, hz) != current_voxel {
+            // Push previous voxel
+            let factor = 1.0 / count as f32;
+            new_points.push(Point3::from(sum_p * factor));
+            
+            if let Some(nc) = &mut new_colors {
+                nc.push(Point3::from(sum_c * factor));
+            }
+            if let Some(nn) = &mut new_normals {
+                let mut n = sum_n * factor;
+                if n.norm_squared() > 1e-6 {
+                    n.normalize_mut();
+                }
+                nn.push(n);
+            }
+
+            // Reset
+            current_voxel = (hx, hy, hz);
+            sum_p = Vector3::zeros();
+            sum_c = Vector3::zeros();
+            sum_n = Vector3::zeros();
+            count = 0;
+        }
+
+        sum_p += pc.points[idx].coords;
         if has_colors {
             if let Some(colors) = &pc.colors {
-                entry.1 += colors[i].coords;
+                sum_c += colors[idx].coords;
             }
         }
         if has_normals {
             if let Some(normals) = &pc.normals {
-                entry.2 += normals[i];
+                sum_n += normals[idx];
             }
         }
-        entry.3 += 1;
+        count += 1;
     }
 
-    let mut new_points = Vec::with_capacity(grid.len());
-    let mut new_colors = if has_colors {
-        Some(Vec::with_capacity(grid.len()))
-    } else {
-        None
-    };
-    let mut new_normals = if has_normals {
-        Some(Vec::with_capacity(grid.len()))
-    } else {
-        None
-    };
-
-    for (_, (sum_p, sum_c, sum_n, count)) in grid {
+    // Push last voxel
+    if count > 0 {
         let factor = 1.0 / count as f32;
         new_points.push(Point3::from(sum_p * factor));
-
-        if let Some(colors) = &mut new_colors {
-            colors.push(Point3::from(sum_c * factor));
+        
+        if let Some(nc) = &mut new_colors {
+            nc.push(Point3::from(sum_c * factor));
         }
-        if let Some(normals) = &mut new_normals {
+        if let Some(nn) = &mut new_normals {
             let mut n = sum_n * factor;
             if n.norm_squared() > 1e-6 {
                 n.normalize_mut();
             }
-            normals.push(n);
+            nn.push(n);
         }
     }
 
@@ -169,11 +210,14 @@ pub fn estimate_normals(pc: &mut PointCloud, k: usize) {
 /// Fast O(n*k) algorithm - much faster than Open3D's MST approach.
 pub fn orient_normals(pc: &mut PointCloud, k: usize) {
     let n = pc.len();
-    if n < 3 || pc.normals.is_none() {
+    if n < 3 {
         return;
     }
 
-    let mut normals = pc.normals.take().unwrap();
+    let mut normals = match pc.normals.take() {
+        Some(n) => n,
+        None => return,
+    };
 
     // Build RTree
     let wrappers: Vec<PointWrapper> = pc
@@ -719,15 +763,142 @@ pub fn cluster_dbscan(pc: &PointCloud, eps: f32, min_points: usize) -> Vec<i32> 
 
 /// Compute FPFH features.
 /// Returns an N x 33 histogram feature vector for each point.
-/// Simplification: Returns zero vectors if normals missing.
-/// NOTE: Full FPFH implementation is complex. This is a placeholder or simplified version.
-pub fn compute_fpfh_feature(pc: &PointCloud, _search_radius: f32) -> Option<Vec<[f32; 33]>> {
-    if pc.normals.is_none() {
-        return None;
+pub fn compute_fpfh_feature(pc: &PointCloud, search_radius: f32) -> Option<Vec<[f32; 33]>> {
+    let normals = pc.normals.as_ref()?;
+    let n_points = pc.len();
+    if n_points == 0 {
+        return Some(Vec::new());
     }
-    // Placeholder implementation returning zeros
-    // Real FPFH requires computing SPFH for each point and then weighted average.
-    Some(vec![[0.0; 33]; pc.len()])
+
+    let wrappers: Vec<PointWrapper> = pc
+        .points
+        .iter()
+        .enumerate()
+        .map(|(i, p)| PointWrapper(i, *p))
+        .collect();
+    let tree = RTree::bulk_load(wrappers);
+    let r2 = search_radius * search_radius;
+
+    // 1. Compute SPFH (Simplified Point Feature Histograms)
+    let spfh: Vec<[f32; 33]> = (0..n_points).into_par_iter().map(|i| {
+        let p = pc.points[i];
+        let n = normals[i];
+        let query_point = [p.x, p.y, p.z];
+        
+        // Find neighbors
+        let neighbors: Vec<&PointWrapper> = tree
+            .locate_within_distance(query_point, r2)
+            .collect();
+        
+        if neighbors.len() <= 1 {
+            return [0.0; 33];
+        }
+
+        let mut hist = [0.0; 33]; // 11 bins for alpha, 11 for phi, 11 for theta
+        let mut count = 0;
+
+        for nb in neighbors {
+            let j = nb.0;
+            if i == j { continue; }
+            
+            let p_j = pc.points[j];
+            let n_j = normals[j];
+            
+            let (alpha, phi, theta) = compute_pair_features(&p, &n, &p_j, &n_j);
+            
+            // Binning: assume ranges.
+            // alpha: [-1, 1] -> cos angle. 
+            // phi: [-1, 1]
+            // theta: [-PI, PI]
+            
+            let bin_alpha = ((alpha + 1.0) * 5.5).floor().clamp(0.0, 10.0) as usize;
+            let bin_phi = ((phi + 1.0) * 5.5).floor().clamp(0.0, 10.0) as usize;
+            let bin_theta = ((theta + std::f32::consts::PI) * (11.0 / (2.0 * std::f32::consts::PI))).floor().clamp(0.0, 10.0) as usize;
+            
+            hist[bin_alpha] += 1.0;
+            hist[11 + bin_phi] += 1.0;
+            hist[22 + bin_theta] += 1.0;
+            count += 1;
+        }
+        
+        if count > 0 {
+            let inv_k = 1.0 / count as f32;
+            for val in &mut hist { *val *= inv_k; }
+        }
+        hist
+    }).collect();
+
+    // 2. Compute FPFH (Weighted sum of neighbors' SPFH)
+    let fpfh: Vec<[f32; 33]> = (0..n_points).into_par_iter().map(|i| {
+        let p = pc.points[i];
+        let query_point = [p.x, p.y, p.z];
+        
+        let neighbors: Vec<&PointWrapper> = tree
+            .locate_within_distance(query_point, r2)
+            .collect();
+            
+        if neighbors.len() <= 1 {
+            return spfh[i];
+        }
+
+        let mut final_hist = spfh[i]; // Start with own SPFH
+        let k = neighbors.len() - 1; // excluding self
+        let weight = 1.0 / k as f32;
+
+        for nb in neighbors {
+            let j = nb.0;
+            if i == j { continue; }
+            
+            let dist = (p - pc.points[j]).norm();
+            if dist < 1e-6 { continue; }
+            
+            let w = weight / dist; // Simple weighting
+            
+            for k in 0..33 {
+                final_hist[k] += spfh[j][k] * w;
+            }
+        }
+        
+        // Normalize again? FPFH usually normalized to sum to 100 or 1.
+        // Simple normalization
+        let sum: f32 = final_hist.iter().sum();
+        if sum > 1e-6 {
+            let scale = 100.0 / sum;
+            for val in &mut final_hist { *val *= scale; }
+        }
+        
+        final_hist
+    }).collect();
+
+    Some(fpfh)
+}
+
+fn compute_pair_features(
+    p1: &Point3<f32>, n1: &Vector3<f32>,
+    p2: &Point3<f32>, n2: &Vector3<f32>
+) -> (f32, f32, f32) {
+    let delta = p2 - p1;
+    let dist = delta.norm();
+    
+    if dist < 1e-6 {
+        return (0.0, 0.0, 0.0);
+    }
+    
+    let u = n1;
+    let v = delta.cross(u);
+    let v_norm = v.norm();
+    
+    if v_norm < 1e-6 {
+        return (0.0, 0.0, 0.0);
+    }
+    let v = v / v_norm;
+    let w = u.cross(&v);
+    
+    let alpha = v.dot(n2);
+    let phi = u.dot(&delta) / dist;
+    let theta = w.dot(n2).atan2(u.dot(n2));
+    
+    (alpha, phi, theta)
 }
 
 #[cfg(test)]
@@ -788,7 +959,7 @@ mod tests {
     fn test_io() {
         let points = vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 1.0)];
         let colors = vec![Point3::new(1.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)];
-        let pc = PointCloud::new(points).with_colors(colors);
+        let pc = PointCloud::new(points).with_colors(colors).unwrap();
 
         let path = "/tmp/test_pc.ply";
         write_ply(&pc, path).unwrap();
@@ -893,7 +1064,7 @@ mod tests {
     fn test_fpfh() {
         let points = vec![Point3::new(0.0, 0.0, 0.0)];
         let normals = vec![nalgebra::Vector3::new(0.0, 0.0, 1.0)];
-        let pc = PointCloud::new(points).with_normals(normals);
+        let pc = PointCloud::new(points).with_normals(normals).unwrap();
 
         let features = compute_fpfh_feature(&pc, 0.1);
         assert!(features.is_some());

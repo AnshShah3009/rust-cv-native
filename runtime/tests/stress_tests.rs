@@ -1,11 +1,11 @@
-use cv_runtime::{scheduler, GroupPolicy};
+use cv_runtime::{scheduler, GroupPolicy, orchestrator::TaskPriority};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
 #[test]
 fn stress_test_concurrent_group_churn() {
-    let s = scheduler();
+    let _s = scheduler().unwrap();
     let barrier = Arc::new(Barrier::new(11)); // 10 workers + 1 main
 
     // Spawn 10 threads that constantly create and destroy groups
@@ -13,13 +13,17 @@ fn stress_test_concurrent_group_churn() {
         let b = barrier.clone();
         thread::spawn(move || {
             b.wait();
+            // Need to get scheduler inside thread or pass reference. 
+            // scheduler() returns static ref, so safe to call again.
+            let s_inner = scheduler().unwrap();
+            
             for j in 0..50 { // 50 iterations per thread
                 let name = format!("churn-{}-{}", i, j);
                 let policy = GroupPolicy::default(); // Shared
                 
                 // Create
                 // Use a loop to retry if name collision happens (though names are unique here)
-                if let Ok(group) = s.create_group(&name, 1, None, policy) {
+                if let Ok(group) = s_inner.create_group(&name, 1, None, policy) {
                     // Submit some work
                     group.spawn(|| {
                         let _ = 2 + 2;
@@ -29,7 +33,7 @@ fn stress_test_concurrent_group_churn() {
                     thread::yield_now();
                     
                     // Destroy
-                    let _ = s.remove_group(&name);
+                    let _ = s_inner.remove_group(&name);
                 }
             }
         })
@@ -44,12 +48,13 @@ fn stress_test_concurrent_group_churn() {
 
 #[test]
 fn stress_test_heavy_load_mixing() {
-    let s = scheduler();
+    let s = scheduler().unwrap();
     
     // Create an isolated group for heavy computation
     let iso_policy = GroupPolicy {
         allow_work_stealing: false,
         allow_dynamic_scaling: true,
+        priority: TaskPriority::High,
     };
     // Use .ok() to handle case where test runs multiple times or group exists
     let _ = s.create_group("heavy-iso", 2, None, iso_policy); 
@@ -110,12 +115,13 @@ fn stress_test_concurrent_par_iter() {
     use cv_runtime::scheduler;
     use cv_runtime::GroupPolicy;
 
-    let s = scheduler();
+    let s = scheduler().unwrap();
     
     // Create an isolated group with 4 threads
     let iso_policy = GroupPolicy {
         allow_work_stealing: false,
         allow_dynamic_scaling: true,
+        priority: TaskPriority::Normal,
     };
     
     let group_name = "par-iter-test-group";
@@ -129,8 +135,8 @@ fn stress_test_concurrent_par_iter() {
         // Submit a task that uses par_iter inside the group
         let counter_clone = counter.clone();
         
-        // Use install to ensure we are in the pool's context
-        group.install(|| {
+        // Use run() to ensure we are in the pool's context (replaces install)
+        group.run(|| {
             // This should run on the 4 threads of "par-iter-test-group"
             (0..1000).into_par_iter().for_each(|_| {
                 counter_clone.fetch_add(1, Ordering::Relaxed);

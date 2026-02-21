@@ -1,54 +1,46 @@
 use wgpu::{Device, Queue, Instance, RequestAdapterOptions, PowerPreference, Backends};
 use wgpu::util::DeviceExt;
 use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
 use futures::executor::block_on;
-use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType, ColorConversion};
-use crate::{DeviceId, BackendType};
+use futures::FutureExt;
+use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType, ColorConversion, TemplateMatchMethod, StereoMatchParams};
+use crate::{DeviceId, BackendType, SubmissionIndex};
 use cv_core::{Tensor, storage::Storage};
 
 static GLOBAL_CONTEXT: OnceLock<crate::Result<GpuContext>> = OnceLock::new();
 
 /// Shared GPU Context containing Device and Queue.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GpuContext {
     pub device: Arc<Device>,
     pub queue: Arc<Queue>,
+    pipeline_cache: Arc<std::sync::Mutex<std::collections::HashMap<String, wgpu::ComputePipeline>>>,
+    last_submission: Arc<AtomicU64>,
 }
 
 impl GpuContext {
     /// Safely downcasts a GpuStorage result to the requested generic storage S.
     /// Uses TypeId checks to avoid allocations when S is GpuStorage.
-    fn downcast_storage<T: 'static, S: Storage<T> + 'static>(
+    fn downcast_storage<T: Clone + Copy + std::fmt::Debug + bytemuck::Pod + 'static, S: Storage<T> + 'static>(
         &self,
         result_gpu: Tensor<T, crate::storage::GpuStorage<T>>,
     ) -> crate::Result<Tensor<T, S>> {
-        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if TypeId::of::<S>() == TypeId::of::<crate::storage::GpuStorage<T>>() {
-            // Target is GpuStorage, zero-cost move
-            // SAFETY: TypeId check proves S is GpuStorage<T>
-            let storage = unsafe { std::mem::transmute_copy::<crate::storage::GpuStorage<T>, S>(&result_gpu.storage) };
-            std::mem::forget(result_gpu.storage);
+        // Always use Box-based downcast for safety. 
+        // The performance cost of one allocation per kernel launch is negligible compared to GPU execution time.
+        let storage_any = Box::new(result_gpu.storage).boxed_any();
+        
+        if let Ok(storage_s) = storage_any.downcast::<S>() {
             Ok(Tensor {
-                storage,
+                storage: *storage_s,
                 shape: result_gpu.shape,
                 dtype: result_gpu.dtype,
                 _phantom: PhantomData,
             })
         } else {
-            // Fallback to Box-based downcast for other types
-            let storage_any = Box::new(result_gpu.storage).boxed_any();
-            if let Ok(storage_s) = storage_any.downcast::<S>() {
-                Ok(Tensor {
-                    storage: *storage_s,
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
-                    _phantom: PhantomData,
-                })
-            } else {
-                Err(crate::Error::InvalidInput("Failed to downcast GPU result to original storage type".into()))
-            }
+            Err(crate::Error::InvalidInput("Failed to downcast GPU result to original storage type".into()))
         }
     }
 }
@@ -65,6 +57,10 @@ impl ComputeContext for GpuContext {
     fn wait_idle(&self) -> crate::Result<()> {
         let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
         Ok(())
+    }
+
+    fn last_submission_index(&self) -> SubmissionIndex {
+        SubmissionIndex(self.last_submission.load(Ordering::SeqCst))
     }
 
     fn convolve_2d<S: Storage<f32> + 'static>(
@@ -102,13 +98,60 @@ impl ComputeContext for GpuContext {
 
     fn dispatch<S: Storage<u8> + 'static>(
         &self,
-        _name: &str,
-        _buffers: &[&Tensor<u8, S>],
-        _uniforms: &[u8],
-        _workgroups: (u32, u32, u32),
+        shader_source: &str,
+        buffers: &[&Tensor<u8, S>],
+        uniforms: &[u8],
+        workgroups: (u32, u32, u32),
     ) -> crate::Result<()> {
-        // TODO: Implement generic dispatch
-        Err(crate::Error::NotSupported("Generic GPU dispatch pending implementation".into()))
+        use crate::storage::GpuStorage;
+        let pipeline = self.create_compute_pipeline(shader_source, "main");
+        
+        let mut gpu_buffers = Vec::with_capacity(buffers.len());
+        for tensor in buffers {
+            let storage = tensor.storage.as_any().downcast_ref::<GpuStorage<u8>>()
+                .ok_or_else(|| crate::Error::InvalidInput("Dispatch requires GpuStorage tensors".into()))?;
+            gpu_buffers.push(storage.buffer());
+        }
+
+        let mut entries = Vec::with_capacity(gpu_buffers.len() + 1);
+        for (i, buf) in gpu_buffers.iter().enumerate() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: i as u32,
+                resource: buf.as_entire_binding(),
+            });
+        }
+
+        let _uniform_buf;
+        if !uniforms.is_empty() {
+            _uniform_buf = Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Dispatch Uniforms"),
+                contents: uniforms,
+                usage: wgpu::BufferUsages::UNIFORM,
+            }));
+            entries.push(wgpu::BindGroupEntry {
+                binding: gpu_buffers.len() as u32,
+                resource: _uniform_buf.as_ref().unwrap().as_entire_binding(),
+            });
+        } else {
+            _uniform_buf = None;
+        };
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Dispatch Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &entries,
+        });
+
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(workgroups.0, workgroups.1, workgroups.2);
+        }
+        self.submit(encoder);
+        
+        Ok(())
     }
 
     fn threshold<S: Storage<u8> + 'static>(
@@ -159,6 +202,150 @@ impl ComputeContext for GpuContext {
         } else {
             Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
         }
+    }
+
+    fn canny<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        low_threshold: f32,
+        high_threshold: f32,
+    ) -> crate::Result<Tensor<u8, S>> {
+        use crate::storage::GpuStorage;
+        use std::marker::PhantomData;
+
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
+            let input_gpu = Tensor {
+                storage: input_storage.clone(),
+                shape: input.shape,
+                dtype: input.dtype,
+                _phantom: PhantomData,
+            };
+
+            let result_gpu = crate::gpu_kernels::canny::canny(self, &input_gpu, low_threshold, high_threshold)?;
+            self.downcast_storage(result_gpu)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn hough_lines<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        rho: f32,
+        theta: f32,
+        threshold: u32,
+    ) -> crate::Result<Vec<cv_core::HoughLine>> {
+        use crate::storage::GpuStorage;
+        use std::marker::PhantomData;
+
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
+            let input_gpu = Tensor {
+                storage: input_storage.clone(),
+                shape: input.shape,
+                dtype: input.dtype,
+                _phantom: PhantomData,
+            };
+
+            crate::gpu_kernels::hough::hough_lines(self, &input_gpu, rho, theta, threshold)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn hough_circles<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        min_radius: f32,
+        max_radius: f32,
+        threshold: u32,
+    ) -> crate::Result<Vec<cv_core::HoughCircle>> {
+        use crate::storage::GpuStorage;
+        use std::marker::PhantomData;
+
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
+            let input_gpu = Tensor {
+                storage: input_storage.clone(),
+                shape: input.shape,
+                dtype: input.dtype,
+                _phantom: PhantomData,
+            };
+
+            crate::gpu_kernels::hough_circles::hough_circles(self, &input_gpu, min_radius, max_radius, threshold)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn match_template<S: Storage<u8> + 'static, OS: Storage<f32> + 'static>(
+        &self,
+        image: &Tensor<u8, S>,
+        template: &Tensor<u8, S>,
+        method: TemplateMatchMethod,
+    ) -> crate::Result<Tensor<f32, OS>> {
+        use crate::storage::GpuStorage;
+        use std::marker::PhantomData;
+
+        if let (Some(img_storage), Some(templ_storage)) = (
+            image.storage.as_any().downcast_ref::<GpuStorage<u8>>(),
+            template.storage.as_any().downcast_ref::<GpuStorage<u8>>()
+        ) {
+            let img_gpu = Tensor { storage: img_storage.clone(), shape: image.shape, dtype: image.dtype, _phantom: PhantomData };
+            let templ_gpu = Tensor { storage: templ_storage.clone(), shape: template.shape, dtype: template.dtype, _phantom: PhantomData };
+
+            let result_gpu = crate::gpu_kernels::template_matching::match_template(self, &img_gpu, &templ_gpu, method)?;
+            self.downcast_storage(result_gpu)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn detect_objects<S: Storage<u8> + 'static>(
+        &self,
+        _input: &Tensor<u8, S>,
+        _threshold: f32,
+    ) -> crate::Result<Vec<cv_core::Detection>> {
+        Err(crate::Error::NotSupported("GPU detect_objects not yet implemented".into()))
+    }
+
+    fn stereo_match<S: Storage<u8> + 'static, OS: Storage<f32> + 'static>(
+        &self,
+        left: &Tensor<u8, S>,
+        right: &Tensor<u8, S>,
+        params: &StereoMatchParams,
+    ) -> crate::Result<Tensor<f32, OS>> {
+        use crate::storage::GpuStorage;
+        use std::marker::PhantomData;
+
+        if let (Some(l_storage), Some(r_storage)) = (
+            left.storage.as_any().downcast_ref::<GpuStorage<u8>>(),
+            right.storage.as_any().downcast_ref::<GpuStorage<u8>>()
+        ) {
+            let l_gpu = Tensor { storage: l_storage.clone(), shape: left.shape, dtype: left.dtype, _phantom: PhantomData };
+            let r_gpu = Tensor { storage: r_storage.clone(), shape: right.shape, dtype: right.dtype, _phantom: PhantomData };
+
+            let result_gpu = crate::gpu_kernels::stereo::stereo_match(self, &l_gpu, &r_gpu, params)?;
+            self.downcast_storage(result_gpu)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
+    }
+
+    fn triangulate_points<S: Storage<f32> + 'static, OS: Storage<f32> + 'static>(
+        &self,
+        _proj_left: &[[f32; 4]; 3],
+        _proj_right: &[[f32; 4]; 3],
+        _points_left: &Tensor<f32, S>,
+        _points_right: &Tensor<f32, S>,
+    ) -> crate::Result<Tensor<f32, OS>> {
+        Err(crate::Error::NotSupported("GPU triangulate_points not yet implemented".into()))
+    }
+
+    fn find_chessboard_corners<S: Storage<u8> + 'static>(
+        &self,
+        _image: &Tensor<u8, S>,
+        _pattern_size: (usize, usize),
+    ) -> crate::Result<Vec<cv_core::KeyPoint>> {
+        Err(crate::Error::NotSupported("GPU find_chessboard_corners not yet implemented".into()))
     }
 
     fn morphology<S: Storage<u8> + 'static>(
@@ -268,19 +455,101 @@ impl ComputeContext for GpuContext {
 
     fn nms_rotated_boxes<S: Storage<f32> + 'static>(
         &self,
-        _input: &Tensor<f32, S>,
-        _iou_threshold: f32,
+        input: &Tensor<f32, S>,
+        iou_threshold: f32,
     ) -> crate::Result<Vec<usize>> {
-        Err(crate::Error::NotSupported("GPU Rotated NMS pending implementation".into()))
+        use crate::storage::GpuStorage;
+        
+
+        // Fallback: Download to CPU and compute
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+            // Read data to CPU
+            let size = input.storage.len() * 4;
+            let raw_data = pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer(
+                self.device.clone(), 
+                &self.queue, 
+                input_storage.buffer(), 
+                0, 
+                size
+            ))?;
+            
+            let rows = input.shape.height;
+            let cols = input.shape.width;
+            if cols != 6 {
+                return Err(crate::Error::InvalidInput("NMS Rotated Boxes expects (N, 6) tensor".into()));
+            }
+
+            let mut boxes: Vec<(usize, f32)> = (0..rows).map(|i| {
+                (i, raw_data[i * 6 + 5]) // (index, score)
+            }).collect();
+
+            boxes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let mut kept = Vec::new();
+            let mut suppressed = vec![false; rows];
+
+            for i in 0..boxes.len() {
+                let (idx1, _) = boxes[i];
+                if suppressed[idx1] { continue; }
+
+                kept.push(idx1);
+                let r1 = cv_core::RotatedRect::new(raw_data[idx1 * 6], raw_data[idx1 * 6 + 1], raw_data[idx1 * 6 + 2], raw_data[idx1 * 6 + 3], raw_data[idx1 * 6 + 4]);
+
+                for j in (i + 1)..boxes.len() {
+                    let (idx2, _) = boxes[j];
+                    if suppressed[idx2] { continue; }
+
+                    let r2 = cv_core::RotatedRect::new(raw_data[idx2 * 6], raw_data[idx2 * 6 + 1], raw_data[idx2 * 6 + 2], raw_data[idx2 * 6 + 3], raw_data[idx2 * 6 + 4]);
+                    
+                    if cv_core::rotated_iou(&r1, &r2) > iou_threshold {
+                        suppressed[idx2] = true;
+                    }
+                }
+            }
+            Ok(kept)
+        } else {
+            Err(crate::Error::InvalidInput("GpuContext requires GpuStorage tensors".into()))
+        }
     }
 
     fn nms_polygons(
         &self,
-        _polygons: &[cv_core::Polygon],
-        _scores: &[f32],
-        _iou_threshold: f32,
+        polygons: &[cv_core::Polygon],
+        scores: &[f32],
+        iou_threshold: f32,
     ) -> crate::Result<Vec<usize>> {
-        Err(crate::Error::NotSupported("GPU Polygon NMS pending implementation".into()))
+        // CPU implementation since polygons are already on CPU
+        let n = polygons.len();
+        if n == 0 { return Ok(Vec::new()); }
+        if scores.len() != n {
+            return Err(crate::Error::InvalidInput("Scores length must match polygons length".into()));
+        }
+
+        let mut items: Vec<(usize, f32)> = (0..n).map(|i| (i, scores[i])).collect();
+        items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut kept = Vec::new();
+        let mut suppressed = vec![false; n];
+
+        for i in 0..n {
+            let (idx1, _) = items[i];
+            if suppressed[idx1] { continue; }
+
+            kept.push(idx1);
+            let p1 = &polygons[idx1];
+
+            for j in (i + 1)..n {
+                let (idx2, _) = items[j];
+                if suppressed[idx2] { continue; }
+
+                let p2 = &polygons[idx2];
+                if cv_core::polygon_iou(p1, p2) > iou_threshold {
+                    suppressed[idx2] = true;
+                }
+            }
+        }
+
+        Ok(kept)
     }
 
     fn pointcloud_transform<S: Storage<f32> + 'static>(
@@ -1047,6 +1316,8 @@ impl GpuContext {
         Ok(Self {
             device: Arc::new(device),
             queue: Arc::new(queue),
+            pipeline_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            last_submission: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -1089,25 +1360,40 @@ impl GpuContext {
     }
 
     /// Submit a command encoder (convenience method)
-    pub fn submit(&self, encoder: wgpu::CommandEncoder) {
+    pub fn submit(&self, encoder: wgpu::CommandEncoder) -> SubmissionIndex {
+        let index = self.last_submission.fetch_add(1, Ordering::SeqCst) + 1;
         self.queue.submit(std::iter::once(encoder.finish()));
+        SubmissionIndex(index)
     }
 
     /// Create a simplified compute pipeline.
     pub fn create_compute_pipeline(&self, shader_source: &str, entry_point: &str) -> wgpu::ComputePipeline {
+        let cache_key = format!("{}:{}", shader_source, entry_point);
+        if let Ok(cache) = self.pipeline_cache.lock() {
+            if let Some(pipeline) = cache.get(&cache_key) {
+                return pipeline.clone();
+            }
+        }
+
         let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Compute Shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
-        self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Compute Pipeline"),
             layout: None,
             module: &shader,
             entry_point: Some(entry_point),
             compilation_options: Default::default(),
             cache: None,
-        })
+        });
+
+        if let Ok(mut cache) = self.pipeline_cache.lock() {
+            cache.insert(cache_key, pipeline.clone());
+        }
+        
+        pipeline
     }
 
     /// Get a pooled buffer.
@@ -1136,7 +1422,7 @@ mod tests {
 
     #[test]
     fn test_gaussian_blur_gpu_parity() {
-        let gpu = if let Some(g) = GpuContext::global() { g } else { return; };
+        let gpu = if let Ok(g) = GpuContext::global() { g } else { return; };
         let cpu = crate::cpu::CpuBackend::new().unwrap();
         
         let width = 64usize;
@@ -1145,7 +1431,7 @@ mod tests {
         for i in 0..data.len() { data[i] = (i % 255) as u8; }
         
         let shape = cv_core::TensorShape::new(1, height, width);
-        let tensor_cpu = cv_core::CpuTensor::from_vec(data, shape);
+        let tensor_cpu = cv_core::CpuTensor::from_vec(data, shape).unwrap();
         
         // GPU execution
         use crate::tensor_ext::{TensorToGpu, TensorToCpu};
@@ -1157,8 +1443,8 @@ mod tests {
         let res_cpu = cpu.gaussian_blur(&tensor_cpu, 1.5, 7).unwrap();
         
         // Check equality
-        let slice_gpu = res_gpu.as_slice();
-        let slice_cpu = res_cpu.as_slice();
+        let slice_gpu = res_gpu.as_slice().unwrap();
+        let slice_cpu = res_cpu.as_slice().unwrap();
         
         let mut diff_count = 0;
         for i in 0..slice_gpu.len() {

@@ -2,6 +2,10 @@ use crate::{BorderMode, Interpolation};
 use image::GrayImage;
 use nalgebra::{Matrix3, Point2};
 use rayon::prelude::*;
+use cv_core::{Tensor, storage::Storage};
+use cv_hal::compute::ComputeDevice;
+use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
+use cv_runtime::orchestrator::RuntimeRunner;
 
 pub fn get_pixel_bilinear(img: &GrayImage, x: f32, y: f32) -> f32 {
     get_pixel_bilinear_with_border(img, x, y, BorderMode::Constant(0))
@@ -123,6 +127,30 @@ pub fn warp_perspective_ex(
     interpolation: Interpolation,
     border: BorderMode,
 ) -> GrayImage {
+    let runner = cv_runtime::best_runner();
+    warp_perspective_ex_ctx(src, matrix, width, height, interpolation, border, &runner)
+}
+
+pub fn warp_perspective_ex_ctx(
+    src: &GrayImage,
+    matrix: &Matrix3<f32>,
+    width: u32,
+    height: u32,
+    interpolation: Interpolation,
+    border: BorderMode,
+    group: &RuntimeRunner,
+) -> GrayImage {
+    let device = group.device();
+
+    // Check for GPU acceleration
+    if let ComputeDevice::Gpu(gpu) = device {
+        if interpolation == Interpolation::Linear && border == BorderMode::Constant(0) {
+            if let Ok(result) = warp_gpu(gpu, src, matrix, width, height, cv_hal::context::WarpType::Perspective) {
+                return result;
+            }
+        }
+    }
+
     let mut dst = GrayImage::new(width, height);
 
     dst.as_mut()
@@ -139,6 +167,40 @@ pub fn warp_perspective_ex(
         });
 
     dst
+}
+
+fn warp_gpu(
+    gpu: &cv_hal::gpu::GpuContext,
+    src: &GrayImage,
+    matrix: &Matrix3<f32>,
+    width: u32,
+    height: u32,
+    typ: cv_hal::context::WarpType,
+) -> cv_hal::Result<GrayImage> {
+    use cv_hal::context::ComputeContext;
+    
+    let input_tensor = cv_core::CpuTensor::from_vec(
+        src.as_raw().to_vec(),
+        cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize),
+    ).map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+    
+    let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
+    
+    // Matrix to 3x3 array
+    let mut mat_data = [[0.0f32; 3]; 3];
+    for r in 0..3 {
+        for c in 0..3 {
+            mat_data[r][c] = matrix[(r, c)];
+        }
+    }
+
+    let res_gpu = gpu.warp(&input_gpu, &mat_data, (width as usize, height as usize), typ)?;
+    
+    let res_cpu: Tensor<u8, cv_core::CpuStorage<u8>> = res_gpu.to_cpu()?;
+    let res_data = res_cpu.storage.as_slice().unwrap().to_vec();
+    
+    GrayImage::from_raw(width, height, res_data)
+        .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
 }
 
 pub fn warp_perspective(
@@ -163,13 +225,25 @@ pub fn warp_affine(
     width: u32,
     height: u32,
 ) -> GrayImage {
-    warp_affine_ex(
+    let runner = cv_runtime::best_runner();
+    warp_affine_ctx(src, matrix_2x3, width, height, &runner)
+}
+
+pub fn warp_affine_ctx(
+    src: &GrayImage,
+    matrix_2x3: [[f32; 3]; 2],
+    width: u32,
+    height: u32,
+    group: &RuntimeRunner,
+) -> GrayImage {
+    warp_affine_ex_ctx(
         src,
         matrix_2x3,
         width,
         height,
         Interpolation::Linear,
         BorderMode::Constant(0),
+        group,
     )
 }
 
@@ -180,6 +254,19 @@ pub fn warp_affine_ex(
     height: u32,
     interpolation: Interpolation,
     border: BorderMode,
+) -> GrayImage {
+    let runner = cv_runtime::best_runner();
+    warp_affine_ex_ctx(src, matrix_2x3, width, height, interpolation, border, &runner)
+}
+
+pub fn warp_affine_ex_ctx(
+    src: &GrayImage,
+    matrix_2x3: [[f32; 3]; 2],
+    width: u32,
+    height: u32,
+    interpolation: Interpolation,
+    border: BorderMode,
+    group: &RuntimeRunner,
 ) -> GrayImage {
     let matrix = Matrix3::new(
         matrix_2x3[0][0],
@@ -193,9 +280,18 @@ pub fn warp_affine_ex(
         1.0,
     );
 
+    // Check for GPU acceleration
+    if let ComputeDevice::Gpu(gpu) = group.device() {
+        if interpolation == Interpolation::Linear && border == BorderMode::Constant(0) {
+            if let Ok(result) = warp_gpu(gpu, src, &matrix, width, height, cv_hal::context::WarpType::Affine) {
+                return result;
+            }
+        }
+    }
+
     // Warp uses inverse mapping from destination -> source coordinates.
     let inv = matrix.try_inverse().unwrap_or(matrix);
-    warp_perspective_ex(src, &inv, width, height, interpolation, border)
+    warp_perspective_ex_ctx(src, &inv, width, height, interpolation, border, group)
 }
 
 pub fn remap(

@@ -1,15 +1,10 @@
 use image::GrayImage;
 use rayon::prelude::*;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TemplateMatchMethod {
-    SqDiff,
-    SqDiffNormed,
-    Ccorr,
-    CcorrNormed,
-    Ccoeff,
-    CcoeffNormed,
-}
+use cv_hal::context::TemplateMatchMethod;
+use cv_runtime::orchestrator::RuntimeRunner;
+use cv_hal::compute::ComputeDevice;
+use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
+use cv_core::{Tensor, storage::Storage};
 
 #[derive(Debug, Clone)]
 pub struct MatchResult {
@@ -29,6 +24,16 @@ pub fn match_template(
     templ: &GrayImage,
     method: TemplateMatchMethod,
 ) -> MatchResult {
+    let runner = cv_runtime::best_runner();
+    match_template_ctx(image, templ, method, &runner)
+}
+
+pub fn match_template_ctx(
+    image: &GrayImage,
+    templ: &GrayImage,
+    method: TemplateMatchMethod,
+    group: &RuntimeRunner,
+) -> MatchResult {
     assert!(
         image.width() >= templ.width() && image.height() >= templ.height(),
         "template must fit inside source image"
@@ -40,6 +45,14 @@ pub fn match_template(
 
     let out_w = image.width() - templ.width() + 1;
     let out_h = image.height() - templ.height() + 1;
+
+    // Check for GPU acceleration
+    if let ComputeDevice::Gpu(gpu) = group.device() {
+        if let Ok(res) = match_template_gpu(gpu, image, templ, method) {
+            return res;
+        }
+    }
+
     let mut out = vec![0.0f32; (out_w * out_h) as usize];
 
     let tw = templ.width() as usize;
@@ -56,75 +69,106 @@ pub fn match_template(
         })
         .sum::<f32>();
 
-    out.par_chunks_mut(out_w as usize)
-        .enumerate()
-        .for_each(|(y, row)| {
-            for x in 0..out_w as usize {
-                let mut sum_i = 0.0f32;
-                let mut sum_i_sq = 0.0f32;
-                let mut cross = 0.0f32;
+    group.run(|| {
+        out.par_chunks_mut(out_w as usize)
+            .enumerate()
+            .for_each(|(y, row)| {
+                for x in 0..out_w as usize {
+                    let mut sum_i = 0.0f32;
+                    let mut sum_i_sq = 0.0f32;
+                    let mut cross = 0.0f32;
 
-                for j in 0..th {
-                    let src_row = (y + j) as u32;
-                    for i in 0..tw {
-                        let src_col = (x + i) as u32;
-                        let iv = image.get_pixel(src_col, src_row)[0] as f32;
-                        let tv = t_raw[j * tw + i] as f32;
-                        sum_i += iv;
-                        sum_i_sq += iv * iv;
-                        cross += iv * tv;
+                    for j in 0..th {
+                        let src_row = (y + j) as u32;
+                        for i in 0..tw {
+                            let src_col = (x + i) as u32;
+                            let iv = image.get_pixel(src_col, src_row)[0] as f32;
+                            let tv = t_raw[j * tw + i] as f32;
+                            sum_i += iv;
+                            sum_i_sq += iv * iv;
+                            cross += iv * tv;
+                        }
                     }
+
+                    let n = (tw * th) as f32;
+                    let i_mean = sum_i / n;
+
+                    row[x] = match method {
+                        TemplateMatchMethod::SqDiff => {
+                            // ||I - T||^2 = ||I||^2 + ||T||^2 - 2 * <I, T>
+                            sum_i_sq + t_sq_sum - 2.0 * cross
+                        }
+                        TemplateMatchMethod::SqDiffNormed => {
+                            let sqdiff = sum_i_sq + t_sq_sum - 2.0 * cross;
+                            let denom = (sum_i_sq * t_sq_sum).sqrt();
+                            if denom > 1e-12 {
+                                sqdiff / denom
+                            } else {
+                                0.0
+                            }
+                        }
+                        TemplateMatchMethod::Ccorr => cross,
+                        TemplateMatchMethod::CcorrNormed => {
+                            let denom = (sum_i_sq * t_sq_sum).sqrt();
+                            if denom > 1e-12 {
+                                cross / denom
+                            } else {
+                                0.0
+                            }
+                        }
+                        TemplateMatchMethod::Ccoeff => {
+                            // sum((I - meanI) * (T - meanT)) = <I,T> - N*meanI*meanT
+                            cross - n * i_mean * t_mean
+                        }
+                        TemplateMatchMethod::CcoeffNormed => {
+                            let coeff = cross - n * i_mean * t_mean;
+                            let i_var = sum_i_sq - n * i_mean * i_mean;
+                            let denom = (i_var * t_var_sum).sqrt();
+                            if denom > 1e-12 {
+                                coeff / denom
+                            } else {
+                                0.0
+                            }
+                        }
+                    };
                 }
-
-                let n = (tw * th) as f32;
-                let i_mean = sum_i / n;
-
-                row[x] = match method {
-                    TemplateMatchMethod::SqDiff => {
-                        // ||I - T||^2 = ||I||^2 + ||T||^2 - 2 * <I, T>
-                        sum_i_sq + t_sq_sum - 2.0 * cross
-                    }
-                    TemplateMatchMethod::SqDiffNormed => {
-                        let sqdiff = sum_i_sq + t_sq_sum - 2.0 * cross;
-                        let denom = (sum_i_sq * t_sq_sum).sqrt();
-                        if denom > 1e-12 {
-                            sqdiff / denom
-                        } else {
-                            0.0
-                        }
-                    }
-                    TemplateMatchMethod::Ccorr => cross,
-                    TemplateMatchMethod::CcorrNormed => {
-                        let denom = (sum_i_sq * t_sq_sum).sqrt();
-                        if denom > 1e-12 {
-                            cross / denom
-                        } else {
-                            0.0
-                        }
-                    }
-                    TemplateMatchMethod::Ccoeff => {
-                        // sum((I - meanI) * (T - meanT)) = <I,T> - N*meanI*meanT
-                        cross - n * i_mean * t_mean
-                    }
-                    TemplateMatchMethod::CcoeffNormed => {
-                        let coeff = cross - n * i_mean * t_mean;
-                        let i_var = sum_i_sq - n * i_mean * i_mean;
-                        let denom = (i_var * t_var_sum).sqrt();
-                        if denom > 1e-12 {
-                            coeff / denom
-                        } else {
-                            0.0
-                        }
-                    }
-                };
-            }
-        });
+            });
+    });
 
     MatchResult {
         data: out,
         width: out_w,
         height: out_h,
     }
+}
+
+fn match_template_gpu(
+    gpu: &cv_hal::gpu::GpuContext,
+    image: &GrayImage,
+    templ: &GrayImage,
+    method: TemplateMatchMethod,
+) -> cv_hal::Result<MatchResult> {
+    use cv_hal::context::ComputeContext;
+    let img_tensor = cv_core::CpuTensor::from_vec(image.as_raw().to_vec(), cv_core::TensorShape::new(1, image.height() as usize, image.width() as usize))
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+    let templ_tensor = cv_core::CpuTensor::from_vec(templ.as_raw().to_vec(), cv_core::TensorShape::new(1, templ.height() as usize, templ.width() as usize))
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+    
+    let img_gpu = img_tensor.to_gpu_ctx(gpu)?;
+    let templ_gpu = templ_tensor.to_gpu_ctx(gpu)?;
+    
+    // Output is f32 score map
+    let res_gpu: Tensor<f32, cv_hal::storage::GpuStorage<f32>> = gpu.match_template(&img_gpu, &templ_gpu, method)?;
+    let res_cpu = res_gpu.to_cpu_ctx(gpu)?;
+    
+    let out_w = image.width() - templ.width() + 1;
+    let out_h = image.height() - templ.height() + 1;
+    
+    Ok(MatchResult {
+        data: res_cpu.storage.as_slice().unwrap().to_vec(),
+        width: out_w,
+        height: out_h,
+    })
 }
 
 pub fn min_max_loc(result: &MatchResult) -> ((u32, u32, f32), (u32, u32, f32)) {

@@ -1,4 +1,4 @@
-use cv_core::{Tensor, TensorShape, storage::Storage};
+use cv_core::{Tensor, TensorShape, storage::Storage, CpuTensor};
 use cv_hal::gpu::GpuContext;
 use cv_hal::cpu::CpuBackend;
 use cv_hal::context::{ComputeContext, ThresholdType, ColorConversion};
@@ -77,8 +77,8 @@ fn test_icp_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
         tgt_data[i * 4 + 3] = 1.0;
     }
     
-    let src_cpu = Tensor::from_vec(src_data, TensorShape::new(1, num_src, 4));
-    let tgt_cpu = Tensor::from_vec(tgt_data, TensorShape::new(1, num_tgt, 4));
+    let src_cpu: CpuTensor<f32> = Tensor::from_vec(src_data, TensorShape::new(1, num_src, 4)).unwrap();
+    let tgt_cpu: CpuTensor<f32> = Tensor::from_vec(tgt_data, TensorShape::new(1, num_tgt, 4)).unwrap();
     
     let src_gpu = src_cpu.to_gpu_ctx(gpu).unwrap();
     let tgt_gpu = tgt_cpu.to_gpu_ctx(gpu).unwrap();
@@ -115,8 +115,8 @@ fn test_matching_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
         }
     }
     
-    let query_cpu = Tensor::from_vec(q_data, TensorShape::new(1, q_len, d_size));
-    let train_cpu = Tensor::from_vec(t_data, TensorShape::new(1, t_len, d_size));
+    let query_cpu: CpuTensor<u8> = Tensor::from_vec(q_data, TensorShape::new(1, q_len, d_size)).unwrap();
+    let train_cpu: CpuTensor<u8> = Tensor::from_vec(t_data, TensorShape::new(1, t_len, d_size)).unwrap();
     
     let query_gpu = query_cpu.to_gpu_ctx(gpu).unwrap();
     let train_gpu = train_cpu.to_gpu_ctx(gpu).unwrap();
@@ -148,7 +148,7 @@ fn test_fast_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
         }
     }
     
-    let input_cpu = Tensor::from_vec(data, shape);
+    let input_cpu: CpuTensor<u8> = Tensor::from_vec(data, shape).unwrap();
     let input_gpu = input_cpu.to_gpu_ctx(gpu).expect("Upload failed");
     
     // CPU
@@ -183,7 +183,7 @@ fn test_bilateral_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
         data[i] = (i % 256) as u8;
     }
     
-    let input_cpu = Tensor::from_vec(data, shape);
+    let input_cpu: CpuTensor<u8> = Tensor::from_vec(data, shape).unwrap();
     let input_gpu = input_cpu.to_gpu_ctx(gpu).expect("Upload failed");
     
     // CPU
@@ -210,7 +210,7 @@ fn test_resize_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
         data[i] = (i % 256) as u8;
     }
     
-    let input_cpu = Tensor::from_vec(data, shape);
+    let input_cpu: CpuTensor<u8> = Tensor::from_vec(data, shape).unwrap();
     let input_gpu = input_cpu.to_gpu_ctx(gpu).expect("Upload failed");
     
     let new_shape = (64, 64);
@@ -239,7 +239,7 @@ fn test_color_cvt_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
         data[i] = (i % 256) as u8;
     }
     
-    let input_cpu = Tensor::from_vec(data, shape);
+    let input_cpu: CpuTensor<u8> = Tensor::from_vec(data, shape).unwrap();
     let input_gpu = input_cpu.to_gpu_ctx(gpu).expect("Upload failed");
     
     // CPU
@@ -271,7 +271,7 @@ fn test_pc_transform_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) 
         data[i * 4 + 3] = 1.0;
     }
 
-    let input_cpu = Tensor::from_vec(data, shape);
+    let input_cpu: CpuTensor<f32> = Tensor::from_vec(data, shape).unwrap();
     let input_gpu = input_cpu.to_gpu_ctx(gpu).expect("Upload failed");
 
     let transform = [
@@ -306,7 +306,7 @@ fn test_threshold_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
         data[i] = (i % 256) as u8;
     }
     
-    let input_cpu = Tensor::from_vec(data.clone(), shape);
+    let input_cpu: CpuTensor<u8> = Tensor::from_vec(data.clone(), shape).unwrap();
     let input_gpu = input_cpu.to_gpu_ctx(gpu).expect("Failed to upload to GPU");
     
     let thresh = 128u8;

@@ -1,9 +1,8 @@
-use cv_core::{Tensor, TensorShape};
+use cv_core::Tensor;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
 use wgpu::util::DeviceExt;
-use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -52,13 +51,13 @@ pub fn lucas_kanade(
     let buffer_size = (num_points * 8) as u64;
     let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
     
-    let mut buffer_a = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let buffer_a = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("LK Points A"),
         contents: bytemuck::cast_slice(&initial_points),
         usage,
     });
     
-    let mut buffer_b = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+    let buffer_b = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("LK Points B"),
         size: buffer_size,
         usage,

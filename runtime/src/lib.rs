@@ -1,8 +1,15 @@
 pub mod orchestrator;
 pub mod memory;
+pub mod device_registry;
+pub mod executor;
+pub mod memory_manager;
+pub mod distributed;
+pub mod pipeline;
 
-pub use orchestrator::{TaskScheduler, ResourceGroup, GroupPolicy, scheduler};
-pub use memory::{UnifiedBuffer, BufferLocation};
+pub use orchestrator::{TaskScheduler, ResourceGroup, GroupPolicy, scheduler, RuntimeRunner, best_runner, default_runner, WorkloadHint, TaskPriority};
+pub use memory::UnifiedBuffer;
+pub use device_registry::{SubmissionIndex, DeviceRuntime, DeviceRegistry, registry};
+pub use pipeline::{Pipeline, PipelineNode, PipelineBuilder, BufferId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -20,6 +27,12 @@ pub enum Error {
     
     #[error("HAL error: {0}")]
     HalError(#[from] cv_hal::Error),
+
+    #[error("Core error: {0}")]
+    CoreError(#[from] cv_core::Error),
+    
+    #[error("Initialization error: {0}")]
+    InitError(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -27,6 +40,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[macro_export]
 macro_rules! submit_to {
     ($group_name:expr, $f:block) => {
-        $crate::scheduler().submit($group_name, move || { $f })
+        match $crate::scheduler() {
+            Ok(s) => s.submit($group_name, move || { $f }),
+            Err(e) => Err(e),
+        }
     };
 }

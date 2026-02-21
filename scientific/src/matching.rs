@@ -14,53 +14,63 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
     let cols = cost_matrix[0].len();
     let n = rows.max(cols);
 
-    // 1. Pad matrix to square if needed
-    let mut matrix = vec![vec![0.0; n]; n];
+    // 1. Flatten and pad matrix to square n x n
+    let mut matrix = vec![0.0; n * n];
     let mut max_val = 0.0;
+    
+    // Find max value for padding
     for r in 0..rows {
         for c in 0..cols {
-            matrix[r][c] = cost_matrix[r][c];
-            if matrix[r][c] > max_val { max_val = matrix[r][c]; }
-        }
-    }
-    // For rectangular padding, we fill with a large value to avoid fake matches
-    // unless we want to match everything (then 0 is fine).
-    // In CV tracking, we usually pad with large value.
-    for r in 0..n {
-        for c in 0..n {
-            if r >= rows || c >= cols {
-                matrix[r][c] = max_val + 1.0;
-            }
+            let val = cost_matrix[r][c];
+            if val > max_val { max_val = val; }
         }
     }
 
-    // --- Full Munkres Algorithm (Step-by-Step) ---
-    
+    for r in 0..n {
+        for c in 0..n {
+            let val = if r < rows && c < cols {
+                cost_matrix[r][c]
+            } else {
+                max_val + 1.0 // Pad with large value
+            };
+            matrix[r * n + c] = val;
+        }
+    }
+
+    // --- Munkres Algorithm ---
+
     // Step 1: Row reduction
     for r in 0..n {
-        let min = matrix[r].iter().cloned().fold(f64::INFINITY, f64::min);
-        for c in 0..n { matrix[r][c] -= min; }
+        let mut min_val = f64::INFINITY;
+        for c in 0..n {
+            min_val = min_val.min(matrix[r * n + c]);
+        }
+        for c in 0..n {
+            matrix[r * n + c] -= min_val;
+        }
     }
 
     // Step 2: Initial starring
-    let mut mask = vec![vec![0u8; n]; n]; // 0: normal, 1: starred, 2: primed
+    // mask: 0=normal, 1=starred, 2=primed
+    let mut mask = vec![0u8; n * n];
     let mut row_covered = vec![false; n];
     let mut col_covered = vec![false; n];
 
     for r in 0..n {
         for c in 0..n {
-            if !row_covered[r] && !col_covered[c] && matrix[r][c].abs() < 1e-9 {
-                mask[r][c] = 1;
+            if !row_covered[r] && !col_covered[c] && matrix[r * n + c].abs() < 1e-9 {
+                mask[r * n + c] = 1;
                 row_covered[r] = true;
                 col_covered[c] = true;
             }
         }
     }
-    // Reset covers
     row_covered.fill(false);
     col_covered.fill(false);
 
     let mut step = 3;
+    let mut prime_rc = (0, 0); // Location of the found prime
+
     loop {
         match step {
             3 => {
@@ -68,36 +78,96 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
                 let mut count = 0;
                 for r in 0..n {
                     for c in 0..n {
-                        if mask[r][c] == 1 { col_covered[c] = true; }
+                        if mask[r * n + c] == 1 {
+                            col_covered[c] = true;
+                        }
                     }
                 }
-                for c in 0..n { if col_covered[c] { count += 1; } }
+                for c in 0..n {
+                    if col_covered[c] { count += 1; }
+                }
                 
-                if count >= n { break; } // Done!
+                if count >= n { break; } // Done
                 step = 4;
             }
             4 => {
                 // Step 4: Find a non-covered zero and prime it
                 if let Some((r, c)) = find_uncovered_zero(&matrix, &row_covered, &col_covered, n) {
-                    mask[r][c] = 2;
-                    // Find starred zero in this row
+                    mask[r * n + c] = 2; // Prime it
+                    
+                    // If there is a starred zero in this row
                     if let Some(star_c) = find_star_in_row(&mask, r, n) {
                         row_covered[r] = true;
                         col_covered[star_c] = false;
-                        step = 4;
+                        step = 4; // Continue in Step 4
                     } else {
-                        // Step 5: Augmenting path
-                        mask = step5(&mask, r, c, n);
-                        row_covered.fill(false);
-                        col_covered.fill(false);
-                        mask_clear_primes(&mut mask, n);
-                        step = 3;
+                        // No starred zero in row -> augment path
+                        prime_rc = (r, c);
+                        step = 5;
                     }
                 } else {
-                    // Step 6: Modify weights
-                    step6(&mut matrix, &row_covered, &col_covered, n);
-                    step = 4;
+                    step = 6;
                 }
+            }
+            5 => {
+                // Step 5: Construct series of alternating primed and starred zeros
+                let mut path = Vec::with_capacity(n);
+                path.push(prime_rc);
+                
+                let mut curr_c = prime_rc.1;
+                
+                loop {
+                    // Find starred zero in current column
+                    if let Some(r) = find_star_in_col(&mask, curr_c, n) {
+                        path.push((r, curr_c));
+                        // Find primed zero in this row
+                        if let Some(c) = find_prime_in_row(&mask, r, n) {
+                            path.push((r, c));
+                            curr_c = c;
+                        } else {
+                            break; 
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                // Augment path
+                for &(r, c) in &path {
+                    if mask[r * n + c] == 1 {
+                        mask[r * n + c] = 0;
+                    } else {
+                        mask[r * n + c] = 1;
+                    }
+                }
+
+                // Clear covers and primes
+                row_covered.fill(false);
+                col_covered.fill(false);
+                for i in 0..mask.len() {
+                    if mask[i] == 2 { mask[i] = 0; }
+                }
+                
+                step = 3;
+            }
+            6 => {
+                // Step 6: Add min value to covered rows, subtract from uncovered cols
+                let mut min_val = f64::INFINITY;
+                for r in 0..n {
+                    for c in 0..n {
+                        if !row_covered[r] && !col_covered[c] {
+                            min_val = min_val.min(matrix[r * n + c]);
+                        }
+                    }
+                }
+
+                for r in 0..n {
+                    for c in 0..n {
+                        if row_covered[r] { matrix[r * n + c] += min_val; }
+                        if !col_covered[c] { matrix[r * n + c] -= min_val; }
+                    }
+                }
+                step = 4;
             }
             _ => break,
         }
@@ -106,7 +176,7 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
     let mut assignments = Vec::new();
     for r in 0..rows {
         for c in 0..cols {
-            if mask[r][c] == 1 {
+            if mask[r * n + c] == 1 {
                 assignments.push((r, c));
             }
         }
@@ -114,74 +184,37 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
     assignments
 }
 
-fn find_uncovered_zero(m: &Vec<Vec<f64>>, rc: &[bool], cc: &[bool], n: usize) -> Option<(usize, usize)> {
+fn find_uncovered_zero(m: &[f64], rc: &[bool], cc: &[bool], n: usize) -> Option<(usize, usize)> {
     for r in 0..n {
+        if rc[r] { continue; }
         for c in 0..n {
-            if !rc[r] && !cc[c] && m[r][c].abs() < 1e-9 { return Some((r, c)); }
+            if !cc[c] && m[r * n + c].abs() < 1e-9 {
+                return Some((r, c));
+            }
         }
     }
     None
 }
 
-fn find_star_in_row(mask: &Vec<Vec<u8>>, r: usize, n: usize) -> Option<usize> {
-    for c in 0..n { if mask[r][c] == 1 { return Some(c); } }
-    None
-}
-
-fn find_star_in_col(mask: &Vec<Vec<u8>>, c: usize, n: usize) -> Option<usize> {
-    for r in 0..n { if mask[r][c] == 1 { return Some(r); } }
-    None
-}
-
-fn find_prime_in_row(mask: &Vec<Vec<u8>>, r: usize, n: usize) -> Option<usize> {
-    for c in 0..n { if mask[r][c] == 2 { return Some(c); } }
-    None
-}
-
-fn mask_clear_primes(mask: &mut Vec<Vec<u8>>, n: usize) {
-    for r in 0..n { for c in 0..n { if mask[r][c] == 2 { mask[r][c] = 0; } } }
-}
-
-fn step5(mask: &Vec<Vec<u8>>, r0: usize, c0: usize, n: usize) -> Vec<Vec<u8>> {
-    let mut new_mask = mask.clone();
-    let mut path = vec![(r0, c0)];
-    
-    let mut curr_r = r0;
-    let mut curr_c = c0;
-    
-    loop {
-        if let Some(r) = find_star_in_col(&new_mask, curr_c, n) {
-            path.push((r, curr_c));
-            curr_r = r;
-        } else { break; }
-        
-        if let Some(c) = find_prime_in_row(&new_mask, curr_r, n) {
-            path.push((curr_r, c));
-            curr_c = c;
-        } else { break; }
+fn find_star_in_row(mask: &[u8], r: usize, n: usize) -> Option<usize> {
+    for c in 0..n {
+        if mask[r * n + c] == 1 { return Some(c); }
     }
-    
-    for (r, c) in path {
-        if new_mask[r][c] == 1 { new_mask[r][c] = 0; }
-        else { new_mask[r][c] = 1; }
-    }
-    new_mask
+    None
 }
 
-fn step6(m: &mut Vec<Vec<f64>>, rc: &[bool], cc: &[bool], n: usize) {
-    let mut min = f64::INFINITY;
+fn find_star_in_col(mask: &[u8], c: usize, n: usize) -> Option<usize> {
     for r in 0..n {
-        for c in 0..n {
-            if !rc[r] && !cc[c] { min = min.min(m[r][c]); }
-        }
+        if mask[r * n + c] == 1 { return Some(r); }
     }
-    
-    for r in 0..n {
-        for c in 0..n {
-            if rc[r] { m[r][c] += min; }
-            if !cc[c] { m[r][c] -= min; }
-        }
+    None
+}
+
+fn find_prime_in_row(mask: &[u8], r: usize, n: usize) -> Option<usize> {
+    for c in 0..n {
+        if mask[r * n + c] == 2 { return Some(c); }
     }
+    None
 }
 
 #[cfg(test)]
@@ -202,7 +235,7 @@ mod tests {
         for (r, c) in matches {
             total_cost += cost[r][c];
         }
-        // Min cost should be 5.0
+        // Min cost should be 5.0 (1.0 + 2.0 + 2.0)
         assert_eq!(total_cost, 5.0);
     }
 }

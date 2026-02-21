@@ -1,7 +1,7 @@
 use cv_scientific::geometry::*;
 use cv_scientific::point_cloud::*;
 use cv_core::{Rect, PointCloud};
-use nalgebra::{Point3, Vector3};
+use nalgebra::Point3;
 
 #[test]
 fn test_vectorized_iou_and_polygon_iou() {

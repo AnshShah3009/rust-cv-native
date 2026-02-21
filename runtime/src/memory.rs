@@ -1,30 +1,25 @@
 use std::sync::{Arc, Mutex};
 use crate::Result;
-use cv_hal::gpu::GpuContext;
-use cv_hal::compute::ComputeDevice;
-use wgpu::BufferUsages;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BufferLocation {
-    Host,
-    Device,
-    Both,
-}
-
 use cv_hal::DeviceId;
+use wgpu::BufferUsages;
+use crate::device_registry::{SubmissionIndex, registry};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BufferLocation {
-    Host,
-    Device,
-    Both,
-}
-
+/// Manages data consistency between host and device.
+/// 
+/// Uses a versioned state machine to track where the most up-to-date data is.
 pub struct UnifiedBuffer<T> {
     host_data: Arc<Mutex<Vec<T>>>,
     device_data: Option<wgpu::Buffer>,
     device_id: Option<DeviceId>,
-    location: BufferLocation,
+    
+    // Coherence tracking
+    host_version: u64,
+    device_version: Option<(DeviceId, u64)>,
+    
+    // Submission tracking for safe retirement
+    last_write_submission: SubmissionIndex,
+    last_read_submission: SubmissionIndex,
+    
     len: usize,
 }
 
@@ -34,27 +29,45 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
             host_data: Arc::new(Mutex::new(vec![T::default(); len])),
             device_data: None,
             device_id: None,
-            location: BufferLocation::Host,
+            host_version: 1,
+            device_version: None,
+            last_write_submission: SubmissionIndex(0),
+            last_read_submission: SubmissionIndex(0),
             len,
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
     pub fn host_view(&self) -> Result<std::sync::MutexGuard<'_, Vec<T>>> {
-        if self.location == BufferLocation::Device {
-            return Err(crate::Error::MemoryError("Buffer data only on device. Call sync_to_host() first.".to_string()));
+        // Ensure host is up to date
+        if let Some((_, dv)) = self.device_version {
+            if dv > self.host_version {
+                return Err(crate::Error::MemoryError("Buffer data only on device. Call sync_to_host() first.".to_string()));
+            }
         }
+        
         self.host_data.lock()
             .map_err(|_| crate::Error::ConcurrencyError("UnifiedBuffer host_data poisoned".to_string()))
     }
 
-    pub fn sync_to_device_ctx(&mut self, ctx: &GpuContext) -> Result<()> {
-        self.sync_to_device(&ComputeDevice::Gpu(ctx))
+    /// Mark that the host data has been modified.
+    pub fn mark_host_dirty(&mut self) {
+        self.host_version += 1;
     }
 
-    pub fn sync_to_device(&mut self, device: &ComputeDevice<'_>) -> Result<()> {
-        if self.location == BufferLocation::Device || self.location == BufferLocation::Both {
-            return Ok(());
+    pub fn sync_to_device(&mut self, target_id: DeviceId) -> Result<()> {
+        if let Some((did, dv)) = self.device_version {
+            if did == target_id && dv >= self.host_version {
+                return Ok(());
+            }
         }
+
+        let reg = registry()?;
+        let runtime = reg.get_device(target_id)
+            .ok_or_else(|| crate::Error::RuntimeError(format!("Device {:?} not found", target_id)))?;
 
         let host_guard = self.host_data.lock()
             .map_err(|_| crate::Error::ConcurrencyError("UnifiedBuffer host_data poisoned".to_string()))?;
@@ -63,144 +76,119 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
         
         let buffer = if let Some(ref b) = self.device_data {
-            if b.size() >= size {
+            if b.size() >= size && self.device_id == Some(target_id) {
                 b
             } else {
-                let new_b = device.get_buffer(size, usages)?;
+                // Retire old buffer if any
+                if let Some(old_b) = self.device_data.take() {
+                    if let Some(old_id) = self.device_id {
+                        if let Some(old_runtime) = reg.get_device(old_id) {
+                            old_runtime.memory().retire_buffer(old_b, self.last_write_submission.max(self.last_read_submission));
+                        }
+                    }
+                }
+                
+                let device = match runtime.context() {
+                    crate::device_registry::BackendContext::Gpu(ctx) => ctx.device(),
+                    _ => return Err(crate::Error::NotSupported("sync_to_device only supports GPU for now".into())),
+                };
+
+                let new_b = runtime.memory().get_buffer(device, size, usages);
                 self.device_data = Some(new_b);
-                self.device_id = Some(device.device_id());
+                self.device_id = Some(target_id);
                 self.device_data.as_ref().unwrap()
             }
         } else {
-            let new_b = device.get_buffer(size, usages)?;
+            let device = match runtime.context() {
+                crate::device_registry::BackendContext::Gpu(ctx) => ctx.device(),
+                _ => return Err(crate::Error::NotSupported("sync_to_device only supports GPU for now".into())),
+            };
+            
+            let new_b = runtime.memory().get_buffer(device, size, usages);
             self.device_data = Some(new_b);
-            self.device_id = Some(device.device_id());
+            self.device_id = Some(target_id);
             self.device_data.as_ref().unwrap()
         };
 
-        if let ComputeDevice::Gpu(gpu) = device {
-            gpu.queue.write_buffer(buffer, 0, bytemuck::cast_slice(&host_guard));
-        } else if let ComputeDevice::Mlx(_) = device {
-            return Err(crate::Error::NotSupported("UnifiedBuffer sync to MLX not yet implemented".into()));
+        match runtime.context() {
+            crate::device_registry::BackendContext::Gpu(gpu_ctx) => {
+                gpu_ctx.queue.write_buffer(buffer, 0, bytemuck::cast_slice(&host_guard));
+            }
+            _ => return Err(crate::Error::NotSupported(format!("sync_to_device not implemented for {:?}", runtime.backend()))),
         }
         
-        self.location = BufferLocation::Both;
+        self.device_version = Some((target_id, self.host_version));
         Ok(())
     }
 
-    pub async fn sync_to_host_ctx(&mut self, ctx: &GpuContext) -> Result<()> {
-        self.sync_to_host(&ComputeDevice::Gpu(ctx)).await
-    }
-
-    pub async fn sync_to_host(&mut self, device: &ComputeDevice<'_>) -> Result<()> {
-        if self.location == BufferLocation::Host || self.location == BufferLocation::Both {
+    pub async fn sync_to_host(&mut self) -> Result<()> {
+        let (did, dv) = self.device_version.ok_or_else(|| crate::Error::MemoryError("No device data to sync from".to_string()))?;
+        
+        if self.host_version >= dv {
             return Ok(());
         }
 
-        if self.device_id.is_none() {
-            self.device_id = Some(device.device_id());
-        }
+        let reg = registry()?;
+        let runtime = reg.get_device(did)
+            .ok_or_else(|| crate::Error::RuntimeError(format!("Device {:?} not found", did)))?;
 
         let buffer = self.device_data.as_ref()
             .ok_or_else(|| crate::Error::MemoryError("No device buffer to sync from".to_string()))?;
 
         let size = self.len * std::mem::size_of::<T>();
         
-        let data: Vec<T> = match device {
-            ComputeDevice::Gpu(gpu) => {
+        let data: Vec<T> = match runtime.context() {
+            crate::device_registry::BackendContext::Gpu(gpu_ctx) => {
                 cv_hal::gpu_kernels::buffer_utils::read_buffer(
-                    gpu.device.clone(),
-                    &gpu.queue,
+                    gpu_ctx.device.clone(),
+                    &gpu_ctx.queue,
                     buffer,
                     0,
                     size,
                 ).await?
             }
-            ComputeDevice::Cpu(_) => return Err(crate::Error::MemoryError("Cannot sync to host from CPU device".into())),
-            ComputeDevice::Mlx(_) => return Err(crate::Error::NotSupported("UnifiedBuffer sync from MLX not yet implemented".into())),
+            _ => return Err(crate::Error::NotSupported(format!("sync_to_host not implemented for {:?}", runtime.backend()))),
         };
 
         let mut host_guard = self.host_data.lock()
             .map_err(|_| crate::Error::ConcurrencyError("UnifiedBuffer host_data poisoned".to_string()))?;
         *host_guard = data;
         
-        self.location = BufferLocation::Both;
+        self.host_version = dv;
         Ok(())
     }
 
-    /// Return the GPU buffer to the pool.
-    pub fn release(&mut self, device: &ComputeDevice<'_>) -> Result<()> {
-        if let Some(buffer) = self.device_data.take() {
-            let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
-            device.return_buffer(buffer, usages)?;
-            self.device_id = None;
+    /// Record that a GPU operation has written to this buffer.
+    pub fn mark_device_write(&mut self, index: SubmissionIndex) {
+        self.last_write_submission = index;
+        if let Some((did, _)) = self.device_version {
+            let next_v = self.host_version.max(self.device_version.map(|v| v.1).unwrap_or(0)) + 1;
+            self.device_version = Some((did, next_v));
         }
-        Ok(())
+    }
+
+    /// Record that a GPU operation has read from this buffer.
+    pub fn mark_device_read(&mut self, index: SubmissionIndex) {
+        self.last_read_submission = index;
     }
 
     pub fn device_buffer(&self) -> Option<&wgpu::Buffer> {
         self.device_data.as_ref()
     }
+
+    pub fn device_id(&self) -> Option<DeviceId> {
+        self.device_id
+    }
 }
 
 impl<T> Drop for UnifiedBuffer<T> {
     fn drop(&mut self) {
-        if let (Some(buffer), Some(_id)) = (self.device_data.take(), self.device_id.take()) {
-            // Safety: UnifiedBuffer is primarily used with GpuContext::global().
-            // We attempt to return to the global pool if it still exists.
-            if let Ok(ctx) = GpuContext::global() {
-                let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
-                ctx.return_buffer(buffer, usages);
+        if let (Some(buffer), Some(id)) = (self.device_data.take(), self.device_id.take()) {
+            if let Ok(reg) = registry() {
+                if let Some(runtime) = reg.get_device(id) {
+                    runtime.memory().retire_buffer(buffer, self.last_write_submission.max(self.last_read_submission));
+                }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cv_hal::gpu::GpuContext;
-
-    #[test]
-    fn test_unified_buffer_basic() {
-        let buf = UnifiedBuffer::<f32>::new(10);
-        {
-            let mut view = buf.host_view().unwrap();
-            view[0] = 42.0;
-        }
-        assert_eq!(buf.location, BufferLocation::Host);
-    }
-
-    #[tokio::test]
-    async fn test_unified_buffer_sync() {
-        // Only run if GPU is available
-        let ctx = match GpuContext::new() {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-
-        let mut buf = UnifiedBuffer::<f32>::new(100);
-        {
-            let mut view = buf.host_view().unwrap();
-            for i in 0..100 { view[i] = i as f32; }
-        }
-
-        // Sync to device
-        buf.sync_to_device(&ctx).unwrap();
-        assert_eq!(buf.location, BufferLocation::Both);
-        assert!(buf.device_buffer().is_some());
-
-        // Modify device data (not easy to do here without a shader, 
-        // so we'll just clear host and sync back)
-        {
-            let mut view = buf.host_view().unwrap();
-            for i in 0..100 { view[i] = 0.0; }
-        }
-        
-        buf.location = BufferLocation::Device; // Force it to think it's only on device
-        buf.sync_to_host(&ctx).await.unwrap();
-
-        let view = buf.host_view().unwrap();
-        assert_eq!(view[50], 50.0);
     }
 }

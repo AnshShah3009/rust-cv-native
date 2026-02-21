@@ -1,6 +1,6 @@
 use image::{GrayImage, RgbImage};
 use rayon::prelude::*;
-use cv_runtime::orchestrator::{ResourceGroup, scheduler};
+use cv_runtime::orchestrator::RuntimeRunner;
 use cv_hal::compute::ComputeDevice;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,8 +17,8 @@ pub fn resize(
     height: u32,
     interpolation: Interpolation,
 ) -> GrayImage {
-    let group = scheduler().get_default_group();
-    resize_ctx(src, width, height, interpolation, &group)
+    let runner = cv_runtime::default_runner();
+    resize_ctx(src, width, height, interpolation, &runner)
 }
 
 pub fn resize_ctx(
@@ -26,7 +26,7 @@ pub fn resize_ctx(
     width: u32,
     height: u32,
     interpolation: Interpolation,
-    group: &ResourceGroup,
+    group: &RuntimeRunner,
 ) -> GrayImage {
     if width == 0 || height == 0 {
         return GrayImage::new(0, 0);
@@ -54,13 +54,14 @@ fn resize_gpu(
     use cv_core::storage::Storage;
     use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
 
-    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize));
+    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize))
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
     
     let output_gpu = gpu.resize(&input_gpu, (width as usize, height as usize))?;
     let output_cpu = output_gpu.to_cpu_ctx(gpu)?;
     
-    let data = output_cpu.storage.as_slice().unwrap().to_vec();
+    let data = output_cpu.storage.as_slice().ok_or_else(|| cv_hal::Error::MemoryError("Download failed".into()))?.to_vec();
     GrayImage::from_raw(width, height, data)
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
 }

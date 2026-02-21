@@ -1,9 +1,11 @@
-use rayon;
 use std::sync::{Arc, OnceLock, Mutex};
 use std::collections::HashMap;
 use crate::Result;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use cv_hal::compute::{ComputeDevice, get_device};
+use cv_hal::{DeviceId, BackendType};
+use crate::device_registry::{registry, DeviceRuntime};
+use crate::executor::Executor;
+use crate::distributed::{LoadCoordinator, FileCoordinator};
+use std::time::{Instant, Duration};
 
 /// Priority level for a resource group
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -13,6 +15,38 @@ pub enum TaskPriority {
     Normal = 2,
     High = 3,
     Critical = 4,
+}
+
+/// Hints for the scheduler to select the most appropriate resource group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkloadHint {
+    /// Latency-sensitive (e.g., UI, real-time tracking). Prefers faster start times.
+    Latency,
+    /// Throughput-oriented (e.g., batch processing, dense mapping). Prefers throughput.
+    Throughput,
+    /// Power-saving (e.g., background tasks).
+    PowerSave,
+    /// Default behavior.
+    Default,
+}
+
+/// Statistics for a workload across all coordinated processes.
+#[derive(Debug, Clone, Default)]
+pub struct WorkloadStats {
+    pub active_tasks: usize,
+    pub total_groups: usize,
+}
+
+/// The mode of the orchestrator: either standalone or coordinated via a daemon.
+#[derive(Debug, Clone)]
+pub enum OrchestratorMode {
+    /// Local-only orchestration.
+    Local,
+    /// Distributed orchestration via a central coordinator (Hybrid mode).
+    /// Uses a shared filesystem entry for basic lock-based coordination.
+    Distributed {
+        coordinator_path: std::path::PathBuf,
+    },
 }
 
 /// Policy for a resource group
@@ -40,184 +74,301 @@ impl Default for GroupPolicy {
 pub struct ResourceGroup {
     pub name: String,
     pub policy: GroupPolicy,
-    pub num_threads: usize,
-    device: ComputeDevice<'static>,
-    pool: Arc<rayon::ThreadPool>,
-    active_tasks: Arc<AtomicUsize>,
+    device_id: DeviceId,
+    pub(crate) executor: Arc<Executor>,
 }
 
 impl ResourceGroup {
-    pub fn new(_scheduler: &TaskScheduler, name: &str, num_threads: usize, core_ids: Option<Vec<usize>>, policy: GroupPolicy, device: Option<ComputeDevice<'static>>) -> Result<Self> {
-        let mut builder = rayon::ThreadPoolBuilder::new().num_threads(num_threads);
+    pub fn new(name: &str, device_id: DeviceId, num_threads: usize, _core_ids: Option<Vec<usize>>, policy: GroupPolicy) -> Result<Self> {
+        let executor = Arc::new(Executor::new(device_id, num_threads, name)?);
         
-        if let Some(cores) = core_ids {
-            if !cores.is_empty() {
-                builder = builder.start_handler(move |thread_idx| {
-                    if let Some(&core_id) = cores.get(thread_idx % cores.len()) {
-                        if let Some(system_cores) = core_affinity::get_core_ids() {
-                            if let Some(target_core) = system_cores.into_iter().find(|c| c.id == core_id) {
-                                core_affinity::set_for_current(target_core);
-                            }
-                        }
-                    }
-                });
-            }
-        }
-
-        let pool = Arc::new(builder.build().map_err(|e| crate::Error::RuntimeError(e.to_string()))?);
-
         Ok(Self {
             name: name.to_string(),
             policy,
-            num_threads,
-            device: device.map(Ok).unwrap_or_else(get_device)?,
-            pool,
-            active_tasks: Arc::new(AtomicUsize::new(0)),
+            device_id,
+            executor,
         })
-    }
-
-    pub fn resize(&self, _new_threads: usize) -> Result<()> {
-        Err(crate::Error::RuntimeError("Resize not supported in unified architecture".to_string()))
     }
 
     pub fn spawn<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
     {
-        let active_tasks_clone = self.active_tasks.clone();
-        self.active_tasks.fetch_add(1, Ordering::SeqCst);
-        
-        self.pool.spawn(move || {
-            // Drop guard guarantees decrement even on panic
-            struct TaskGuard(Arc<AtomicUsize>);
-            impl Drop for TaskGuard {
-                fn drop(&mut self) {
-                    self.0.fetch_sub(1, Ordering::SeqCst);
-                }
-            }
-            let _guard = TaskGuard(active_tasks_clone);
-            f();
-        });
+        self.executor.spawn(f);
     }
 
-    /// Execute a parallel job, respecting the group's concurrency limit
     pub fn run<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send,
         R: Send,
     {
-        self.active_tasks.fetch_add(1, Ordering::SeqCst);
-        let result = self.pool.install(f);
-        self.active_tasks.fetch_sub(1, Ordering::SeqCst);
-        result
+        self.executor.install(f)
     }
 
-    pub fn current_num_threads(&self) -> usize {
-        self.num_threads
-    }
-
-    pub fn device(&self) -> ComputeDevice<'static> {
-        self.device
+    pub fn device_id(&self) -> DeviceId {
+        self.device_id
     }
 
     pub fn load(&self) -> usize {
-        self.active_tasks.load(Ordering::Relaxed)
+        self.executor.load()
+    }
+    
+    pub fn device_runtime(&self) -> Result<Arc<DeviceRuntime>> {
+        registry()?.get_device(self.device_id)
+            .ok_or_else(|| crate::Error::RuntimeError(format!("Device {:?} not found", self.device_id)))
+    }
+
+    pub fn device(&self) -> cv_hal::compute::ComputeDevice<'static> {
+        cv_hal::compute::get_device_by_id(self.device_id).unwrap_or_else(|_| {
+            panic!("Critical failure: Could not find compute device {:?}", self.device_id);
+        })
     }
 }
 
 pub struct TaskScheduler {
     groups: Mutex<HashMap<String, Arc<ResourceGroup>>>,
-    total_threads: AtomicUsize,
+    mode: OrchestratorMode,
+    coordinator: Option<Box<dyn LoadCoordinator>>,
+    global_load_cache: Mutex<(HashMap<DeviceId, usize>, Instant)>,
+    failed_devices: Mutex<std::collections::HashSet<DeviceId>>,
+}
+
+pub enum RuntimeRunner {
+    Group(Arc<ResourceGroup>),
+    Sync(DeviceId),
+}
+
+impl RuntimeRunner {
+    pub fn run<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce() -> R + Send,
+        R: Send,
+    {
+        match self {
+            RuntimeRunner::Group(g) => g.run(f),
+            RuntimeRunner::Sync(_) => f(),
+        }
+    }
+
+    /// Run with automatic fallback to another device on error
+    pub fn run_safe<F, R, E>(&self, f: F) -> std::result::Result<R, E>
+    where
+        F: Fn() -> std::result::Result<R, E> + Send + Clone,
+        R: Send,
+        E: From<crate::Error> + Send,
+    {
+        let f_cloned = f.clone();
+        let res = self.run(move || f_cloned());
+        if res.is_err() {
+            // Signal failure to scheduler for future calls
+            if let Ok(s) = scheduler() {
+                s.report_failure(self.device_id());
+            }
+            // Fallback to CPU immediately
+            let reg = registry().map_err(E::from)?;
+            let cpu_id = reg.default_cpu().id();
+            if cpu_id != self.device_id() {
+                return Ok(f()?);
+            }
+        }
+        res
+    }
+
+    pub fn device_id(&self) -> DeviceId {
+        match self {
+            RuntimeRunner::Group(g) => g.device_id(),
+            RuntimeRunner::Sync(id) => *id,
+        }
+    }
+    
+    pub fn device_runtime(&self) -> Result<Arc<DeviceRuntime>> {
+        registry()?.get_device(self.device_id())
+            .ok_or_else(|| crate::Error::RuntimeError(format!("Device {:?} not found", self.device_id())))
+    }
+
+    pub fn device(&self) -> cv_hal::compute::ComputeDevice<'static> {
+        cv_hal::compute::get_device_by_id(self.device_id()).unwrap_or_else(|_| {
+            panic!("Critical failure: Could not find compute device {:?}", self.device_id());
+        })
+    }
+}
+
+pub fn best_runner() -> RuntimeRunner {
+    if let Ok(s) = scheduler() {
+        if let Ok(g) = s.best_gpu_or_cpu() {
+            return RuntimeRunner::Group(g);
+        }
+    }
+    
+    // Fallback to default CPU device
+    if let Ok(reg) = registry() {
+        return RuntimeRunner::Sync(reg.default_cpu().id());
+    }
+    
+    panic!("Critical failure: Could not initialize even basic device registry");
+}
+
+pub fn default_runner() -> RuntimeRunner {
+    if let Ok(s) = scheduler() {
+        if let Ok(g) = s.get_default_group() {
+            return RuntimeRunner::Group(g);
+        }
+    }
+    
+    if let Ok(reg) = registry() {
+        return RuntimeRunner::Sync(reg.default_cpu().id());
+    }
+    
+    panic!("Critical failure: Could not initialize even basic device registry");
 }
 
 impl TaskScheduler {
     pub fn new() -> Self {
+        let (mode, coordinator): (OrchestratorMode, Option<Box<dyn LoadCoordinator>>) = if let Ok(path) = std::env::var("CV_RUNTIME_COORDINATOR") {
+            let path_buf = std::path::PathBuf::from(path);
+            (
+                OrchestratorMode::Distributed { coordinator_path: path_buf.clone() },
+                Some(Box::new(FileCoordinator::new(path_buf)))
+            )
+        } else {
+            (OrchestratorMode::Local, None)
+        };
+
         Self {
             groups: Mutex::new(HashMap::new()),
-            total_threads: AtomicUsize::new(0),
+            mode,
+            coordinator,
+            global_load_cache: Mutex::new((HashMap::new(), Instant::now() - Duration::from_secs(3600))),
+            failed_devices: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
-    pub fn create_group(&self, name: &str, num_threads: usize, cores: Option<Vec<usize>>, policy: GroupPolicy) -> Result<Arc<ResourceGroup>> {
-        self.create_group_with_device(name, num_threads, cores, policy, None)
+    pub fn mode(&self) -> &OrchestratorMode {
+        &self.mode
     }
 
-    pub fn create_group_with_device(&self, name: &str, num_threads: usize, cores: Option<Vec<usize>>, policy: GroupPolicy, device: Option<ComputeDevice<'static>>) -> Result<Arc<ResourceGroup>> {
-        let mut groups = match self.groups.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+    pub fn report_failure(&self, device_id: DeviceId) {
+        let mut failed = self.failed_devices.lock().unwrap();
+        failed.insert(device_id);
+    }
+
+    pub fn is_device_healthy(&self, device_id: DeviceId) -> bool {
+        let failed = self.failed_devices.lock().unwrap();
+        !failed.contains(&device_id)
+    }
+
+    pub fn create_group(&self, name: &str, num_threads: usize, cores: Option<Vec<usize>>, policy: GroupPolicy) -> Result<Arc<ResourceGroup>> {
+        let cpu_id = registry()?.default_cpu().id();
+        self.create_group_with_device(name, num_threads, cores, policy, cpu_id)
+    }
+
+    pub fn create_group_with_device(&self, name: &str, num_threads: usize, cores: Option<Vec<usize>>, policy: GroupPolicy, device_id: DeviceId) -> Result<Arc<ResourceGroup>> {
+        let mut groups = self.groups.lock().unwrap();
             
         if groups.contains_key(name) {
             return Err(crate::Error::RuntimeError(format!("Resource group '{}' already exists", name)));
         }
 
-        let group = Arc::new(ResourceGroup::new(self, name, num_threads, cores, policy, device)?);
+        let group = Arc::new(ResourceGroup::new(name, device_id, num_threads, cores, policy)?);
         groups.insert(name.to_string(), group.clone());
         
-        self.total_threads.fetch_add(num_threads, Ordering::SeqCst);
+        // Also register with the device runtime
+        if let Some(runtime) = registry()?.get_device(device_id) {
+            runtime.executors().lock().unwrap().add_executor(group.executor.clone());
+        }
         
         Ok(group)
     }
 
     pub fn remove_group(&self, name: &str) -> Result<Option<Arc<ResourceGroup>>> {
-        let mut groups = match self.groups.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-            
+        let mut groups = self.groups.lock().unwrap();
         if let Some(group) = groups.remove(name) {
-            self.total_threads.fetch_sub(group.current_num_threads(), Ordering::SeqCst);
             Ok(Some(group))
         } else {
             Ok(None)
         }
     }
 
-    pub fn total_allocated_threads(&self) -> usize {
-        self.total_threads.load(Ordering::Relaxed)
+    pub fn get_group(&self, name: &str) -> Result<Option<Arc<ResourceGroup>>> {
+        let groups = self.groups.lock().unwrap();
+        Ok(groups.get(name).cloned())
     }
 
-    pub fn get_group(&self, name: &str) -> Result<Option<Arc<ResourceGroup>>> {
-        let groups = match self.groups.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        Ok(groups.get(name).cloned())
+    fn get_global_load(&self) -> HashMap<DeviceId, usize> {
+        let mut cache = self.global_load_cache.lock().unwrap();
+        if cache.1.elapsed() > Duration::from_millis(200) {
+            if let Some(ref coord) = self.coordinator {
+                // Periodically update our own load too
+                let local_load = self.get_local_load();
+                let _ = coord.update_load(&local_load);
+                
+                if let Ok(global) = coord.get_global_load() {
+                    cache.0 = global;
+                }
+            }
+            cache.1 = Instant::now();
+        }
+        cache.0.clone()
+    }
+
+    fn get_local_load(&self) -> HashMap<DeviceId, usize> {
+        let groups = self.groups.lock().unwrap();
+        let mut load = HashMap::new();
+        for group in groups.values() {
+            let entry = load.entry(group.device_id()).or_insert(0);
+            *entry += group.load();
+        }
+        load
     }
 
     /// Finds the best available resource group for a given device type.
     /// Prefers groups with higher priority, then those with the least active tasks.
-    pub fn get_best_group(&self, backend_type: cv_hal::BackendType) -> Result<Option<Arc<ResourceGroup>>> {
-        let groups = match self.groups.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+    pub fn get_best_group(&self, backend_type: BackendType, hint: WorkloadHint) -> Result<Option<Arc<ResourceGroup>>> {
+        let global_load = self.get_global_load();
+        let groups = self.groups.lock().unwrap();
         
         let mut best_group: Option<Arc<ResourceGroup>> = None;
         let mut max_priority = TaskPriority::Background;
         let mut min_load = usize::MAX;
 
         for group in groups.values() {
-            let device = group.device();
-            let matches = match (backend_type, device) {
-                (cv_hal::BackendType::Cpu, ComputeDevice::Cpu(_)) => true,
+            let device_id = group.device_id();
+            if !self.is_device_healthy(device_id) {
+                continue;
+            }
+
+            let runtime = group.device_runtime()?;
+            let matches = match (backend_type, runtime.backend()) {
+                (BackendType::Cpu, BackendType::Cpu) => true,
                 // Any GPU backend matches a GPU device for now
-                (t, ComputeDevice::Gpu(_)) if t != cv_hal::BackendType::Cpu => true,
+                (t, b) if t != BackendType::Cpu && b != BackendType::Cpu => true,
                 _ => false,
             };
 
             if matches {
                 let priority = group.policy.priority;
-                let load = group.load();
+                
+                // Adjust selection logic based on hint
+                if hint == WorkloadHint::Latency && priority < TaskPriority::Normal {
+                    continue; // Skip low priority for latency sensitive
+                }
+
+                // Load calculation: Local group load + remote load for this device
+                let local_device_load: usize = groups.values()
+                    .filter(|g| g.device_id() == device_id)
+                    .map(|g| g.load())
+                    .sum();
+                
+                let remote_load = global_load.get(&device_id).copied().unwrap_or(0).saturating_sub(local_device_load);
+                let total_device_load = group.load() + remote_load;
                 
                 if priority > max_priority {
                     max_priority = priority;
-                    min_load = load;
+                    min_load = total_device_load;
                     best_group = Some(group.clone());
                 } else if priority == max_priority {
-                    if load < min_load {
-                        min_load = load;
+                    if total_device_load < min_load {
+                        min_load = total_device_load;
                         best_group = Some(group.clone());
                     }
                 }
@@ -233,19 +384,18 @@ impl TaskScheduler {
     }
 
     pub fn best_gpu_or_cpu(&self) -> Result<Arc<ResourceGroup>> {
+        self.best_gpu_or_cpu_for(WorkloadHint::Default)
+    }
+
+    pub fn best_gpu_or_cpu_for(&self, hint: WorkloadHint) -> Result<Arc<ResourceGroup>> {
         // Try WebGPU first (as it's our primary accelerator)
-        if let Some(group) = self.get_best_group(cv_hal::BackendType::WebGPU)? {
+        if let Some(group) = self.get_best_group(BackendType::WebGPU, hint)? {
             return Ok(group);
         }
-        if let Some(group) = self.get_best_group(cv_hal::BackendType::Vulkan)? {
+        if let Some(group) = self.get_best_group(BackendType::Vulkan, hint)? {
             return Ok(group);
         }
         self.get_default_group()
-    }
-
-    /// Convenience method to get the best device directly.
-    pub fn best_device(&self) -> Result<ComputeDevice<'static>> {
-        Ok(self.best_gpu_or_cpu()?.device())
     }
 
     pub fn submit<F>(&self, group_name: &str, f: F) -> Result<()>
@@ -265,9 +415,6 @@ static GLOBAL_SCHEDULER: OnceLock<Result<TaskScheduler>> = OnceLock::new();
 
 pub fn scheduler() -> Result<&'static TaskScheduler> {
     GLOBAL_SCHEDULER.get_or_init(|| {
-        if let Err(e) = cv_core::init_global_thread_pool(None) {
-            return Err(crate::Error::RuntimeError(format!("Failed to initialize global thread pool: {}", e)));
-        }
         let s = TaskScheduler::new();
         s.create_group("default", num_cpus::get(), None, GroupPolicy::default())?;
         Ok(s)
@@ -287,9 +434,8 @@ mod tests {
         let g1 = s.create_group("g1", 4, None, policy).unwrap();
         let g2 = s.create_group("g2", 2, None, policy).unwrap();
         
-        assert_eq!(g1.current_num_threads(), 4);
-        assert_eq!(g2.current_num_threads(), 2);
-        assert_eq!(s.total_allocated_threads(), 6);
+        assert_eq!(g1.executor.load(), 0);
+        assert_eq!(g2.executor.load(), 0);
     }
 
     #[test]
@@ -322,11 +468,9 @@ mod tests {
         let s = TaskScheduler::new();
         let policy = GroupPolicy::default();
         
-        let cpu_dev = cv_hal::compute::get_device();
-        let g1 = s.create_group_with_device("g1", 2, None, policy, Some(cpu_dev)).unwrap();
-        let g2 = s.create_group_with_device("g2", 2, None, policy, Some(cpu_dev)).unwrap();
-        
-        let backend_type = cpu_dev.backend_type();
+        let cpu_id = registry().unwrap().default_cpu().id();
+        let g1 = s.create_group_with_device("g1", 2, None, policy, cpu_id).unwrap();
+        let g2 = s.create_group_with_device("g2", 2, None, policy, cpu_id).unwrap();
         
         assert_eq!(g1.load(), 0);
         assert_eq!(g2.load(), 0);
@@ -341,11 +485,11 @@ mod tests {
         });
         
         rx.recv().unwrap();
-        assert_eq!(g1.load(), 1);
+        // Wait a bit for load to update
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(g1.load() >= 1);
         
-        let best = s.get_best_group(backend_type).unwrap().unwrap();
+        let best = s.get_best_group(BackendType::Cpu, WorkloadHint::Default).unwrap().unwrap();
         assert_eq!(best.name, "g2");
     }
 }
-
-

@@ -1,7 +1,7 @@
 use crate::calibration::*;
 use crate::essential_fundamental::*;
 use crate::pattern::find_chessboard_corners;
-use cv_core::{CameraExtrinsics, CameraIntrinsics};
+use cv_core::{Pose, CameraIntrinsics};
 use image::GrayImage;
 use nalgebra::{Matrix3, Matrix3x4, Matrix4, Point2, Point3, Vector3};
 use std::path::Path;
@@ -21,7 +21,7 @@ pub struct StereoRectifyMatrices {
 pub struct StereoCalibrationResult {
     pub left: CameraCalibrationResult,
     pub right: CameraCalibrationResult,
-    pub relative_extrinsics: CameraExtrinsics,
+    pub relative_extrinsics: Pose,
     pub essential_matrix: Matrix3<f64>,
     pub fundamental_matrix: Matrix3<f64>,
 }
@@ -111,7 +111,7 @@ pub fn stereo_calibrate_planar_with_options(
         r = -r;
     }
 
-    let relative_extrinsics = CameraExtrinsics::new(r, t_sum);
+    let relative_extrinsics = Pose::new(r, t_sum);
     let essential_matrix = essential_from_extrinsics(&relative_extrinsics);
     let fundamental_matrix =
         fundamental_from_essential(&essential_matrix, &left.intrinsics, &right.intrinsics);
@@ -285,8 +285,8 @@ pub fn stereo_calibrate_from_chessboard_files_with_options<P: AsRef<Path>>(
 pub fn stereo_rectify_matrices(
     left_intrinsics: &CameraIntrinsics,
     right_intrinsics: &CameraIntrinsics,
-    left_extrinsics: &CameraExtrinsics,
-    right_extrinsics: &CameraExtrinsics,
+    left_extrinsics: &Pose,
+    right_extrinsics: &Pose,
 ) -> Result<StereoRectifyMatrices> {
     let rel_r = left_extrinsics.rotation.transpose() * right_extrinsics.rotation;
     let rel_t = left_extrinsics.rotation.transpose()
@@ -300,9 +300,9 @@ pub fn stereo_rectify_matrices(
 
     let ex = rel_t / baseline;
     let helper = if ex[2].abs() < 0.9 {
-        Vector3::new(0.0, 0.0, 1.0)
+        Vector3::<f64>::new(0.0, 0.0, 1.0)
     } else {
-        Vector3::new(0.0, 1.0, 0.0)
+        Vector3::<f64>::new(0.0, 1.0, 0.0)
     };
     let ey = helper.cross(&ex).normalize();
     let ez = ex.cross(&ey).normalize();

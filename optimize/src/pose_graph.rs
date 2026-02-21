@@ -1,4 +1,4 @@
-use nalgebra::{DMatrix, DVector, Isometry3, Vector3, Matrix6, Vector6, Rotation3};
+use nalgebra::{DMatrix, DVector, Isometry3, Vector3, Matrix6, Vector6};
 use std::collections::HashMap;
 
 pub struct PoseGraph {

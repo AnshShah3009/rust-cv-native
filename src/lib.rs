@@ -4,16 +4,26 @@ pub use cv_hal as hal;
 pub use cv_imgproc as imgproc;
 pub use cv_stereo as stereo;
 pub use cv_video as video;
+pub use cv_3d as d3;
+pub use cv_calib3d as calib3d;
+pub use cv_sfm as sfm;
+pub use cv_slam as slam;
+pub use cv_runtime as runtime;
+pub use cv_optimize as optimize;
+
+/// Initialize the entire cv-native library.
+///
+/// This performs:
+/// 1. Global thread pool initialization.
+/// 2. Asynchronous GPU context discovery.
+/// 3. Resource registry setup.
+pub async fn init() -> Result<(), String> {
+    cv_core::init_global_thread_pool(None)?;
+    let _ = cv_hal::gpu::GpuContext::init_global().await;
+    Ok(())
+}
 
 /// Initialize a single global Rayon thread pool for all CPU-parallel routines.
-///
-/// Call this once at application startup before running heavy CV workloads.
-/// Repeated calls are idempotent and return the first initialization result.
-///
-/// Priority order:
-/// 1. explicit `num_threads`
-/// 2. `RUSTCV_CPU_THREADS` env var
-/// 3. Rayon default
 pub fn init_thread_pool(num_threads: Option<usize>) -> Result<(), String> {
     cv_core::init_global_thread_pool(num_threads)
 }

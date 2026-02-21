@@ -4,7 +4,7 @@
 //! and aligned, making stereo matching much simpler.
 
 use crate::Result;
-use cv_core::{CameraExtrinsics, CameraIntrinsics};
+use cv_core::{Pose, CameraIntrinsics};
 use image::GrayImage;
 use nalgebra::{Matrix3, Vector3};
 
@@ -26,8 +26,8 @@ pub fn rectify_stereo_pair(
     right: &GrayImage,
     left_intrinsics: &CameraIntrinsics,
     right_intrinsics: &CameraIntrinsics,
-    left_extrinsics: &CameraExtrinsics,
-    right_extrinsics: &CameraExtrinsics,
+    left_extrinsics: &Pose,
+    right_extrinsics: &Pose,
 ) -> Result<RectificationResult> {
     // Compute rectification transforms
     let (left_rect_matrix, right_rect_matrix, new_intrinsics) = compute_rectification_transforms(
@@ -73,8 +73,8 @@ pub fn rectify_stereo_pair(
 fn compute_rectification_transforms(
     left_intrinsics: &CameraIntrinsics,
     right_intrinsics: &CameraIntrinsics,
-    left_extrinsics: &CameraExtrinsics,
-    right_extrinsics: &CameraExtrinsics,
+    left_extrinsics: &Pose,
+    right_extrinsics: &Pose,
 ) -> Result<(Matrix3<f64>, Matrix3<f64>, CameraIntrinsics)> {
     // Compute relative pose between cameras
     // Relative rotation: R = R_left^T * R_right

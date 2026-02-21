@@ -1,6 +1,5 @@
 use cv_core::storage::{Storage, DeviceType};
 use crate::gpu::GpuContext;
-use wgpu::util::DeviceExt;
 use std::sync::Arc;
 use std::marker::PhantomData;
 use std::fmt;

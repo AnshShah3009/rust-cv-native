@@ -2,7 +2,6 @@
 
 use crate::style::Style;
 use crate::PlotError;
-use std::collections::HashMap;
 
 /// Type of plot to create
 #[derive(Debug, Clone)]
@@ -176,7 +175,7 @@ impl Figure {
     }
 
     /// Add a new subplot
-    pub fn subplot(&mut self, rows: usize, cols: usize, index: usize) -> &mut Self {
+    pub fn subplot(&mut self, rows: usize, cols: usize, _index: usize) -> &mut Self {
         while self.subplots.len() < rows * cols {
             self.subplots.push(SubPlot::default());
         }

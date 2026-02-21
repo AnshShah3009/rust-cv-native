@@ -10,6 +10,7 @@ cv-core = { path = "../core" }
 cv-imgproc = { path = "../imgproc" }
 cv-calib3d = { path = "../calib3d" }
 cv-hal = { path = "../hal" }
+cv-runtime = { path = "../runtime" }
 nalgebra = { workspace = true }
 rayon = { workspace = true }
 image = { workspace = true }

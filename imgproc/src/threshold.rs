@@ -5,7 +5,7 @@ use cv_core::storage::Storage;
 use cv_hal::compute::{ComputeDevice};
 use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
 use cv_hal::context::ThresholdType as HalThresholdType;
-use cv_runtime::orchestrator::{ResourceGroup, scheduler};
+use cv_runtime::orchestrator::RuntimeRunner;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThresholdType {
@@ -23,15 +23,11 @@ pub enum AdaptiveMethod {
 }
 
 pub fn threshold(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType) -> GrayImage {
-    if let Ok(s) = scheduler() {
-        if let Ok(group) = s.best_gpu_or_cpu() {
-            return threshold_ctx(src, thresh, max_value, typ, &group);
-        }
-    }
-    threshold_cpu(src, thresh, max_value, typ)
+    let runner = cv_runtime::best_runner();
+    threshold_ctx(src, thresh, max_value, typ, &runner)
 }
 
-pub fn threshold_ctx(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType, group: &ResourceGroup) -> GrayImage {
+pub fn threshold_ctx(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType, group: &RuntimeRunner) -> GrayImage {
     let device = group.device();
     
     if let ComputeDevice::Gpu(gpu) = device {
@@ -159,15 +155,8 @@ pub fn threshold_otsu(src: &GrayImage, max_value: u8, typ: ThresholdType) -> (u8
         }
     }
 
-    let dst = if let Ok(s) = scheduler() {
-        if let Ok(group) = s.best_gpu_or_cpu() {
-            threshold_ctx(src, best_threshold, max_value, typ, &group)
-        } else {
-            threshold_cpu(src, best_threshold, max_value, typ)
-        }
-    } else {
-        threshold_cpu(src, best_threshold, max_value, typ)
-    };
+    let runner = cv_runtime::best_runner();
+    let dst = threshold_ctx(src, best_threshold, max_value, typ, &runner);
     (best_threshold, dst)
 }
 

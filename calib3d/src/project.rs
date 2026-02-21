@@ -5,7 +5,7 @@
 //! Jacobian computation for optimization tasks.
 
 use crate::{CalibError, Result};
-use cv_core::{CameraExtrinsics, CameraIntrinsics, Distortion};
+use cv_core::{Pose, CameraIntrinsics, Distortion};
 use nalgebra::{DMatrix, Matrix3, Point2, Point3, Vector3};
 use rayon::prelude::*;
 
@@ -60,13 +60,13 @@ pub struct ProjectPointsResult {
 pub fn project_points(
     object_points: &[Point3<f64>],
     intrinsics: &CameraIntrinsics,
-    extrinsics: &CameraExtrinsics,
+    extrinsics: &Pose,
 ) -> Result<Vec<Point2<f64>>> {
     object_points
         .par_iter()
         .map(|p| {
             let pc = extrinsics.rotation * p.coords + extrinsics.translation;
-            if !pc.iter().all(|v| v.is_finite()) || pc[2].abs() <= 1e-12 {
+            if !pc.iter().all(|v: &f64| v.is_finite()) || pc[2].abs() <= 1e-12 {
                 return Err(CalibError::InvalidParameters(
                     "project_points encountered non-finite or near-zero depth point".to_string(),
                 ));
@@ -98,14 +98,14 @@ pub fn project_points(
 pub fn project_points_with_distortion(
     object_points: &[Point3<f64>],
     intrinsics: &CameraIntrinsics,
-    extrinsics: &CameraExtrinsics,
+    extrinsics: &Pose,
     distortion: &Distortion,
 ) -> Result<Vec<Point2<f64>>> {
     object_points
         .par_iter()
         .map(|p| {
             let pc = extrinsics.rotation * p.coords + extrinsics.translation;
-            if !pc.iter().all(|v| v.is_finite()) || pc[2].abs() <= 1e-12 {
+            if !pc.iter().all(|v: &f64| v.is_finite()) || pc[2].abs() <= 1e-12 {
                 return Err(CalibError::InvalidParameters(
                     "project_points_with_distortion encountered non-finite or near-zero depth point"
                         .to_string(),
@@ -142,7 +142,7 @@ pub fn project_points_with_distortion(
 pub fn project_points_with_jacobian(
     object_points: &[Point3<f64>],
     intrinsics: &CameraIntrinsics,
-    extrinsics: &CameraExtrinsics,
+    extrinsics: &Pose,
     distortion: &Distortion,
     options: ProjectPointsOptions,
 ) -> Result<ProjectPointsResult> {
@@ -271,7 +271,7 @@ fn compute_projection_jacobians(
     x: f64, y: f64,
     xd: f64, yd: f64,
     intrinsics: &CameraIntrinsics,
-    extrinsics: &CameraExtrinsics,
+    extrinsics: &Pose,
     distortion: &Distortion,
     rvec: &Vector3<f64>,
     jac_rot: &mut DMatrix<f64>,
@@ -288,7 +288,7 @@ fn compute_projection_jacobians(
         let mut rvec_pert = *rvec;
         rvec_pert[k] += eps;
         let r_pert = rodrigues_to_rotation_matrix(&rvec_pert);
-        let ext_pert = CameraExtrinsics {
+        let ext_pert = Pose {
             rotation: r_pert,
             translation: extrinsics.translation
         };

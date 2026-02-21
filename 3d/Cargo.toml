@@ -9,6 +9,7 @@ cv-core = { path = "../core" }
 cv-runtime = { path = "../runtime" }
 cv-hal = { path = "../hal" }
 cv-registration = { path = "../registration" }
+image = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
 tokio = { version = "1", features = ["full"] }

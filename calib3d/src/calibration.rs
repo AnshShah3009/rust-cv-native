@@ -7,7 +7,7 @@ use crate::Result;
 use crate::CalibError;
 use crate::project_points_with_distortion;
 use crate::solve_pnp_refine;
-use cv_core::{CameraExtrinsics, CameraIntrinsics, Distortion};
+use cv_core::{Pose, CameraIntrinsics, Distortion};
 use image::GrayImage;
 use nalgebra::{DMatrix, Matrix3, Point2, Point3};
 use std::path::Path;
@@ -18,7 +18,7 @@ use crate::pattern::find_chessboard_corners;
 #[derive(Debug, Clone)]
 pub struct CameraCalibrationResult {
     pub intrinsics: CameraIntrinsics,
-    pub extrinsics: Vec<CameraExtrinsics>,
+    pub extrinsics: Vec<Pose>,
     pub distortion: Distortion,
     pub rms_reprojection_error: f64,
 }
@@ -373,6 +373,7 @@ pub fn refine_camera_calibration_iterative(
                 &object_points[i],
                 &image_points[i],
                 &result.intrinsics,
+                Some(&result.distortion),
                 5
             ).unwrap_or(result.extrinsics[i]);
         }
@@ -536,7 +537,7 @@ fn intrinsics_from_planar_homographies(homographies: &[Matrix3<f64>]) -> Result<
 }
 
 /// Compute camera extrinsics from homography
-fn extrinsics_from_homography(k_inv: &Matrix3<f64>, h: &Matrix3<f64>) -> Result<CameraExtrinsics> {
+fn extrinsics_from_homography(k_inv: &Matrix3<f64>, h: &Matrix3<f64>) -> Result<Pose> {
     let h1 = h.column(0).into_owned();
     let h2 = h.column(1).into_owned();
     let h3 = h.column(2).into_owned();
@@ -564,13 +565,13 @@ fn extrinsics_from_homography(k_inv: &Matrix3<f64>, h: &Matrix3<f64>) -> Result<
     }
 
     let t = t_raw * scale;
-    Ok(CameraExtrinsics::new(r, t))
+    Ok(Pose::new(r, t))
 }
 
 /// Compute RMS reprojection error
 fn compute_rms_reprojection(
     intrinsics: &CameraIntrinsics,
-    extrinsics: &[CameraExtrinsics],
+    extrinsics: &[Pose],
     object_points: &[Vec<Point3<f64>>],
     image_points: &[Vec<Point2<f64>>],
 ) -> Result<f64> {
@@ -584,7 +585,7 @@ fn compute_rms_reprojection(
         .par_iter()
         .zip(object_points.par_iter())
         .zip(image_points.par_iter())
-        .map(|((ext, obj), img)| {
+        .map(|((ext, obj), img): ((&Pose, &Vec<Point3<f64>>), &Vec<Point2<f64>>)| {
             let mut local_sq_sum = 0.0f64;
             let mut local_count = 0usize;
             for (p3, p2) in obj.iter().zip(img.iter()) {
@@ -625,13 +626,13 @@ fn is_valid_camera_calibration(result: &CameraCalibrationResult) -> bool {
     }
 
     result.extrinsics.iter().all(|ext| {
-        ext.rotation.iter().all(|v| v.is_finite()) && ext.translation.iter().all(|v| v.is_finite())
+        ext.rotation.iter().all(|v: &f64| v.is_finite()) && ext.translation.iter().all(|v: &f64| v.is_finite())
     })
 }
 
 /// Estimate intrinsics from camera extrinsics
 fn estimate_intrinsics_from_extrinsics(
-    extrinsics: &[CameraExtrinsics],
+    extrinsics: &[Pose],
     object_points: &[Vec<Point3<f64>>],
     image_points: &[Vec<Point2<f64>>],
     fallback: CameraIntrinsics,
@@ -709,7 +710,7 @@ fn estimate_intrinsics_from_extrinsics(
 /// Refine distortion coefficients iteratively
 fn refine_distortion(
     intrinsics: &CameraIntrinsics,
-    extrinsics: &[CameraExtrinsics],
+    extrinsics: &[Pose],
     initial_distortion: &Distortion,
     object_points: &[Vec<Point3<f64>>],
     image_points: &[Vec<Point2<f64>>],

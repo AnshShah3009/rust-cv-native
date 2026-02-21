@@ -1,6 +1,6 @@
 use crate::{BackendType, DeviceId, Result, Error};
 use cv_core::{Tensor, storage::Storage};
-use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType, ColorConversion, Mog2Params};
+use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType, ColorConversion, Mog2Params, TemplateMatchMethod, StereoMatchParams};
 
 /// Experimental MLX Context for Apple Silicon
 /// WARNING: Currently untested on actual hardware.
@@ -36,6 +36,10 @@ impl ComputeContext for MlxContext {
         Ok(())
     }
 
+    fn last_submission_index(&self) -> crate::SubmissionIndex {
+        crate::SubmissionIndex(0)
+    }
+
     fn convolve_2d<S: Storage<f32> + 'static>(&self, _input: &Tensor<f32, S>, _kernel: &Tensor<f32, S>, _border_mode: BorderMode) -> Result<Tensor<f32, S>> {
         Err(Error::NotSupported("MLX convolve_2d not implemented".into()))
     }
@@ -50,6 +54,38 @@ impl ComputeContext for MlxContext {
 
     fn sobel<S: Storage<u8> + 'static>(&self, _input: &Tensor<u8, S>, _dx: i32, _dy: i32, _ksize: usize) -> Result<(Tensor<u8, S>, Tensor<u8, S>)> {
         Err(Error::NotSupported("MLX sobel not implemented".into()))
+    }
+
+    fn canny<S: Storage<u8> + 'static>(&self, _input: &Tensor<u8, S>, _low_threshold: f32, _high_threshold: f32) -> Result<Tensor<u8, S>> {
+        Err(Error::NotSupported("MLX canny not implemented".into()))
+    }
+
+    fn hough_lines<S: Storage<u8> + 'static>(&self, _input: &Tensor<u8, S>, _rho: f32, _theta: f32, _threshold: u32) -> Result<Vec<cv_core::HoughLine>> {
+        Err(Error::NotSupported("MLX hough_lines not implemented".into()))
+    }
+
+    fn hough_circles<S: Storage<u8> + 'static>(&self, _input: &Tensor<u8, S>, _min_radius: f32, _max_radius: f32, _threshold: u32) -> Result<Vec<cv_core::HoughCircle>> {
+        Err(Error::NotSupported("MLX hough_circles not implemented".into()))
+    }
+
+    fn match_template<S: Storage<u8> + 'static, OS: Storage<f32> + 'static>(&self, _image: &Tensor<u8, S>, _template: &Tensor<u8, S>, _method: TemplateMatchMethod) -> Result<Tensor<f32, OS>> {
+        Err(Error::NotSupported("MLX match_template not implemented".into()))
+    }
+
+    fn detect_objects<S: Storage<u8> + 'static>(&self, _input: &Tensor<u8, S>, _threshold: f32) -> Result<Vec<cv_core::Detection>> {
+        Err(Error::NotSupported("MLX detect_objects not implemented".into()))
+    }
+
+    fn stereo_match<S: Storage<u8> + 'static, OS: Storage<f32> + 'static>(&self, _left: &Tensor<u8, S>, _right: &Tensor<u8, S>, _params: &StereoMatchParams) -> Result<Tensor<f32, OS>> {
+        Err(Error::NotSupported("MLX stereo_match not implemented".into()))
+    }
+
+    fn triangulate_points<S: Storage<f32> + 'static, OS: Storage<f32> + 'static>(&self, _proj_left: &[[f32; 4]; 3], _proj_right: &[[f32; 4]; 3], _points_left: &Tensor<f32, S>, _points_right: &Tensor<f32, S>) -> Result<Tensor<f32, OS>> {
+        Err(Error::NotSupported("MLX triangulate_points not implemented".into()))
+    }
+
+    fn find_chessboard_corners<S: Storage<u8> + 'static>(&self, _image: &Tensor<u8, S>, _pattern_size: (usize, usize)) -> Result<Vec<cv_core::KeyPoint>> {
+        Err(Error::NotSupported("MLX find_chessboard_corners not implemented".into()))
     }
 
     fn morphology<S: Storage<u8> + 'static>(&self, _input: &Tensor<u8, S>, _typ: MorphologyType, _kernel: &Tensor<u8, S>, _iterations: u32) -> Result<Tensor<u8, S>> {

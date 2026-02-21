@@ -106,10 +106,10 @@ impl Akaze {
                 }
             },
             ComputeDevice::Cpu(cpu) => {
-                let cpu_u8 = image.to_cpu().unwrap();
-                let mut current_u8 = cpu.gaussian_blur(&cpu_u8, 1.0, 5).unwrap();
-                let data: Vec<f32> = current_u8.as_slice().iter().map(|&v| v as f32 / 255.0).collect();
-                let mut current_f32 = CpuTensor::from_vec(data, current_u8.shape);
+                let cpu_u8 = image.to_cpu().expect("Failed to download image to CPU");
+                let current_u8 = cpu.gaussian_blur(&cpu_u8, 1.0, 5).expect("Gaussian blur failed");
+                let data: Vec<f32> = current_u8.as_slice().expect("Failed to get slice").iter().map(|&v| v as f32 / 255.0).collect();
+                let mut current_f32 = CpuTensor::from_vec(data, current_u8.shape).expect("Failed to create tensor");
                 
                 let k = cpu.akaze_contrast_k(&current_f32).unwrap_or(0.03);
 
@@ -123,12 +123,12 @@ impl Akaze {
                             let n_steps = self.get_fed_steps(dt);
                             let step_tau = dt / (n_steps as f32);
                             for _ in 0..n_steps {
-                                current_f32 = cpu.akaze_diffusion(&current_f32, k, step_tau).unwrap();
+                                current_f32 = cpu.akaze_diffusion(&current_f32, k, step_tau).expect("Diffusion failed");
                             }
                             t = esigma;
                         }
                         
-                        let (lx, ly, ldet) = cpu.akaze_derivatives(&current_f32).unwrap();
+                        let (lx, ly, ldet) = cpu.akaze_derivatives(&current_f32).expect("Derivatives failed");
                         
                         evolution.push(EvolutionLevel {
                             image: current_f32.clone(),
@@ -158,7 +158,7 @@ impl Akaze {
 
         for curr in evolution {
             let (h, w) = curr.ldet.shape.hw();
-            let det_slice = curr.ldet.as_slice();
+            let det_slice = curr.ldet.as_slice().expect("Failed to get det slice");
 
             let mut level_kps: Vec<KeyPoint> = (1..h-1).into_par_iter().flat_map(|y| {
                 let mut row_kps = Vec::new();
@@ -211,8 +211,8 @@ impl Akaze {
 
     fn compute_msurf_descriptor(&self, level: &EvolutionLevel, kp: &KeyPoint) -> Option<Descriptor> {
         let (h, w) = level.image.shape.hw();
-        let lx_slice = level.lx.as_slice();
-        let ly_slice = level.ly.as_slice();
+        let lx_slice = level.lx.as_slice().expect("Failed to get lx slice");
+        let ly_slice = level.ly.as_slice().expect("Failed to get ly slice");
 
         let mut desc = vec![0u8; 64];
         let mut float_desc = [0.0f32; 64];
@@ -280,7 +280,7 @@ fn to_cpu_f32<S: Storage<f32> + 'static>(ctx: &ComputeDevice, tensor: &Tensor<f3
         let ptr = tensor as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
         let gpu_tensor = unsafe { &*ptr };
         match ctx {
-            ComputeDevice::Gpu(gpu) => gpu_tensor.to_cpu_ctx(gpu).unwrap(),
+            ComputeDevice::Gpu(gpu) => gpu_tensor.to_cpu_ctx(gpu).expect("Download from GPU failed"),
             _ => panic!("Logic error: GpuStorage with non-GPU context"),
         }
     } else {
@@ -303,7 +303,7 @@ mod tests {
                 if ((x / 16) + (y / 16)) % 2 == 0 { data[y * size + x] = 255; }
             }
         }
-        Tensor::from_vec(data, TensorShape::new(1, size, size))
+        Tensor::from_vec(data, TensorShape::new(1, size, size)).unwrap()
     }
 
     #[test]

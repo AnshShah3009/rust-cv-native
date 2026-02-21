@@ -1,9 +1,8 @@
-use cv_core::{Tensor, TensorShape};
+use cv_core::Tensor;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
 use wgpu::util::DeviceExt;
-use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

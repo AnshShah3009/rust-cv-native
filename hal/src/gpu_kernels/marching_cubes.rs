@@ -1,9 +1,8 @@
-use cv_core::{Tensor, TensorShape};
+use cv_core::Tensor;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
 use wgpu::util::DeviceExt;
-use std::sync::Arc;
 
 mod tables {
     pub const EDGE_TABLE: [u32; 256] = [0; 256]; 

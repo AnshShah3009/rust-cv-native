@@ -1,5 +1,4 @@
-use nalgebra::{Matrix3, Matrix3x4, Point2, Point3, Vector2, Vector3, Vector4};
-use std::collections::VecDeque;
+use nalgebra::{Matrix3, Matrix3x4, Point3, Vector3, Vector4};
 
 use super::types::{Gaussian, GaussianCloud, ProjectedGaussian, SphericalHarmonics};
 
@@ -224,7 +223,7 @@ impl GaussianRasterizer {
             let tile_x = (tile_idx as u32 % tiles_x) * self.tile_width;
             let tile_y = (tile_idx as u32 / tiles_x) * self.tile_height;
 
-            let mut tile_pixels: Vec<(usize, Vector3<f32>, f32)> = Vec::new();
+            let _tile_pixels: Vec<(usize, Vector3<f32>, f32)> = Vec::new();
 
             for &gauss_idx in &tile_gaussians[tile_idx] {
                 let pg = &projected[gauss_idx];
@@ -338,10 +337,10 @@ impl DifferentiableRasterizer {
     pub fn backward(
         &self,
         cloud: &GaussianCloud,
-        rendered: &RasterizationResult,
-        target: &[Vector3<f32>],
+        _rendered: &RasterizationResult,
+        _target: &[Vector3<f32>],
     ) -> Vec<GaussianGradient> {
-        let projected: Vec<ProjectedGaussian> = self.rasterizer.project_gaussians(cloud);
+        let _projected: Vec<ProjectedGaussian> = self.rasterizer.project_gaussians(cloud);
 
         cloud
             .gaussians

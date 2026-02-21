@@ -4,10 +4,10 @@
 /// given a set of 3D object points and their 2D image projections.
 
 use crate::CalibError;
-use cv_core::{CameraExtrinsics, CameraIntrinsics};
+use cv_core::{Pose, CameraIntrinsics};
 use nalgebra::{DMatrix, Matrix3, Matrix3x4, Point2, Point3, Rotation3, Vector3};
 use rayon::prelude::*;
-use cv_runtime::orchestrator::{ResourceGroup, scheduler};
+use cv_runtime::RuntimeRunner;
 
 pub type Result<T> = std::result::Result<T, CalibError>;
 
@@ -16,7 +16,7 @@ pub fn solve_pnp_dlt(
     object_points: &[Point3<f64>],
     image_points: &[Point2<f64>],
     intrinsics: &CameraIntrinsics,
-) -> Result<CameraExtrinsics> {
+) -> Result<Pose> {
     if object_points.len() != image_points.len() {
         return Err(CalibError::InvalidParameters(
             "object_points and image_points must have equal length".to_string(),
@@ -111,7 +111,7 @@ pub fn solve_pnp_dlt(
         t = -t;
     }
 
-    Ok(CameraExtrinsics::new(r, t))
+    Ok(Pose::new(r, t))
 }
 
 /// Solves the PnP problem using RANSAC
@@ -119,9 +119,10 @@ pub fn solve_pnp_ransac(
     object_points: &[Point3<f64>],
     image_points: &[Point2<f64>],
     intrinsics: &CameraIntrinsics,
+    distortion: Option<&cv_core::Distortion>,
     reprojection_threshold_px: f64,
     max_iters: usize,
-) -> Result<(CameraExtrinsics, Vec<bool>)> {
+) -> Result<(Pose, Vec<bool>)> {
     if object_points.len() != image_points.len() || object_points.len() < 6 {
         return Err(CalibError::InvalidParameters(
             "solve_pnp_ransac needs >=6 paired points".to_string(),
@@ -150,7 +151,7 @@ pub fn solve_pnp_ransac(
         let mut count = 0usize;
         let mut sum_err = 0.0f64;
         for j in 0..n {
-            let err = reprojection_error_px(&pose, intrinsics, &object_points[j], &image_points[j]);
+            let err = reprojection_error_px_dist(&pose, intrinsics, distortion, &object_points[j], &image_points[j]);
             if err.is_finite() && err <= reprojection_threshold_px {
                 inliers[j] = true;
                 count += 1;
@@ -185,7 +186,7 @@ pub fn solve_pnp_ransac(
         .collect();
 
     let refined_pose = if inlier_obj.len() >= 6 {
-        solve_pnp_refine(&best_pose, &inlier_obj, &inlier_img, intrinsics, 20).unwrap_or(best_pose)
+        solve_pnp_refine(&best_pose, &inlier_obj, &inlier_img, intrinsics, distortion, 20).unwrap_or(best_pose)
     } else {
         best_pose
     };
@@ -193,27 +194,39 @@ pub fn solve_pnp_ransac(
     Ok((refined_pose, best_inliers))
 }
 
+fn reprojection_error_px_dist(
+    extrinsics: &Pose,
+    intrinsics: &CameraIntrinsics,
+    distortion: Option<&cv_core::Distortion>,
+    object_point: &Point3<f64>,
+    image_point: &Point2<f64>,
+) -> f64 {
+    let pred = project_point_dist(intrinsics, distortion, extrinsics, object_point);
+    ((pred.x - image_point.x).powi(2) + (pred.y - image_point.y).powi(2)).sqrt()
+}
+
 pub fn solve_pnp_refine(
-    initial: &CameraExtrinsics,
+    initial: &Pose,
     object_points: &[Point3<f64>],
     image_points: &[Point2<f64>],
     intrinsics: &CameraIntrinsics,
+    distortion: Option<&cv_core::Distortion>,
     max_iters: usize,
-) -> Result<CameraExtrinsics> {
-    let s = scheduler().map_err(|e| CalibError::NumericalError(e.to_string()))?;
-    let group = s.get_default_group().map_err(|e| CalibError::NumericalError(e.to_string()))?;
-    solve_pnp_refine_ctx(initial, object_points, image_points, intrinsics, max_iters, &group)
+) -> Result<Pose> {
+    let runner = cv_runtime::default_runner();
+    solve_pnp_refine_ctx(initial, object_points, image_points, intrinsics, distortion, max_iters, &runner)
 }
 
 /// Context-aware PnP refinement using Levenberg-Marquardt
 pub fn solve_pnp_refine_ctx(
-    initial: &CameraExtrinsics,
+    initial: &Pose,
     object_points: &[Point3<f64>],
     image_points: &[Point2<f64>],
     intrinsics: &CameraIntrinsics,
+    distortion: Option<&cv_core::Distortion>,
     max_iters: usize,
-    group: &ResourceGroup,
-) -> Result<CameraExtrinsics> {
+    group: &RuntimeRunner,
+) -> Result<Pose> {
     if object_points.len() != image_points.len() || object_points.len() < 6 {
         return Err(CalibError::InvalidParameters(
             "solve_pnp_refine needs >=6 paired points".to_string(),
@@ -227,7 +240,7 @@ pub fn solve_pnp_refine_ctx(
     let mut current_err = group.run(|| {
         let base = params_to_extrinsics(&params);
         object_points.par_iter().zip(image_points.par_iter()).map(|(p3, p2)| {
-            let pred = project_point(intrinsics, &base, p3);
+            let pred = project_point_dist(intrinsics, distortion, &base, p3);
             (pred.x - p2.x).powi(2) + (pred.y - p2.y).powi(2)
         }).sum::<f64>()
     });
@@ -243,14 +256,14 @@ pub fn solve_pnp_refine_ctx(
             let results: Vec<(nalgebra::Matrix6<f64>, nalgebra::Vector6<f64>)> = (0..n_pts).into_par_iter().map(|i| {
                 let p3 = &object_points[i];
                 let p2 = &image_points[i];
-                let pred0 = project_point(intrinsics, &base, p3);
+                let pred0 = project_point_dist(intrinsics, distortion, &base, p3);
 
                 let mut j_point = [[0.0f64; 6]; 2];
                 for k in 0..6 {
                     let mut p_perturbed = params;
                     p_perturbed[k] += eps;
                     let ext_p = params_to_extrinsics(&p_perturbed);
-                    let pred1 = project_point(intrinsics, &ext_p, p3);
+                    let pred1 = project_point_dist(intrinsics, distortion, &ext_p, p3);
                     j_point[0][k] = (pred1.x - pred0.x) / eps;
                     j_point[1][k] = (pred1.y - pred0.y) / eps;
                 }
@@ -286,7 +299,7 @@ pub fn solve_pnp_refine_ctx(
             let next_err = group.run(|| {
                 let next_ext = params_to_extrinsics(&next_params);
                 object_points.par_iter().zip(image_points.par_iter()).map(|(p3, p2)| {
-                    let pred = project_point(intrinsics, &next_ext, p3);
+                    let pred = project_point_dist(intrinsics, distortion, &next_ext, p3);
                     (pred.x - p2.x).powi(2) + (pred.y - p2.y).powi(2)
                 }).sum::<f64>()
             });
@@ -307,22 +320,7 @@ pub fn solve_pnp_refine_ctx(
     Ok(params_to_extrinsics(&params))
 }
 
-fn reprojection_error_px(
-    extrinsics: &CameraExtrinsics,
-    intrinsics: &CameraIntrinsics,
-    object_point: &Point3<f64>,
-    image_point: &Point2<f64>,
-) -> f64 {
-    let pc = extrinsics.rotation * object_point.coords + extrinsics.translation;
-    if !pc.iter().all(|v| v.is_finite()) || pc[2].abs() <= 1e-12 {
-        return f64::INFINITY;
-    }
-    let u = intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx;
-    let v = intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy;
-    ((u - image_point.x).powi(2) + (v - image_point.y).powi(2)).sqrt()
-}
-
-fn extrinsics_to_params(ext: &CameraExtrinsics) -> [f64; 6] {
+fn extrinsics_to_params(ext: &Pose) -> [f64; 6] {
     let r = Rotation3::from_matrix_unchecked(ext.rotation);
     let omega = r.scaled_axis();
     [
@@ -331,17 +329,27 @@ fn extrinsics_to_params(ext: &CameraExtrinsics) -> [f64; 6] {
     ]
 }
 
-fn params_to_extrinsics(params: &[f64; 6]) -> CameraExtrinsics {
+fn params_to_extrinsics(params: &[f64; 6]) -> Pose {
     let rot = Rotation3::new(Vector3::new(params[0], params[1], params[2])).into_inner();
     let t = Vector3::new(params[3], params[4], params[5]);
-    CameraExtrinsics::new(rot, t)
+    Pose::new(rot, t)
 }
 
-fn project_point(intrinsics: &CameraIntrinsics, ext: &CameraExtrinsics, p: &Point3<f64>) -> Point2<f64> {
+fn project_point_dist(intrinsics: &CameraIntrinsics, distortion: Option<&cv_core::Distortion>, ext: &Pose, p: &Point3<f64>) -> Point2<f64> {
     let pc = ext.rotation * p.coords + ext.translation;
+    if pc[2].abs() <= 1e-12 {
+        return Point2::new(0.0, 0.0);
+    }
+    let x = pc[0] / pc[2];
+    let y = pc[1] / pc[2];
+    let (xd, yd) = if let Some(dist) = distortion {
+        dist.apply(x, y)
+    } else {
+        (x, y)
+    };
     Point2::new(
-        intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx,
-        intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy,
+        intrinsics.fx * xd + intrinsics.cx,
+        intrinsics.fy * yd + intrinsics.cy,
     )
 }
 

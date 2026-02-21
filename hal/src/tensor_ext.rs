@@ -16,16 +16,14 @@ pub trait TensorToGpu<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> {
 
 impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T> for Tensor<T, CpuStorage<T>> {
     fn to_gpu(&self) -> crate::Result<Tensor<T, GpuStorage<T>>> {
-        let ctx = GpuContext::global().ok_or_else(|| {
-            crate::Error::InitError("GPU context not initialized".into())
-        })?;
+        let ctx = GpuContext::global()?;
         self.to_gpu_ctx(ctx)
     }
 
     fn to_gpu_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, GpuStorage<T>>> {
         let buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Tensor Upload"),
-            contents: bytemuck::cast_slice(self.as_slice()),
+            contents: bytemuck::cast_slice(self.as_slice()?),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
         });
 
@@ -58,9 +56,7 @@ pub trait TensorToCpu<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync +
 
 impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCpu<T> for Tensor<T, GpuStorage<T>> {
     fn to_cpu(&self) -> crate::Result<Tensor<T, CpuStorage<T>>> {
-        let ctx = GpuContext::global().ok_or_else(|| {
-            crate::Error::InitError("GPU context not initialized".into())
-        })?;
+        let ctx = GpuContext::global()?;
         self.to_cpu_ctx(ctx)
     }
 
@@ -75,13 +71,11 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCp
             byte_size,
         ))?;
 
-        Ok(Tensor::from_vec(data, self.shape))
+        Tensor::from_vec(data, self.shape).map_err(|e| crate::Error::RuntimeError(e.to_string()))
     }
 
     async fn to_cpu_async(&self) -> crate::Result<Tensor<T, CpuStorage<T>>> {
-        let ctx = GpuContext::global().ok_or_else(|| {
-            crate::Error::InitError("GPU context not initialized".into())
-        })?;
+        let ctx = GpuContext::global()?;
         self.to_cpu_ctx_async(ctx).await
     }
 
@@ -96,7 +90,7 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCp
             byte_size,
         ).await?;
 
-        Ok(Tensor::from_vec(data, self.shape))
+        Tensor::from_vec(data, self.shape).map_err(|e| crate::Error::RuntimeError(e.to_string()))
     }
 }
 

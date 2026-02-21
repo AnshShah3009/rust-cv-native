@@ -34,18 +34,42 @@ pub trait VideoCapture: Send + Debug {
     }
 }
 
-pub mod backends;
-
-/// Open a video file using native FFmpeg backend
-pub fn open_video(path: &str) -> Result<Box<dyn VideoCapture>> {
-    let cap = backends::NativeFfmpegCapture::new(path)?;
-    Ok(Box::new(cap))
+/// Generic interface for video writing
+pub trait VideoWriter: Send + Debug {
+    fn write(&mut self, frame: &GrayImage) -> Result<()>;
 }
 
-/// Open a camera device (V4L2 on Linux)
-#[cfg(target_os = "linux")]
-pub fn open_camera(path: &str, width: u32, height: u32) -> Result<Box<dyn VideoCapture>> {
-    let mut cap = backends::V4L2Capture::new(path)?;
-    cap.start_stream(width, height)?;
-    Ok(Box::new(cap))
+pub mod backends;
+
+/// Open a video file
+pub fn open_video(path: &str) -> Result<Box<dyn VideoCapture>> {
+    #[cfg(feature = "ffmpeg")]
+    {
+        let cap = backends::NativeFfmpegCapture::new(path)?;
+        Ok(Box::new(cap))
+    }
+    #[cfg(not(feature = "ffmpeg"))]
+    {
+        // Try PNG sequence as a native fallback
+        if std::path::Path::new(path).is_dir() {
+            let cap = backends::PngSequenceCapture::new(path)?;
+            Ok(Box::new(cap))
+        } else {
+            Err(VideoError::Backend("FFmpeg backend disabled. To open video files, enable 'ffmpeg' feature or provide a directory of images.".to_string()))
+        }
+    }
+}
+
+/// Open a camera device
+pub fn open_camera(_path: &str, _width: u32, _height: u32) -> Result<Box<dyn VideoCapture>> {
+    #[cfg(all(target_os = "linux", feature = "v4l2"))]
+    {
+        let mut cap = backends::V4L2Capture::new(_path)?;
+        cap.start_stream(_width, _height)?;
+        Ok(Box::new(cap))
+    }
+    #[cfg(not(all(target_os = "linux", feature = "v4l2")))]
+    {
+        Err(VideoError::Backend("Camera backend disabled or not supported on this platform.".to_string()))
+    }
 }

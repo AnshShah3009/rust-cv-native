@@ -121,7 +121,7 @@ pub fn vectorized_iou(boxes1: &[Rect], boxes2: &[Rect]) -> Array2<f32> {
     let n2 = boxes2.len();
 
     // Use raw data pointer or simple indexing if Array2 is not being cooperative with par_iter
-    let ious_raw = ious.as_slice_mut().unwrap();
+    let ious_raw = ious.as_slice_mut().expect("ndarray should be contiguous");
     
     ious_raw.par_chunks_mut(n2).enumerate().for_each(|(i, row)| {
         let b1 = &boxes1[i];
@@ -157,7 +157,7 @@ pub fn vectorized_polygon_iou(polys1: &[Polygon<f64>], polys2: &[Polygon<f64>]) 
     let mut ious = Array2::zeros((polys1.len(), polys2.len()));
     let n2 = polys2.len();
 
-    let ious_raw = ious.as_slice_mut().unwrap();
+    let ious_raw = ious.as_slice_mut().expect("ndarray should be contiguous");
 
     ious_raw.par_chunks_mut(n2).enumerate().for_each(|(i, row)| {
         let p1 = &polys1[i];

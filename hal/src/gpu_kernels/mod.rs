@@ -3,46 +3,61 @@
 //! This module provides GPU-accelerated implementations using WebGPU compute shaders.
 //! All shaders are written in WGSL (WebGPU Shading Language).
 
-use wgpu::{
-    CommandEncoder, Device, Queue
-};
-use nalgebra::Vector3;
-use std::sync::Arc;
+/// Workgroup size configuration
+pub const WORKGROUP_SIZE_1D: u32 = 256;
+pub const WORKGROUP_SIZE_2D: u32 = 16;
+pub const WORKGROUP_SIZE_3D: u32 = 8;
 
-/// GPU Compute Context (Deprecated: Use GpuContext instead)
-#[deprecated(since = "0.1.1", note = "Use cv_hal::gpu::GpuContext directly instead")]
-pub struct GpuCompute {
-    device: Arc<Device>,
-    queue: Arc<Queue>,
+/// Compute dispatch helpers
+pub fn dispatch_size_1d(count: u32) -> u32 {
+    (count + WORKGROUP_SIZE_1D - 1) / WORKGROUP_SIZE_1D
 }
 
-#[allow(deprecated)]
-impl GpuCompute {
-    /// Create a new GpuCompute from Device and Queue (Deprecated)
-    #[deprecated(since = "0.1.1", note = "Use cv_hal::gpu::GpuContext::new() instead")]
-    pub fn new(device: Arc<Device>, queue: Arc<Queue>) -> Self {
-        Self { device, queue }
-    }
+pub fn dispatch_size_2d(width: u32, height: u32) -> (u32, u32) {
+    (
+        (width + WORKGROUP_SIZE_2D - 1) / WORKGROUP_SIZE_2D,
+        (height + WORKGROUP_SIZE_2D - 1) / WORKGROUP_SIZE_2D,
+    )
+}
 
-    /// Get reference to device
-    pub fn device(&self) -> &Device {
-        &self.device
-    }
+pub fn dispatch_size_3d(width: u32, height: u32, depth: u32) -> (u32, u32, u32) {
+    (
+        (width + WORKGROUP_SIZE_3D - 1) / WORKGROUP_SIZE_3D,
+        (height + WORKGROUP_SIZE_3D - 1) / WORKGROUP_SIZE_3D,
+        (depth + WORKGROUP_SIZE_3D - 1) / WORKGROUP_SIZE_3D,
+    )
+}
 
-    /// Get reference to queue
-    pub fn queue(&self) -> &Queue {
-        &self.queue
-    }
-
-    /// Submit command encoder
-    pub fn submit(&self, encoder: CommandEncoder) {
-        self.queue.submit(std::iter::once(encoder.finish()));
-    }
+/// Encode 3D coordinates to Morton code
+pub fn morton_encode(x: u32, y: u32, z: u32) -> u32 {
+    let mut mx = x & 0x000003FFu32;
+    let mut my = y & 0x000003FFu32;
+    let mut mz = z & 0x000003FFu32;
+    
+    mx = (mx | (mx << 16)) & 0x030000FF;
+    mx = (mx | (mx << 8)) & 0x0300F00F;
+    mx = (mx | (mx << 4)) & 0x030C30C3;
+    mx = (mx | (mx << 2)) & 0x09249249;
+    
+    my = (my | (my << 16)) & 0x030000FF;
+    my = (my | (my << 8)) & 0x0300F00F;
+    my = (my | (my << 4)) & 0x030C30C3;
+    my = (my | (my << 2)) & 0x09249249;
+    
+    mz = (mz | (mz << 16)) & 0x030000FF;
+    mz = (mz | (mz << 8)) & 0x0300F00F;
+    mz = (mz | (mz << 4)) & 0x030C30C3;
+    mz = (mz | (mz << 2)) & 0x09249249;
+    
+    mx | (my << 1) | (mz << 2)
 }
 
 pub mod convolve;
 pub mod threshold;
 pub mod sobel;
+pub mod canny;
+pub mod hough;
+pub mod hough_circles;
 pub mod morphology;
 pub mod nms;
 pub mod pointcloud;
@@ -51,6 +66,7 @@ pub mod optical_flow;
 pub mod marching_cubes;
 pub mod color;
 pub mod resize;
+pub mod template_matching;
 pub mod warp;
 pub mod pyramid;
 pub mod orientation;
@@ -59,11 +75,83 @@ pub mod bilateral;
 pub mod fast;
 pub mod matching;
 pub mod sift;
+pub mod stereo;
 pub mod icp;
 pub mod subtract;
 pub mod akaze;
 pub mod sparse;
 pub mod radix_sort;
+
+pub mod unified {
+    /// Configuration for automatic CPU/GPU selection
+    pub struct ComputeConfig {
+        pub use_gpu_threshold: usize, // Minimum elements to use GPU
+        pub force_cpu: bool,
+        pub force_gpu: bool,
+    }
+
+    impl Default for ComputeConfig {
+        fn default() -> Self {
+            Self {
+                use_gpu_threshold: 10000, // Use GPU for >10k points
+                force_cpu: false,
+                force_gpu: false,
+            }
+        }
+    }
+
+    /// Auto-select CPU or GPU based on problem size
+    pub fn should_use_gpu(config: &ComputeConfig, element_count: usize) -> bool {
+        if config.force_cpu {
+            false
+        } else if config.force_gpu {
+            true
+        } else {
+            element_count >= config.use_gpu_threshold
+        }
+    }
+}
+
+/// MOG2 Background Model Update on GPU
+pub fn mog2_update(
+    ctx: &crate::gpu::GpuContext,
+    frame: &cv_core::Tensor<f32, crate::storage::GpuStorage<f32>>,
+    model: &mut cv_core::Tensor<f32, crate::storage::GpuStorage<f32>>,
+    mask: &mut cv_core::Tensor<u32, crate::storage::GpuStorage<u32>>,
+    params: &crate::context::Mog2Params,
+) -> crate::Result<()> {
+    use wgpu::util::DeviceExt;
+
+    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("MOG2 Params"),
+        contents: bytemuck::cast_slice(&[*params]),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+
+    let shader_source = include_str!("../../shaders/mog2_update.wgsl");
+    let pipeline = ctx.create_compute_pipeline(shader_source, "main");
+
+    let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("MOG2 Bind Group"),
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: frame.storage.buffer().as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: model.storage.buffer().as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 2, resource: mask.storage.buffer().as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+        ],
+    });
+
+    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups((params.width + 15) / 16, (params.height + 15) / 16, 1);
+    }
+    ctx.submit(encoder);
+    Ok(())
+}
 
 /// Shader compilation utilities
 pub mod shaders {
@@ -358,7 +446,7 @@ pub mod buffer_utils {
             aligned_size,
         );
 
-        let index = queue.submit(std::iter::once(encoder.finish()));
+        let _index = queue.submit(std::iter::once(encoder.finish()));
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         
@@ -371,8 +459,8 @@ pub mod buffer_utils {
         // This avoids blocking the OS thread, allowing Tokio to schedule other tasks.
         let mut rx = rx;
         while rx.try_recv().is_err() {
-            device.poll(wgpu::PollType::Poll);
-            tokio::task::yield_now().await;
+            let _ = device.poll(wgpu::PollType::Poll);
+            std::thread::yield_now();
         }
 
         rx.await
@@ -412,45 +500,18 @@ mod tests {
         // We can't easily test the 'get' without a real Device, 
         // but we can test the internal structure if we exposed it, 
         // or just ensure 'return_buffer' doesn't crash.
-        let pool = GpuBufferPool::new();
-        // Since we can't create a real wgpu::Buffer without a device easily in a unit test,
-        // we'll focus on the logic we've implemented.
     }
-}
-
-/// Workgroup size configuration
-pub const WORKGROUP_SIZE_1D: u32 = 256;
-pub const WORKGROUP_SIZE_2D: u32 = 16;
-pub const WORKGROUP_SIZE_3D: u32 = 8;
-
-/// Compute dispatch helpers
-pub fn dispatch_size_1d(count: u32) -> u32 {
-    (count + WORKGROUP_SIZE_1D - 1) / WORKGROUP_SIZE_1D
-}
-
-pub fn dispatch_size_2d(width: u32, height: u32) -> (u32, u32) {
-    (
-        (width + WORKGROUP_SIZE_2D - 1) / WORKGROUP_SIZE_2D,
-        (height + WORKGROUP_SIZE_2D - 1) / WORKGROUP_SIZE_2D,
-    )
-}
-
-pub fn dispatch_size_3d(width: u32, height: u32, depth: u32) -> (u32, u32, u32) {
-    (
-        (width + WORKGROUP_SIZE_3D - 1) / WORKGROUP_SIZE_3D,
-        (height + WORKGROUP_SIZE_3D - 1) / WORKGROUP_SIZE_3D,
-        (depth + WORKGROUP_SIZE_3D - 1) / WORKGROUP_SIZE_3D,
-    )
 }
 
 /// GPU-accelerated point cloud operations
 pub mod pointcloud_gpu {
-    use super::*;
     use nalgebra::{Matrix4, Vector3};
+    use crate::gpu::GpuContext;
+    use crate::gpu_kernels::{dispatch_size_1d, morton_encode};
 
     /// Transform point cloud on GPU
     pub fn transform_points(
-        _gpu: &GpuCompute,
+        _ctx: &GpuContext,
         _points: &[Vector3<f32>],
         _transform: &Matrix4<f32>,
     ) -> crate::Result<Vec<Vector3<f32>>> {
@@ -460,7 +521,7 @@ pub mod pointcloud_gpu {
 
     /// Compute normals from points on GPU
     pub fn compute_normals(
-        gpu: &GpuCompute,
+        ctx: &GpuContext,
         points: &[Vector3<f32>],
         neighbor_indices: &[u32],
         k_neighbors: u32,
@@ -468,8 +529,8 @@ pub mod pointcloud_gpu {
         use wgpu::BufferUsages;
         use crate::gpu_kernels::buffer_utils::{create_buffer, create_buffer_uninit, read_buffer};
 
-        let device = gpu.device.clone();
-        let queue = &gpu.queue;
+        let device = ctx.device.clone();
+        let queue = &ctx.queue;
         let num_points = points.len() as u32;
 
         // 1. Create buffers
@@ -524,7 +585,7 @@ pub mod pointcloud_gpu {
             pass.dispatch_workgroups(x, 1, 1);
         }
 
-        gpu.submit(encoder);
+        ctx.submit(encoder);
 
         // 5. Read back
         let result_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(device.clone(), queue, &normals_buf, 0, points.len() * 16))?;
@@ -535,7 +596,7 @@ pub mod pointcloud_gpu {
     /// Compute normals using GPU with Morton code spatial indexing
     /// This is the optimized GPU version - O(n log n) via sorting
     pub fn compute_normals_morton_gpu(
-        gpu: &GpuCompute,
+        gpu: &crate::gpu::GpuContext,
         points: &[Vector3<f32>],
         k_neighbors: u32,
     ) -> crate::Result<Vec<Vector3<f32>>> {
@@ -688,55 +749,13 @@ pub mod pointcloud_gpu {
     }
 }
 
-/// Encode 3D coordinates to Morton code
-fn morton_encode(x: u32, y: u32, z: u32) -> u32 {
-    let mut mx = x & 0x000003FFu32;
-    let mut my = y & 0x000003FFu32;
-    let mut mz = z & 0x000003FFu32;
-    
-    mx = (mx | (mx << 16)) & 0x030000FF;
-    mx = (mx | (mx << 8)) & 0x0300F00F;
-    mx = (mx | (mx << 4)) & 0x030C30C3;
-    mx = (mx | (mx << 2)) & 0x09249249;
-    
-    my = (my | (my << 16)) & 0x030000FF;
-    my = (my | (my << 8)) & 0x0300F00F;
-    my = (my | (my << 4)) & 0x030C30C3;
-    my = (my | (my << 2)) & 0x09249249;
-    
-    mz = (mz | (mz << 16)) & 0x030000FF;
-    mz = (mz | (mz << 8)) & 0x0300F00F;
-    mz = (mz | (mz << 4)) & 0x030C30C3;
-    mz = (mz | (mz << 2)) & 0x09249249;
-    
-    mx | (my << 1) | (mz << 2)
-}
-
 /// GPU-accelerated TSDF operations
 pub mod tsdf_gpu {
-    use super::*;
+    use nalgebra::Vector3;
+    use crate::gpu::GpuContext;
 
-    /// Integrate depth frame into TSDF volume on GPU
-    pub fn integrate_depth(
-        _gpu: &GpuCompute,
-        _depth_image: &[f32],
-        _color_image: Option<&[u32]>, // Packed RGB
-        _camera_pose: &[f32; 16],
-        _intrinsics: &[f32; 4], // fx, fy, cx, cy
-        _width: u32,
-        _height: u32,
-        _tsdf_volume: &mut [f32],
-        _weights: &mut [f32],
-        _colors: &mut [u32],
-        _voxel_size: f32,
-        _truncation: f32,
-    ) -> crate::Result<()> {
-        Err(crate::Error::not_supported("GPU TSDF integration"))
-    }
-
-    /// Raycast TSDF volume to generate surface on GPU
     pub fn raycast_volume(
-        _gpu: &GpuCompute,
+        _ctx: &GpuContext,
         _tsdf_volume: &[f32],
         _camera_pose: &[f32; 16],
         _intrinsics: &[f32; 4],
@@ -750,7 +769,7 @@ pub mod tsdf_gpu {
 
     /// Extract surface points from TSDF on GPU
     pub fn extract_surface(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _tsdf_volume: &[f32],
         _threshold: f32,
     ) -> crate::Result<Vec<Vector3<f32>>> {
@@ -760,12 +779,11 @@ pub mod tsdf_gpu {
 
 /// GPU-accelerated ICP operations
 pub mod icp_gpu {
-    use super::*;
     use nalgebra::{Matrix4, Vector3};
 
     /// Find correspondences on GPU
     pub fn find_correspondences(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _source: &[Vector3<f32>],
         _target: &[Vector3<f32>],
         _transform: &Matrix4<f32>,
@@ -776,7 +794,7 @@ pub mod icp_gpu {
 
     /// Compute ICP residuals on GPU
     pub fn compute_residuals(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _source: &[Vector3<f32>],
         _target: &[Vector3<f32>],
         _target_normals: &[Vector3<f32>],
@@ -788,7 +806,7 @@ pub mod icp_gpu {
 
     /// One ICP iteration on GPU
     pub fn icp_iteration(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _source: &[Vector3<f32>],
         _target: &[Vector3<f32>],
         _target_normals: &[Vector3<f32>],
@@ -801,12 +819,11 @@ pub mod icp_gpu {
 
 /// GPU-accelerated spatial queries
 pub mod spatial_gpu {
-    use super::*;
     use nalgebra::Vector3;
 
     /// Build KDTree on GPU (parallel construction)
     pub fn build_kdtree(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _points: &[Vector3<f32>],
     ) -> crate::Result<GpuKDTree> {
         Err(crate::Error::not_supported("GPU KDTree construction"))
@@ -814,7 +831,7 @@ pub mod spatial_gpu {
 
     /// Batch nearest neighbor search on GPU
     pub fn batch_nearest_neighbors(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _kdtree: &GpuKDTree,
         _queries: &[Vector3<f32>],
         _k: u32,
@@ -824,7 +841,7 @@ pub mod spatial_gpu {
 
     /// Batch radius search on GPU
     pub fn batch_radius_search(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _kdtree: &GpuKDTree,
         _queries: &[Vector3<f32>],
         _radius: f32,
@@ -834,7 +851,7 @@ pub mod spatial_gpu {
 
     /// Build VoxelGrid on GPU
     pub fn build_voxel_grid(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _points: &[Vector3<f32>],
         _voxel_size: f32,
     ) -> crate::Result<GpuVoxelGrid> {
@@ -843,27 +860,26 @@ pub mod spatial_gpu {
 
     /// GPU KDTree handle
     pub struct GpuKDTree {
-        nodes_buffer: wgpu::Buffer,
-        points_buffer: wgpu::Buffer,
-        num_points: u32,
+        pub _nodes_buffer: wgpu::Buffer,
+        pub _points_buffer: wgpu::Buffer,
+        pub _num_points: u32,
     }
 
     /// GPU VoxelGrid handle
     pub struct GpuVoxelGrid {
-        voxel_buffer: wgpu::Buffer,
-        occupied_buffer: wgpu::Buffer,
-        voxel_size: f32,
+        pub _voxel_buffer: wgpu::Buffer,
+        pub _occupied_buffer: wgpu::Buffer,
+        pub _voxel_size: f32,
     }
 }
 
 /// GPU-accelerated mesh operations
 pub mod mesh_gpu {
-    use super::*;
     use nalgebra::{Vector3, Point3};
 
     /// Compute vertex normals on GPU
     pub fn compute_vertex_normals(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _vertices: &[Point3<f32>],
         _faces: &[[u32; 3]],
     ) -> crate::Result<Vec<Vector3<f32>>> {
@@ -872,7 +888,7 @@ pub mod mesh_gpu {
 
     /// Laplacian smoothing on GPU
     pub fn laplacian_smooth(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _vertices: &mut [Point3<f32>],
         _faces: &[[u32; 3]],
         _iterations: u32,
@@ -883,7 +899,7 @@ pub mod mesh_gpu {
 
     /// Simplify mesh on GPU
     pub fn simplify_mesh(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _vertices: &[Point3<f32>],
         _faces: &[[u32; 3]],
         _target_ratio: f32,
@@ -893,7 +909,7 @@ pub mod mesh_gpu {
 
     /// Compute mesh bounds on GPU
     pub fn compute_bounds(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _vertices: &[Point3<f32>],
     ) -> crate::Result<(Point3<f32>, Point3<f32>)> {
         Err(crate::Error::not_supported("GPU bounds computation"))
@@ -902,12 +918,11 @@ pub mod mesh_gpu {
 
 /// GPU-accelerated ray casting
 pub mod raycasting_gpu {
-    use super::*;
     use nalgebra::{Point3, Vector3};
 
     /// Batch ray-mesh intersection on GPU
     pub fn cast_rays(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _rays: &[(Point3<f32>, Vector3<f32>)], // (origin, direction)
         _vertices: &[Point3<f32>],
         _faces: &[[u32; 3]],
@@ -917,7 +932,7 @@ pub mod raycasting_gpu {
 
     /// Compute distance field on GPU
     pub fn compute_distance_field(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _mesh_vertices: &[Point3<f32>],
         _mesh_faces: &[[u32; 3]],
         _grid_origin: Point3<f32>,
@@ -930,11 +945,11 @@ pub mod raycasting_gpu {
 
 /// GPU-accelerated RGBD odometry
 pub mod odometry_gpu {
-    use super::*;
+    use nalgebra::Vector3;
 
     /// Compute RGBD odometry on GPU
     pub fn compute_odometry(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _source_depth: &[f32],
         _target_depth: &[f32],
         _source_color: Option<&[u32]>,
@@ -949,7 +964,7 @@ pub mod odometry_gpu {
 
     /// Compute vertex map from depth on GPU
     pub fn compute_vertex_map(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _depth: &[f32],
         _intrinsics: &[f32; 4],
         _width: u32,
@@ -960,66 +975,11 @@ pub mod odometry_gpu {
 
     /// Compute normal map from vertex map on GPU
     pub fn compute_normal_map(
-        _gpu: &GpuCompute,
+        _gpu: &crate::gpu::GpuContext,
         _vertex_map: &[Vector3<f32>],
         _width: u32,
         _height: u32,
     ) -> crate::Result<Vec<Vector3<f32>>> {
         Err(crate::Error::not_supported("GPU normal map computation"))
-    }
-}
-
-/// Unified dispatch API that automatically chooses CPU or GPU
-pub mod unified {
-    
-    use nalgebra::{Matrix4, Vector3};
-
-    /// Unified point cloud transform (CPU or GPU)
-    pub fn transform_points(
-        points: &[Vector3<f32>],
-        transform: &Matrix4<f32>,
-        use_gpu: bool,
-    ) -> crate::Result<Vec<Vector3<f32>>> {
-        if use_gpu {
-            // Dispatch to GPU
-            Err(crate::Error::not_supported("GPU dispatch in unified API"))
-        } else {
-            // CPU fallback
-            Ok(points.iter()
-                .map(|p| {
-                    let p_h = p.insert_row(3, 1.0);
-                    let transformed = transform * p_h;
-                    Vector3::new(transformed.x, transformed.y, transformed.z)
-                })
-                .collect())
-        }
-    }
-
-    /// Configuration for automatic CPU/GPU selection
-    pub struct ComputeConfig {
-        pub use_gpu_threshold: usize, // Minimum elements to use GPU
-        pub force_cpu: bool,
-        pub force_gpu: bool,
-    }
-
-    impl Default for ComputeConfig {
-        fn default() -> Self {
-            Self {
-                use_gpu_threshold: 10000, // Use GPU for >10k points
-                force_cpu: false,
-                force_gpu: false,
-            }
-        }
-    }
-
-    /// Auto-select CPU or GPU based on problem size
-    pub fn should_use_gpu(config: &ComputeConfig, element_count: usize) -> bool {
-        if config.force_cpu {
-            false
-        } else if config.force_gpu {
-            true
-        } else {
-            element_count >= config.use_gpu_threshold
-        }
     }
 }

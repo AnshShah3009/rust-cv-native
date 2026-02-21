@@ -25,6 +25,14 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
+    pub fn device_id(&self) -> crate::DeviceId {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.device_id(),
+            ComputeDevice::Gpu(gpu) => gpu.device_id(),
+            ComputeDevice::Mlx(mlx) => mlx.device_id(),
+        }
+    }
+
     pub fn convolve_2d<S: Storage<f32> + 'static>(
         &self,
         input: &Tensor<f32, S>,
@@ -473,6 +481,38 @@ impl<'a> ComputeDevice<'a> {
     }
 }
 
+/// Get a compute device by its ID.
+pub fn get_device_by_id(id: crate::DeviceId) -> Result<ComputeDevice<'static>> {
+    // Check CPU
+    if let Some(cpu) = CPU_CONTEXT.get() {
+        if cpu.device_id() == id {
+            return Ok(ComputeDevice::Cpu(cpu));
+        }
+    } else {
+        // Try to init if it's the only one
+        let cpu = CPU_CONTEXT.get_or_init(|| CpuBackend::new().unwrap());
+        if cpu.device_id() == id {
+            return Ok(ComputeDevice::Cpu(cpu));
+        }
+    }
+    
+    // Check GPU
+    if let Ok(gpu) = GpuContext::global() {
+        if gpu.device_id() == id {
+            return Ok(ComputeDevice::Gpu(gpu));
+        }
+    }
+    
+    // Check MLX
+    if let Some(mlx) = MLX_CONTEXT.get() {
+        if mlx.device_id() == id {
+            return Ok(ComputeDevice::Mlx(mlx));
+        }
+    }
+    
+    Err(crate::Error::DeviceError(format!("Device {:?} not found in global contexts", id)))
+}
+
 /// Get the best available compute device.
 pub fn get_device() -> Result<ComputeDevice<'static>> {
     if let Some(mlx) = MlxContext::new() {
@@ -482,10 +522,12 @@ pub fn get_device() -> Result<ComputeDevice<'static>> {
     match GpuContext::global() {
         Ok(gpu) => Ok(ComputeDevice::Gpu(gpu)),
         Err(_) => {
-            let cpu = CPU_CONTEXT.get_or_init(|| {
-                CpuBackend::new().ok_or_else(|| crate::Error::InitError("Failed to initialize CPU backend".into())).unwrap()
-            });
-            Ok(ComputeDevice::Cpu(cpu))
+            // Safe manual initialization since OnceLock doesn't have get_or_try_init yet
+            if CPU_CONTEXT.get().is_none() {
+                let cpu = CpuBackend::new().ok_or_else(|| crate::Error::InitError("Failed to initialize CPU backend".into()))?;
+                let _ = CPU_CONTEXT.set(cpu);
+            }
+            Ok(ComputeDevice::Cpu(CPU_CONTEXT.get().expect("CPU_CONTEXT must be initialized after set")))
         }
     }
 }

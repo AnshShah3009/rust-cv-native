@@ -96,6 +96,7 @@ fn compute_integral_image(src: &GrayImage) -> Tensor<u32> {
     }
     
     Tensor::from_vec(integral, cv_core::TensorShape::new(1, h as usize + 1, w as usize + 1))
+        .expect("Failed to create integral image tensor")
 }
 
 fn get_rect_sum(integral: &Tensor<u32>, x: u32, y: u32, w: u32, h: u32) -> u32 {
@@ -105,7 +106,7 @@ fn get_rect_sum(integral: &Tensor<u32>, x: u32, y: u32, w: u32, h: u32) -> u32 {
     let x1 = (x + w) as usize;
     let y1 = (y + h) as usize;
     
-    let data = integral.as_slice();
+    let data = integral.as_slice().expect("Failed to get integral slice");
     data[y1 * iw + x1] + data[y0 * iw + x0] - data[y1 * iw + x0] - data[y0 * iw + x1]
 }
 mod haar_test;

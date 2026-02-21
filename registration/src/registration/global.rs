@@ -54,7 +54,7 @@ pub struct FPFHFeature {
 use crate::registration::RegistrationError;
 
 /// Compute FPFH features for point cloud
-pub fn compute_fpfh_features(cloud: &PointCloud, radius: f32) -> Result<Vec<FPFHFeature>, RegistrationError> {
+pub fn compute_fpfh_features(_cloud: &PointCloud, _radius: f32) -> Result<Vec<FPFHFeature>, RegistrationError> {
     Err(RegistrationError::NotImplemented("FPFH features are currently stubbed".to_string()))
 }
 
@@ -537,7 +537,7 @@ pub fn compute_iss_features(cloud: &PointCloud, detector: ISSDetector) -> Vec<IS
 
     let mut suppressed = vec![false; n];
 
-    for (idx, saliency) in &saliencies {
+    for (idx, _saliency) in &saliencies {
         if suppressed[*idx] {
             continue;
         }

@@ -9,7 +9,16 @@ cv-core = { path = "../core" }
 image = { workspace = true }
 thiserror = { workspace = true }
 log = "0.4"
-ffmpeg-next = { workspace = true }
+ffmpeg-next = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-v4l = "0.14" # Video4Linux2 wrapper
+v4l = { version = "0.14", optional = true } # Video4Linux2 wrapper
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[features]
+default = ["native"]
+ffmpeg = ["dep:ffmpeg-next"]
+v4l2 = ["v4l"]
+native = [] # Pure Rust or command-line based

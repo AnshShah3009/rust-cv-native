@@ -190,6 +190,27 @@ impl Sift {
 
         (KeyPoints { keypoints: valid_keypoints }, Descriptors { descriptors: all_descriptors })
     }
+
+    /// Detect keypoints using the runtime scheduler
+    pub fn detect<S: Storage<u8> + 'static>(&self, image: &Tensor<u8, S>) -> KeyPoints {
+        let runner = match cv_runtime::scheduler().and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)) {
+            Ok(group) => cv_runtime::RuntimeRunner::Group(group),
+            Err(_) => cv_runtime::default_runner(),
+        };
+        let device = runner.device();
+        let (kps, _) = self.detect_and_refine(&device, image);
+        kps
+    }
+
+    /// Detect and compute descriptors using the runtime scheduler
+    pub fn compute<S: Storage<u8> + 'static>(&self, image: &Tensor<u8, S>) -> (KeyPoints, Descriptors) {
+        let runner = match cv_runtime::scheduler().and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)) {
+            Ok(group) => cv_runtime::RuntimeRunner::Group(group),
+            Err(_) => cv_runtime::default_runner(),
+        };
+        let device = runner.device();
+        self.detect_and_compute(&device, image)
+    }
 }
 
 fn refine_point(
@@ -280,17 +301,17 @@ fn convert_to_f32_cpu<S: Storage<u8> + 'static>(
             ComputeDevice::Gpu(g) => g,
             _ => panic!("Logic error: GpuStorage with non-GPU context"),
         };
-        input_gpu.to_cpu_ctx(gpu_ctx).unwrap()
+        input_gpu.to_cpu_ctx(gpu_ctx).expect("Download from GPU failed")
     } else {
         let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, CpuStorage<u8>>;
         let input_cpu = unsafe { &*input_ptr };
         input_cpu.clone()
     };
 
-    let slice_u8 = cpu_u8.storage.as_slice().unwrap();
+    let slice_u8 = cpu_u8.storage.as_slice().expect("Failed to get u8 slice");
     let data_f32: Vec<f32> = slice_u8.iter().map(|&v| v as f32 / 255.0).collect();
     
-    Tensor::from_vec(data_f32, input.shape)
+    Tensor::from_vec(data_f32, input.shape).expect("Failed to create f32 tensor")
 }
 
 pub fn sift_detect_ctx<S: Storage<u8> + 'static>(
@@ -316,7 +337,7 @@ mod tests {
                 if ((x / 16) + (y / 16)) % 2 == 0 { data[y * size + x] = 255; }
             }
         }
-        Tensor::from_vec(data, TensorShape::new(1, size, size))
+        Tensor::from_vec(data, TensorShape::new(1, size, size)).unwrap()
     }
 
     #[test]

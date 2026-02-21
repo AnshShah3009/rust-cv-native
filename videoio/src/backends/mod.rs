@@ -1,12 +1,17 @@
 //! Camera capture backends
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "v4l2"))]
 pub mod v4l2;
 
 pub mod png_sequence;
+
+#[cfg(feature = "ffmpeg")]
 pub mod ffmpeg;
 
-pub use ffmpeg::FfmpegCapture;
-pub use png_sequence::PngSequenceCapture;
-#[cfg(target_os = "linux")]
+#[cfg(feature = "ffmpeg")]
+pub use ffmpeg::NativeFfmpegCapture;
+
+pub use png_sequence::{PngSequenceCapture, PngSequenceWriter};
+
+#[cfg(all(target_os = "linux", feature = "v4l2"))]
 pub use v4l2::V4L2Capture;

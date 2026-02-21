@@ -282,7 +282,7 @@ mod tests {
         let cloud = create_test_cloud();
 
         // Create a temporary file
-        let mut temp_file = NamedTempFile::new().unwrap();
+        let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_path_buf();
 
         // Write to file

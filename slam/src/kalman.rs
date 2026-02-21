@@ -4,7 +4,7 @@
 //! for state estimation in SLAM and robotics applications.
 
 use nalgebra::{
-    DMatrix, DVector, Matrix, Matrix2, Matrix3, RealField, SMatrix, SVector, Vector2, Vector3,
+    SMatrix, SVector,
 };
 use std::fmt::Debug;
 
@@ -219,9 +219,9 @@ mod tests {
         // Simulate tracking a moving object
         let u = SVector::<f64, 4>::zeros();
         let measurements = vec![
-            Vector2::new(1.0, 1.0),
-            Vector2::new(1.1, 1.1),
-            Vector2::new(1.2, 1.2),
+            SVector::<f64, 2>::new(1.0, 1.0),
+            SVector::<f64, 2>::new(1.1, 1.1),
+            SVector::<f64, 2>::new(1.2, 1.2),
         ];
 
         for z in measurements {

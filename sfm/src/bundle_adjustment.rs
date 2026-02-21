@@ -1,10 +1,11 @@
-use cv_core::{CameraExtrinsics, CameraIntrinsics};
-use nalgebra::{DMatrix, DVector, Matrix3, Matrix4, Point2, Point3, Rotation3, Vector3};
+use cv_core::{Pose, CameraIntrinsics};
+use nalgebra::{DMatrix, DVector, Point2, Point3, Rotation3, Vector3};
 use rayon::prelude::*;
 use cv_runtime::orchestrator::{ResourceGroup, scheduler};
 
 use cv_optimize::sparse::{SparseMatrix, Triplet};
 
+#[derive(Clone)]
 pub struct Landmark {
     pub position: Point3<f64>,
     pub observations: Vec<(usize, Point2<f64>)>,
@@ -27,7 +28,7 @@ impl Landmark {
 
 #[derive(Clone)]
 pub struct SfMState {
-    pub cameras: Vec<CameraExtrinsics>,
+    pub cameras: Vec<Pose>,
     pub landmarks: Vec<Landmark>,
     pub intrinsics: CameraIntrinsics,
 }
@@ -41,7 +42,7 @@ impl SfMState {
         }
     }
 
-    pub fn add_camera(&mut self, pose: CameraExtrinsics) -> usize {
+    pub fn add_camera(&mut self, pose: Pose) -> usize {
         let id = self.cameras.len();
         self.cameras.push(pose);
         id
@@ -233,7 +234,7 @@ impl SfMState {
         let mut res_idx = 0;
         for (lm_idx, lm) in self.landmarks.iter().enumerate() {
             if !lm.is_valid { continue; }
-            for (cam_idx, obs) in &lm.observations {
+            for (cam_idx, _obs) in &lm.observations {
                 // Camera block (6 params)
                 for k in 0..6 {
                     let mut p_perturbed = params.clone();
@@ -335,6 +336,28 @@ impl SfMState {
     }
 }
 
+use cv_optimize::{CostFunction, SparseLMSolver};
+
+impl CostFunction for SfMState {
+    fn dimensions(&self) -> (usize, usize) {
+        let n_res = self.landmarks.iter().filter(|l| l.is_valid).map(|l| l.observations.len() * 2).sum();
+        let n_params = 6 * self.cameras.len() + 3 * self.landmarks.len();
+        (n_res, n_params)
+    }
+
+    fn residuals(&self, params: &DVector<f64>) -> DVector<f64> {
+        let mut temp_state = self.clone();
+        temp_state.from_parameters(params);
+        temp_state.residuals()
+    }
+
+    fn jacobian(&self, params: &DVector<f64>) -> SparseMatrix {
+        let mut temp_state = self.clone();
+        temp_state.from_parameters(params);
+        temp_state.numerical_jacobian_sparse()
+    }
+}
+
 pub struct BundleAdjustmentConfig {
     pub max_iterations: usize,
     pub convergence_threshold: f64,
@@ -414,56 +437,18 @@ pub fn bundle_adjust(state: &mut SfMState, config: &BundleAdjustmentConfig) {
 }
 
 pub fn bundle_adjust_ctx(state: &mut SfMState, config: &BundleAdjustmentConfig, group: &ResourceGroup) {
-    let mut current_params = state.to_parameters();
-    let mut current_residuals = state.residuals();
-    let mut current_err = current_residuals.norm_squared();
-    let mut lambda = config.lambda;
+    let device = group.device();
+    let solver = SparseLMSolver {
+        ctx: &device,
+        config: cv_optimize::LMConfig {
+            max_iters: config.max_iterations,
+            lambda: config.lambda,
+            tolerance: config.convergence_threshold,
+        },
+    };
 
-    for iteration in 0..config.max_iterations {
-        let j = state.numerical_jacobian_ctx(group);
-        let r = current_residuals.clone();
-
-        // Normal equations: J^T J * delta = -J^T * r
-        // Parallel matrix multiplication could be used here for large matrices
-        let jtj = &j.transpose() * &j;
-        let jtr = j.transpose() * r;
-
-        let mut lhs = jtj.clone();
-        for i in 0..lhs.nrows() {
-            lhs[(i, i)] *= 1.0 + lambda;
-        }
-
-        let neg_jtr = -&jtr;
-        let delta = if let Some(ch) = lhs.clone().cholesky() {
-            ch.solve(&neg_jtr)
-        } else {
-            lhs.lu().solve(&neg_jtr).unwrap_or_else(|| DVector::zeros(jtr.len()))
-        };
-
-        let expected_reduction = -jtr.dot(&delta);
-        let next_params = &current_params + &delta;
-        state.from_parameters(&next_params);
-        let next_residuals = state.residuals();
-        let next_err = next_residuals.norm_squared();
-
-        let actual_reduction = current_err - next_err;
-
-        if actual_reduction > 0.0 && actual_reduction > 0.9 * expected_reduction {
-            current_params = next_params;
-            current_residuals = next_residuals;
-            current_err = next_err;
-            lambda /= 10.0;
-
-            if delta.norm() < config.convergence_threshold {
-                break;
-            }
-        } else {
-            lambda *= 10.0;
-            state.from_parameters(&current_params);
-        }
-
-        if config.robust_kernel && iteration % 5 == 0 {
-            state.remove_outliers(10.0);
-        }
+    let initial_params = state.to_parameters();
+    if let Ok(final_params) = solver.minimize(state, initial_params) {
+        state.from_parameters(&final_params);
     }
 }

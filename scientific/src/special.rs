@@ -1,7 +1,5 @@
 use std::f64::consts::{E, PI};
 
-const MAX_ITER: usize = 200;
-
 pub fn erf(x: f64) -> f64 {
     let a1 = 0.254829592;
     let a2 = -0.284496736;
@@ -189,13 +187,12 @@ pub fn bessel_jn(n: i32, x: f64) -> f64 {
 
     let mut bjp = 0.0;
     let mut bj = 1.0;
-    let mut bjm = 0.0;
     let mut sum = 0.0;
 
     let m = 2 * ((n as f64 + (40.0 * x.abs()).sqrt()) as usize);
 
     for j in (1..=m).rev() {
-        bjm = 2.0 * (j as f64) / x * bj - bjp;
+        let bjm = 2.0 * (j as f64) / x * bj - bjp;
         bjp = bj;
         bj = bjm;
 
@@ -287,17 +284,18 @@ pub fn bessel_yn(n: i32, x: f64) -> f64 {
         return (-1.0_f64).powi(-n) * bessel_yn(-n, x);
     }
 
-    let mut by = bessel_y1(x);
     let mut bjp = bessel_j1(x);
     let mut bj = bessel_j0(x);
+    let mut result = bessel_y1(x);
 
     for j in 1..n {
         let bjm = 2.0 * j as f64 / x * bj - bjp;
         bjp = bj;
         bj = bjm;
+        result = bj;
     }
 
-    by
+    result
 }
 
 pub fn bessel_i0(x: f64) -> f64 {

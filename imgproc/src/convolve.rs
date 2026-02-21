@@ -1,6 +1,5 @@
 use image::GrayImage;
 use rayon::prelude::*;
-use std::sync::Arc;
 use wide::*;
 use crate::simd::convolve_row_1d;
 use cv_core::{Tensor, TensorShape};
@@ -8,7 +7,7 @@ use cv_hal::compute::{ComputeDevice};
 use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
 use cv_hal::context::BorderMode as HalBorderMode;
 use cv_hal::gpu::GpuContext;
-use cv_runtime::orchestrator::{ResourceGroup, scheduler};
+use cv_runtime::orchestrator::{scheduler, RuntimeRunner};
 
 #[derive(Debug, Clone)]
 pub struct Kernel {
@@ -181,22 +180,17 @@ pub fn convolve(image: &GrayImage, kernel: &Kernel) -> GrayImage {
 }
 
 pub fn convolve_with_border(image: &GrayImage, kernel: &Kernel, border: BorderMode) -> GrayImage {
-    if let Ok(s) = scheduler() {
-        if let Ok(group) = s.best_gpu_or_cpu() {
-            return convolve_ctx(image, kernel, border, &group);
-        }
-    }
-    // Fallback: minimal sequential convolve or empty
-    GrayImage::new(image.width(), image.height())
+    let runner = cv_runtime::best_runner();
+    convolve_ctx(image, kernel, border, &runner)
 }
 
-pub fn convolve_ctx(image: &GrayImage, kernel: &Kernel, border: BorderMode, group: &ResourceGroup) -> GrayImage {
+pub fn convolve_ctx(image: &GrayImage, kernel: &Kernel, border: BorderMode, group: &RuntimeRunner) -> GrayImage {
     let mut output = GrayImage::new(image.width(), image.height());
     convolve_into_ctx(image, &mut output, kernel, border, group);
     output
 }
 
-pub fn convolve_into_ctx(image: &GrayImage, output: &mut GrayImage, kernel: &Kernel, border: BorderMode, group: &ResourceGroup) {
+pub fn convolve_into_ctx(image: &GrayImage, output: &mut GrayImage, kernel: &Kernel, border: BorderMode, group: &RuntimeRunner) {
     let device = group.device();
     if let ComputeDevice::Gpu(gpu) = device {
         if let Ok(result) = convolve_gpu(gpu, image, kernel, border) {
@@ -214,16 +208,16 @@ pub fn convolve_with_border_into(
     kernel: &Kernel,
     border: BorderMode,
 ) {
-    let group = scheduler().get_default_group();
-    convolve_into_ctx(image, output, kernel, border, &group);
+    let runner = cv_runtime::default_runner();
+    convolve_into_ctx(image, output, kernel, border, &runner);
 }
 
 pub fn gaussian_blur_with_border(image: &GrayImage, sigma: f32, border: BorderMode) -> GrayImage {
-    let group = scheduler().best_gpu_or_cpu();
-    gaussian_blur_ctx(image, sigma, border, &group)
+    let runner = cv_runtime::best_runner();
+    gaussian_blur_ctx(image, sigma, border, &runner)
 }
 
-pub fn gaussian_blur_ctx(image: &GrayImage, sigma: f32, border: BorderMode, group: &ResourceGroup) -> GrayImage {
+pub fn gaussian_blur_ctx(image: &GrayImage, sigma: f32, border: BorderMode, group: &RuntimeRunner) -> GrayImage {
     let device = group.device();
     if let ComputeDevice::Gpu(gpu) = device {
         if let Ok(result) = gaussian_blur_gpu(gpu, image, sigma, border) {
@@ -265,7 +259,7 @@ fn gaussian_blur_gpu(
     let output_gpu = gpu.convolve_2d(&input_gpu, &kernel_gpu, hal_border)?;
     let output_cpu = output_gpu.to_cpu()?;
     
-    let data = output_cpu.to_image_gray();
+    let data = output_cpu.to_image_gray().expect("Image conversion failed");
     GrayImage::from_raw(image.width(), image.height(), data)
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
 }
@@ -299,7 +293,7 @@ fn convolve_gpu(
     let output_gpu = gpu.convolve_2d(&input_gpu, &kernel_gpu, hal_border)?;
     let output_cpu = output_gpu.to_cpu()?;
     
-    let data = output_cpu.to_image_gray();
+    let data = output_cpu.to_image_gray().expect("Image conversion failed");
     GrayImage::from_raw(image.width(), image.height(), data)
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
 }
@@ -309,7 +303,7 @@ pub fn convolve_with_border_into_ctx(
     output: &mut GrayImage,
     kernel: &Kernel,
     border: BorderMode,
-    group: &ResourceGroup,
+    group: &RuntimeRunner,
 ) {
     let (kx_center, ky_center) = kernel.center();
     if output.width() != image.width() || output.height() != image.height() {
@@ -367,13 +361,8 @@ pub fn separable_convolve_into(
     kernel_1d: &[f32],
     border: BorderMode,
 ) {
-    if let Ok(s) = scheduler() {
-        if let Ok(group) = s.get_default_group() {
-            separable_convolve_into_ctx(image, out, kernel_1d, kernel_1d, border, &group);
-            return;
-        }
-    }
-    // Fallback: minimal sequential convolve or noop
+    let runner = cv_runtime::default_runner();
+    separable_convolve_into_ctx(image, out, kernel_1d, kernel_1d, border, &runner);
 }
 
 pub fn separable_convolve_into_ctx(
@@ -382,7 +371,7 @@ pub fn separable_convolve_into_ctx(
     kx: &[f32],
     ky: &[f32],
     border: BorderMode,
-    group: &ResourceGroup,
+    group: &RuntimeRunner,
 ) {
     assert!(kx.len() % 2 == 1, "kx size must be odd");
     assert!(ky.len() % 2 == 1, "ky size must be odd");
@@ -470,7 +459,7 @@ pub fn gaussian_blur_with_border_into_ctx(
     image: &GrayImage,
     sigma: f32,
     border: BorderMode,
-    group: &ResourceGroup,
+    group: &RuntimeRunner,
 ) -> GrayImage {
     let mut out = GrayImage::new(image.width(), image.height());
     gaussian_blur_with_border_into_ctx_into(image, &mut out, sigma, border, group);
@@ -485,7 +474,8 @@ pub fn gaussian_blur_with_border_into(
 ) {
     if let Ok(s) = scheduler() {
         if let Ok(group) = s.get_default_group() {
-            gaussian_blur_ctx_into(image, out, sigma, border, &group);
+            let runner = RuntimeRunner::Group(group);
+            gaussian_blur_ctx_into(image, out, sigma, border, &runner);
         }
     }
 }
@@ -495,7 +485,7 @@ pub fn gaussian_blur_ctx_into(
     out: &mut GrayImage,
     sigma: f32,
     border: BorderMode,
-    group: &ResourceGroup,
+    group: &RuntimeRunner,
 ) {
     let size = ((sigma * 6.0).ceil() as usize) | 1;
     let kernel_1d = gaussian_kernel_1d(sigma, size);
@@ -507,7 +497,7 @@ fn gaussian_blur_with_border_into_ctx_into(
     out: &mut GrayImage,
     sigma: f32,
     border: BorderMode,
-    group: &ResourceGroup,
+    group: &RuntimeRunner,
 ) {
     let size = ((sigma * 6.0).ceil() as usize) | 1;
     let kernel_1d = gaussian_kernel_1d(sigma, size);

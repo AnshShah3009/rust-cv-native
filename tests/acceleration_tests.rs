@@ -18,7 +18,7 @@ fn test_cpu_nms_boxes() {
     
     let shape = TensorShape::new(1, 3, 5);
     // Explicitly specify CpuStorage to avoid ambiguity
-    let tensor: Tensor<f32, cv_core::storage::CpuStorage<f32>> = Tensor::from_vec(data, shape);
+    let tensor: Tensor<f32, cv_core::storage::CpuStorage<f32>> = Tensor::from_vec(data, shape).unwrap();
     
     let kept = device.nms_boxes(&tensor, 0.5).unwrap();
     
@@ -40,7 +40,7 @@ fn test_cpu_nms_rotated_boxes() {
     ];
     
     let shape = TensorShape::new(1, 3, 6);
-    let tensor: Tensor<f32, cv_core::storage::CpuStorage<f32>> = Tensor::from_vec(data, shape);
+    let tensor: Tensor<f32, cv_core::storage::CpuStorage<f32>> = Tensor::from_vec(data, shape).unwrap();
     
     let kept = device.nms_rotated_boxes(&tensor, 0.5).unwrap();
     

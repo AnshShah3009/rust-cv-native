@@ -1,5 +1,5 @@
 use crate::{CalibError, Result};
-use cv_core::{CameraExtrinsics, CameraIntrinsics};
+use cv_core::{Pose, CameraIntrinsics};
 use nalgebra::{Matrix3, Matrix3x4, Matrix4, Point2, Point3, Vector3};
 
 /// Linear triangulation from two views.
@@ -72,7 +72,7 @@ pub fn recover_pose_from_essential(
     pts1: &[Point2<f64>],
     pts2: &[Point2<f64>],
     intrinsics: &CameraIntrinsics,
-) -> Result<CameraExtrinsics> {
+) -> Result<Pose> {
     if pts1.len() != pts2.len() || pts1.len() < 5 {
         return Err(CalibError::InvalidParameters(
             "recover_pose_from_essential needs >=5 paired points".to_string(),
@@ -100,10 +100,10 @@ pub fn recover_pose_from_essential(
     let t = u.column(2).into_owned();
 
     let candidates = [
-        CameraExtrinsics::new(r1, t),
-        CameraExtrinsics::new(r1, -t),
-        CameraExtrinsics::new(r2, t),
-        CameraExtrinsics::new(r2, -t),
+        Pose::new(r1, t),
+        Pose::new(r1, -t),
+        Pose::new(r2, t),
+        Pose::new(r2, -t),
     ];
 
     let k_inv = intrinsics.inverse_matrix();

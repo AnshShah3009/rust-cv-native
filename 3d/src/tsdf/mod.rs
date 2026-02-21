@@ -5,6 +5,19 @@
 
 use nalgebra::{Matrix4, Point3, Vector3};
 use std::collections::HashMap;
+use rayon::prelude::*;
+
+use cv_runtime::orchestrator::RuntimeRunner;
+use cv_hal::compute::ComputeDevice;
+
+/// Camera intrinsics
+#[derive(Debug, Clone, Copy)]
+pub struct CameraIntrinsics {
+    pub fx: f32,
+    pub fy: f32,
+    pub cx: f32,
+    pub cy: f32,
+}
 
 /// Voxel block for TSDF volume
 #[derive(Debug, Clone)]
@@ -78,80 +91,103 @@ impl TSDFVolume {
         self
     }
 
-    /// Integrate a single RGBD frame
+    /// Integrate a single RGBD frame using best available runner
     pub fn integrate(
         &mut self,
-        depth_image: &[f32], // Depth values in meters
+        depth_image: &[f32],
         color_image: Option<&[Vector3<u8>]>,
         intrinsics: &CameraIntrinsics,
         extrinsics: &Matrix4<f32>,
         width: usize,
         height: usize,
     ) {
+        let runner = cv_runtime::best_runner();
+        self.integrate_ctx(depth_image, color_image, intrinsics, extrinsics, width, height, &runner);
+    }
+
+    /// Integrate a single RGBD frame with explicit context
+    pub fn integrate_ctx(
+        &mut self,
+        depth_image: &[f32],
+        color_image: Option<&[Vector3<u8>]>,
+        intrinsics: &CameraIntrinsics,
+        extrinsics: &Matrix4<f32>,
+        width: usize,
+        height: usize,
+        group: &RuntimeRunner,
+    ) {
+        let device = group.device();
+        
+        // GPU Path
+        if let ComputeDevice::Gpu(_gpu) = device {
+            // TODO: Dispatch to HAL tsdf_integrate
+            // Note: This requires converting blocks to a GPU-friendly format
+        }
+
+        // CPU Fallback (Rayon)
         // Transform camera origin to world space
         let camera_origin = extrinsics.transform_point(&Point3::origin());
 
-        // Process each pixel in parallel using rayon
-        use rayon::prelude::*;
+        let updates: Vec<_> = group.run(|| {
+            (0..height)
+                .into_par_iter()
+                .flat_map(|v| {
+                    let mut local_updates = Vec::new();
 
-        let updates: Vec<_> = (0..height)
-            .into_par_iter()
-            .flat_map(|v| {
-                let mut local_updates = Vec::new();
+                    for u in 0..width {
+                        let idx = v * width + u;
+                        let depth = depth_image[idx];
 
-                for u in 0..width {
-                    let idx = v * width + u;
-                    let depth = depth_image[idx];
+                        if depth <= 0.0 || depth > 10.0 {
+                            continue;
+                        }
 
-                    if depth <= 0.0 || depth > 10.0 {
-                        continue; // Invalid depth
+                        // Backproject to 3D in camera space
+                        let x = (u as f32 - intrinsics.cx) * depth / intrinsics.fx;
+                        let y = (v as f32 - intrinsics.cy) * depth / intrinsics.fy;
+                        let z = depth;
+                        let point_camera = Point3::new(x, y, z);
+
+                        // Transform to world space
+                        let point_world = extrinsics.transform_point(&point_camera);
+
+                        // Get color
+                        let color = color_image
+                            .map(|c| c[idx])
+                            .unwrap_or(Vector3::new(128, 128, 128));
+
+                        // Find affected voxels along ray
+                        let ray_dir = (point_world - camera_origin).normalize();
+                        let start =
+                            camera_origin + ray_dir * (depth - self.truncation_distance).max(0.01);
+                        let end = camera_origin + ray_dir * (depth + self.truncation_distance);
+
+                        // March along ray and update voxels
+                        let steps = ((end - start).norm() / self.voxel_size).ceil() as usize;
+                        for i in 0..=steps {
+                            let t = i as f32 / steps.max(1) as f32;
+                            let voxel_pos = start + (end - start) * t;
+
+                            // Calculate TSDF value
+                            let dist = (voxel_pos - point_world).norm();
+                            let sdf =
+                                if voxel_pos.coords.dot(&ray_dir) > point_world.coords.dot(&ray_dir) {
+                                    dist // Behind surface
+                                } else {
+                                    -dist // In front of surface
+                                };
+
+                            let tsdf = sdf.clamp(-self.truncation_distance, self.truncation_distance)
+                                / self.truncation_distance;
+
+                            local_updates.push((voxel_pos, tsdf, color));
+                        }
                     }
 
-                    // Backproject to 3D in camera space
-                    let x = (u as f32 - intrinsics.cx) * depth / intrinsics.fx;
-                    let y = (v as f32 - intrinsics.cy) * depth / intrinsics.fy;
-                    let z = depth;
-                    let point_camera = Point3::new(x, y, z);
-
-                    // Transform to world space
-                    let point_world = extrinsics.transform_point(&point_camera);
-
-                    // Get color
-                    let color = color_image
-                        .map(|c| c[idx])
-                        .unwrap_or(Vector3::new(128, 128, 128));
-
-                    // Find affected voxels along ray
-                    let ray_dir = (point_world - camera_origin).normalize();
-                    let start =
-                        camera_origin + ray_dir * (depth - self.truncation_distance).max(0.01);
-                    let end = camera_origin + ray_dir * (depth + self.truncation_distance);
-
-                    // March along ray and update voxels
-                    let steps = ((end - start).norm() / self.voxel_size).ceil() as usize;
-                    for i in 0..=steps {
-                        let t = i as f32 / steps.max(1) as f32;
-                        let voxel_pos = start + (end - start) * t;
-
-                        // Calculate TSDF value
-                        let dist = (voxel_pos - point_world).norm();
-                        let sdf =
-                            if voxel_pos.coords.dot(&ray_dir) > point_world.coords.dot(&ray_dir) {
-                                dist // Behind surface
-                            } else {
-                                -dist // In front of surface
-                            };
-
-                        let tsdf = sdf.clamp(-self.truncation_distance, self.truncation_distance)
-                            / self.truncation_distance;
-
-                        local_updates.push((voxel_pos, tsdf, color));
-                    }
-                }
-
-                local_updates
-            })
-            .collect();
+                    local_updates
+                })
+                .collect()
+        });
 
         // Apply updates
         for (pos, tsdf, color) in updates {
@@ -305,14 +341,6 @@ impl TSDFVolume {
             1.0 // Empty space
         }
     }
-}
-
-/// Camera intrinsics
-pub struct CameraIntrinsics {
-    pub fx: f32,
-    pub fy: f32,
-    pub cx: f32,
-    pub cy: f32,
 }
 
 /// Triangle for mesh extraction

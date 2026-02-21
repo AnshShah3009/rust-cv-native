@@ -34,7 +34,7 @@ pub fn disparity_to_pointcloud(
     disparity: &DisparityMap,
     left_image: &image::GrayImage,
     params: &StereoParams,
-) -> PointCloud {
+) -> crate::Result<PointCloud> {
     let mut points = Vec::new();
     let mut colors = Vec::new();
 
@@ -65,7 +65,7 @@ pub fn disparity_to_pointcloud(
         }
     }
 
-    PointCloud::new(points).with_colors(colors)
+    Ok(PointCloud::new(points).with_colors(colors)?)
 }
 
 /// Reproject 3D point to image coordinates
@@ -124,7 +124,7 @@ pub fn filter_pointcloud_by_depth(
 
     let mut filtered = PointCloud::new(filtered_points);
     if !filtered_colors.is_empty() {
-        filtered = filtered.with_colors(filtered_colors);
+        filtered = filtered.with_colors(filtered_colors).expect("Colors and points must match");
     }
     filtered
 }
@@ -229,11 +229,11 @@ mod tests {
 
     #[test]
     fn test_pointcloud_filtering() {
-        let mut pc = PointCloud::new();
+        let mut pc = PointCloud::new(Vec::new());
 
-        pc.push(Point3::new(1.0, 2.0, 0.5)); // Too close
-        pc.push(Point3::new(2.0, 3.0, 2.0)); // Valid
-        pc.push(Point3::new(3.0, 4.0, 5.0)); // Too far
+        pc.points.push(Point3::new(1.0, 2.0, 0.5)); // Too close
+        pc.points.push(Point3::new(2.0, 3.0, 2.0)); // Valid
+        pc.points.push(Point3::new(3.0, 4.0, 5.0)); // Too far
 
         let filtered = filter_pointcloud_by_depth(&pc, 1.0, 3.0);
 

@@ -1,0 +1,126 @@
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::PathBuf;
+use cv_hal::DeviceId;
+use std::collections::HashMap;
+use std::time::{SystemTime, Duration};
+
+/// Trait for coordinating workload load across multiple processes or nodes.
+pub trait LoadCoordinator: Send + Sync {
+    /// Update the load for the current process in the shared registry.
+    fn update_load(&self, device_load: &HashMap<DeviceId, usize>) -> std::io::Result<()>;
+    
+    /// Get the total aggregate load across all registered processes.
+    fn get_global_load(&self) -> std::io::Result<HashMap<DeviceId, usize>>;
+    
+    /// Cleanup our own load entry on shutdown.
+    fn cleanup(&self);
+}
+
+/// A robust directory-backed coordinator for cross-process load sensing.
+/// Each process maintains its own file in the coordinator directory.
+pub struct FileCoordinator {
+    dir: PathBuf,
+}
+
+impl FileCoordinator {
+    pub fn new(dir: PathBuf) -> Self {
+        // Ensure the directory exists
+        let _ = fs::create_dir_all(&dir);
+        Self { dir }
+    }
+
+    fn get_pid_file(&self) -> PathBuf {
+        self.dir.join(format!("{}.load", std::process::id()))
+    }
+}
+
+impl LoadCoordinator for FileCoordinator {
+    fn update_load(&self, device_load: &HashMap<DeviceId, usize>) -> std::io::Result<()> {
+        let path = self.get_pid_file();
+        let mut content = String::new();
+        
+        for (dev_id, load) in device_load {
+            content.push_str(&format!("{}:{}\n", dev_id.0, load));
+        }
+
+        // Atomic write via temporary file
+        let tmp_path = path.with_extension("tmp");
+        {
+            let mut file = File::create(&tmp_path)?;
+            file.write_all(content.as_bytes())?;
+            file.sync_all()?;
+        }
+        fs::rename(tmp_path, path)?;
+        
+        Ok(())
+    }
+
+    fn get_global_load(&self) -> std::io::Result<HashMap<DeviceId, usize>> {
+        let mut aggregate = HashMap::new();
+        let now = SystemTime::now();
+        let stale_timeout = Duration::from_secs(30);
+
+        if !self.dir.exists() {
+            return Ok(aggregate);
+        }
+
+        for entry in fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            
+            if path.extension().and_then(|s| s.to_str()) == Some("load") {
+                // Check if file is stale
+                if let Ok(metadata) = entry.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        if now.duration_since(modified).unwrap_or(Duration::ZERO) > stale_timeout {
+                            // Potentially stale. Check if PID is alive.
+                            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                                if let Ok(pid) = stem.parse::<u32>() {
+                                    if !is_process_alive(pid) {
+                                        let _ = fs::remove_file(&path);
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Read and parse
+                if let Ok(mut file) = File::open(&path) {
+                    let mut content = String::new();
+                    if file.read_to_string(&mut content).is_ok() {
+                        for line in content.lines() {
+                            let parts: Vec<&str> = line.split(':').collect();
+                            if parts.len() == 2 {
+                                if let (Ok(dev_id), Ok(load)) = (parts[0].parse::<u32>(), parts[1].parse::<usize>()) {
+                                    let entry = aggregate.entry(DeviceId(dev_id)).or_insert(0);
+                                    *entry += load;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(aggregate)
+    }
+
+    fn cleanup(&self) {
+        let _ = fs::remove_file(self.get_pid_file());
+    }
+}
+
+fn is_process_alive(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::path::Path::new(&format!("/proc/{}", pid)).exists()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Fallback for non-linux: assume alive if file is fresh enough (handled by caller)
+        true
+    }
+}

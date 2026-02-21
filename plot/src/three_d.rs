@@ -373,7 +373,7 @@ impl Plot3D {
         let mut js_points = String::new();
         let mut js_colors = String::new();
 
-        for (idx, pc) in self.point_clouds.iter().enumerate() {
+        for (_idx, pc) in self.point_clouds.iter().enumerate() {
             for point in &pc.points {
                 js_points.push_str(&format!("{{x:{},y:{},z:{}}},", point.x, point.y, point.z));
                 let c = &point.color;
@@ -490,7 +490,7 @@ impl Plot3D {
             return String::new();
         }
 
-        let (min_x, max_x, min_y, max_y, min_z, max_z) = self.bounding_box_all();
+        let (min_x, max_x, min_y, max_y, _min_z, _max_z) = self.bounding_box_all();
         let range_x = (max_x - min_x).max(1.0);
         let range_y = (max_y - min_y).max(1.0);
         let scale = (self.width.min(self.height) * 0.8) / range_x.max(range_y);

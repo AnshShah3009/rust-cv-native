@@ -82,12 +82,15 @@ fn scale_vec(a: &[f64], s: f64) -> Vec<f64> {
 }
 
 pub fn cumtrapz(f: impl Fn(f64) -> f64, t: &[f64], initial: f64) -> Vec<f64> {
-    let mut result = vec![initial];
+    let mut result = Vec::with_capacity(t.len());
+    result.push(initial);
+    let mut current = initial;
 
     for i in 1..t.len() {
         let dt = t[i] - t[i - 1];
         let avg = (f(t[i]) + f(t[i - 1])) / 2.0;
-        result.push(result.last().unwrap() + avg * dt);
+        current += avg * dt;
+        result.push(current);
     }
 
     result

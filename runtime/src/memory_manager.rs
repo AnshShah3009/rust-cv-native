@@ -1,0 +1,64 @@
+use std::sync::Mutex;
+use wgpu::{Buffer, BufferUsages};
+use cv_hal::DeviceId;
+use crate::device_registry::SubmissionIndex;
+
+/// A buffer that is no longer needed but may still be in use by the GPU.
+pub struct RetiredBuffer {
+    pub buffer: Buffer,
+    pub safe_after: SubmissionIndex,
+}
+
+/// Manages memory for a specific device, including buffer pooling and deferred destruction.
+pub struct MemoryManager {
+    device_id: DeviceId,
+    retirement_queue: Mutex<Vec<RetiredBuffer>>,
+}
+
+impl MemoryManager {
+    pub fn new(device_id: DeviceId) -> Self {
+        Self {
+            device_id,
+            retirement_queue: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn device_id(&self) -> DeviceId {
+        self.device_id
+    }
+
+    /// Enqueue a buffer for retirement.
+    /// 
+    /// The buffer will only be returned to the pool after the GPU has finished
+    /// executing all commands up to `safe_after`.
+    pub fn retire_buffer(&self, buffer: Buffer, safe_after: SubmissionIndex) {
+        let mut queue = self.retirement_queue.lock().unwrap();
+        queue.push(RetiredBuffer { buffer, safe_after });
+    }
+
+    /// Reclaim retired buffers that are now safe to reuse.
+    pub fn collect_garbage(&self, last_completed: SubmissionIndex) {
+        let mut queue = self.retirement_queue.lock().unwrap();
+        
+        // We use a simple filter here. For better performance with large queues, 
+        // we could use a more efficient data structure.
+        let mut i = 0;
+        while i < queue.len() {
+            if last_completed >= queue[i].safe_after {
+                let retired = queue.swap_remove(i);
+                
+                // Return to global pool for now. 
+                // In the future, each MemoryManager could have its own pool.
+                let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
+                cv_hal::gpu_kernels::buffer_utils::global_pool().return_buffer(retired.buffer, usages);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Get a buffer from the pool.
+    pub fn get_buffer(&self, device: &wgpu::Device, size: u64, usage: BufferUsages) -> Buffer {
+        cv_hal::gpu_kernels::buffer_utils::global_pool().get(device, size, usage)
+    }
+}

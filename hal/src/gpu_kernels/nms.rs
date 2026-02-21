@@ -156,8 +156,8 @@ pub fn nms_pixel(
     }
     ctx.submit(encoder);
     
-    use cv_core::TensorShape;
-    use cv_core::DataType;
+    
+    
     use std::marker::PhantomData;
 
     Ok(Tensor {

@@ -15,23 +15,23 @@ fn generate_synthetic_calibration_data() -> (Vec<Vec<Point3<f64>>>, Vec<Vec<Poin
     let intrinsics = cv_core::CameraIntrinsics::new(820.0, 790.0, 320.0, 240.0, 640, 480);
 
     let views = [
-        cv_core::CameraExtrinsics::new(
+        cv_core::Pose::new(
             Rotation3::from_euler_angles(0.08, -0.03, 0.02).into_inner(),
             Vector3::new(0.05, -0.08, 0.3),
         ),
-        cv_core::CameraExtrinsics::new(
+        cv_core::Pose::new(
             Rotation3::from_euler_angles(-0.06, 0.04, -0.05).into_inner(),
             Vector3::new(-0.08, 0.02, 0.35),
         ),
-        cv_core::CameraExtrinsics::new(
+        cv_core::Pose::new(
             Rotation3::from_euler_angles(0.03, 0.07, -0.02).into_inner(),
             Vector3::new(0.02, 0.06, 0.32),
         ),
-        cv_core::CameraExtrinsics::new(
+        cv_core::Pose::new(
             Rotation3::from_euler_angles(-0.04, -0.05, 0.04).into_inner(),
             Vector3::new(-0.03, -0.05, 0.33),
         ),
-        cv_core::CameraExtrinsics::new(
+        cv_core::Pose::new(
             Rotation3::from_euler_angles(0.07, 0.02, -0.06).into_inner(),
             Vector3::new(0.08, -0.02, 0.31),
         ),
@@ -73,7 +73,7 @@ fn benchmark_planar_calibration(c: &mut Criterion) {
 
 fn benchmark_projection_with_jacobians(c: &mut Criterion) {
     let intrinsics = cv_core::CameraIntrinsics::new(820.0, 790.0, 320.0, 240.0, 640, 480);
-    let extrinsics = cv_core::CameraExtrinsics::new(
+    let extrinsics = cv_core::Pose::new(
         Rotation3::from_euler_angles(0.08, -0.03, 0.02).into_inner(),
         Vector3::new(0.05, -0.08, 0.3),
     );

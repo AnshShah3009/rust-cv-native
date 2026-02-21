@@ -15,6 +15,9 @@ pub trait ComputeContext: Send + Sync {
     /// Wait for all pending operations to complete
     fn wait_idle(&self) -> Result<()>;
 
+    /// Get the index of the last submitted GPU operation
+    fn last_submission_index(&self) -> crate::SubmissionIndex;
+
     // --- Core Operations ---
 
     /// Execute a 2D convolution
@@ -56,6 +59,40 @@ pub trait ComputeContext: Send + Sync {
         dy: i32,
         ksize: usize,
     ) -> Result<(Tensor<u8, S>, Tensor<u8, S>)>;
+
+    /// Execute Canny edge detection
+    fn canny<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        low_threshold: f32,
+        high_threshold: f32,
+    ) -> Result<Tensor<u8, S>>;
+
+    /// Execute Hough line transform
+    fn hough_lines<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        rho: f32,
+        theta: f32,
+        threshold: u32,
+    ) -> Result<Vec<cv_core::HoughLine>>;
+
+    /// Execute Hough circle transform
+    fn hough_circles<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        min_radius: f32,
+        max_radius: f32,
+        threshold: u32,
+    ) -> Result<Vec<cv_core::HoughCircle>>;
+
+    /// Template matching
+    fn match_template<S: Storage<u8> + 'static, OS: Storage<f32> + 'static>(
+        &self,
+        image: &Tensor<u8, S>,
+        template: &Tensor<u8, S>,
+        method: TemplateMatchMethod,
+    ) -> Result<Tensor<f32, OS>>;
 
     /// Execute a morphological operation
     fn morphology<S: Storage<u8> + 'static>(
@@ -132,6 +169,13 @@ pub trait ComputeContext: Send + Sync {
         voxel_size: f32,
         truncation: f32,
     ) -> Result<()>;
+
+    /// Execute object detection (e.g., via a loaded ONNX/TensorRT model)
+    fn detect_objects<S: Storage<u8> + 'static>(
+        &self,
+        input: &Tensor<u8, S>,
+        threshold: f32,
+    ) -> Result<Vec<cv_core::Detection>>;
 
     fn tsdf_raycast<S: Storage<f32> + 'static>(
         &self,
@@ -304,6 +348,44 @@ pub trait ComputeContext: Send + Sync {
         mask: &mut Tensor<u32, S2>,
         params: &Mog2Params,
     ) -> Result<()>;
+
+    /// Compute disparity map from stereo pairs
+    fn stereo_match<S: Storage<u8> + 'static, OS: Storage<f32> + 'static>(
+        &self,
+        left: &Tensor<u8, S>,
+        right: &Tensor<u8, S>,
+        params: &StereoMatchParams,
+    ) -> Result<Tensor<f32, OS>>;
+
+    /// Triangulate 3D points from 2D correspondences
+    fn triangulate_points<S: Storage<f32> + 'static, OS: Storage<f32> + 'static>(
+        &self,
+        proj_left: &[[f32; 4]; 3],
+        proj_right: &[[f32; 4]; 3],
+        points_left: &Tensor<f32, S>,
+        points_right: &Tensor<f32, S>,
+    ) -> Result<Tensor<f32, OS>>;
+
+    /// Accelerated chessboard corner detection
+    fn find_chessboard_corners<S: Storage<u8> + 'static>(
+        &self,
+        image: &Tensor<u8, S>,
+        pattern_size: (usize, usize),
+    ) -> Result<Vec<cv_core::KeyPoint>>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StereoMatchParams {
+    pub method: StereoMatchMethod,
+    pub min_disparity: i32,
+    pub num_disparities: i32,
+    pub block_size: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StereoMatchMethod {
+    BlockMatching,
+    SemiGlobalMatching,
 }
 
 #[repr(C)]
@@ -359,8 +441,12 @@ pub enum BorderMode {
     Wrap,
 }
 
-/// A handle to a compute device and its queues
-pub struct Context {
-    backend: BackendType,
-    // future: wgpu::Device, wgpu::Queue, etc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateMatchMethod {
+    SqDiff,
+    SqDiffNormed,
+    Ccorr,
+    CcorrNormed,
+    Ccoeff,
+    CcoeffNormed,
 }

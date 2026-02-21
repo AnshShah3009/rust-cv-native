@@ -1,5 +1,5 @@
 use crate::{BackendType, Capability, ComputeBackend, DeviceId, QueueId, QueueType, Result};
-use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType, ColorConversion};
+use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType, ColorConversion, TemplateMatchMethod, StereoMatchParams};
 use cv_core::{Tensor, storage::Storage, TensorShape};
 use rayon::prelude::*;
 use wide::*;
@@ -143,11 +143,15 @@ impl ComputeContext for CpuBackend {
         Ok(())
     }
 
+    fn last_submission_index(&self) -> crate::SubmissionIndex {
+        crate::SubmissionIndex(0)
+    }
+
     fn convolve_2d<S: Storage<f32> + 'static>(
         &self,
         input: &Tensor<f32, S>,
         kernel: &Tensor<f32, S>,
-        border_mode: BorderMode,
+        _border_mode: BorderMode,
     ) -> Result<Tensor<f32, S>> {
         let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
         let k_data = kernel.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Kernel not on CPU".into()))?;
@@ -155,7 +159,7 @@ impl ComputeContext for CpuBackend {
         let (h, w) = input.shape.hw();
         let (kh, kw) = kernel.shape.hw();
         
-        let mut output_storage = S::new(input.shape.len(), 0.0);
+        let mut output_storage = S::new(input.shape.len(), 0.0).map_err(|e| crate::Error::MemoryError(e))?;
         let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         // Naive implementation for now, but parallelized
@@ -191,8 +195,8 @@ impl ComputeContext for CpuBackend {
         let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
         let (h, w) = input.shape.hw();
         
-        let mut gx_storage = S::new(input.shape.len(), 0);
-        let mut gy_storage = S::new(input.shape.len(), 0);
+        let mut gx_storage = S::new(input.shape.len(), 0).map_err(|e| crate::Error::MemoryError(e))?;
+        let mut gy_storage = S::new(input.shape.len(), 0).map_err(|e| crate::Error::MemoryError(e))?;
         let gx_slice = gx_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Gx output not on CPU".into()))?;
         let gy_slice = gy_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Gy output not on CPU".into()))?;
 
@@ -218,6 +222,79 @@ impl ComputeContext for CpuBackend {
         ))
     }
 
+    fn canny<S: Storage<u8> + 'static>(
+        &self,
+        _input: &Tensor<u8, S>,
+        _low_threshold: f32,
+        _high_threshold: f32,
+    ) -> Result<Tensor<u8, S>> {
+        Err(crate::Error::NotSupported("CPU canny not yet implemented in HAL (use imgproc version)".into()))
+    }
+
+    fn hough_lines<S: Storage<u8> + 'static>(
+        &self,
+        _input: &Tensor<u8, S>,
+        _rho: f32,
+        _theta: f32,
+        _threshold: u32,
+    ) -> Result<Vec<cv_core::HoughLine>> {
+        Err(crate::Error::NotSupported("CPU hough_lines not yet implemented in HAL (use imgproc version)".into()))
+    }
+
+    fn hough_circles<S: Storage<u8> + 'static>(
+        &self,
+        _input: &Tensor<u8, S>,
+        _min_radius: f32,
+        _max_radius: f32,
+        _threshold: u32,
+    ) -> Result<Vec<cv_core::HoughCircle>> {
+        Err(crate::Error::NotSupported("CPU hough_circles not yet implemented in HAL (use imgproc version)".into()))
+    }
+
+    fn match_template<S: Storage<u8> + 'static, OS: Storage<f32> + 'static>(
+        &self,
+        _image: &Tensor<u8, S>,
+        _template: &Tensor<u8, S>,
+        _method: TemplateMatchMethod,
+    ) -> Result<Tensor<f32, OS>> {
+        Err(crate::Error::NotSupported("CPU match_template not yet implemented in HAL (use imgproc version)".into()))
+    }
+
+    fn detect_objects<S: Storage<u8> + 'static>(
+        &self,
+        _input: &Tensor<u8, S>,
+        _threshold: f32,
+    ) -> Result<Vec<cv_core::Detection>> {
+        Err(crate::Error::NotSupported("CPU detect_objects not yet implemented".into()))
+    }
+
+    fn stereo_match<S: Storage<u8> + 'static, OS: Storage<f32> + 'static>(
+        &self,
+        _left: &Tensor<u8, S>,
+        _right: &Tensor<u8, S>,
+        _params: &StereoMatchParams,
+    ) -> Result<Tensor<f32, OS>> {
+        Err(crate::Error::NotSupported("CPU stereo_match not yet implemented in HAL (use cv-stereo)".into()))
+    }
+
+    fn triangulate_points<S: Storage<f32> + 'static, OS: Storage<f32> + 'static>(
+        &self,
+        _proj_left: &[[f32; 4]; 3],
+        _proj_right: &[[f32; 4]; 3],
+        _points_left: &Tensor<f32, S>,
+        _points_right: &Tensor<f32, S>,
+    ) -> Result<Tensor<f32, OS>> {
+        Err(crate::Error::NotSupported("CPU triangulate_points not yet implemented in HAL".into()))
+    }
+
+    fn find_chessboard_corners<S: Storage<u8> + 'static>(
+        &self,
+        _image: &Tensor<u8, S>,
+        _pattern_size: (usize, usize),
+    ) -> Result<Vec<cv_core::KeyPoint>> {
+        Err(crate::Error::NotSupported("CPU find_chessboard_corners not yet implemented in HAL".into()))
+    }
+
     fn dispatch<S: Storage<u8> + 'static>(
         &self,
         _name: &str,
@@ -238,7 +315,7 @@ impl ComputeContext for CpuBackend {
         let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
         let len = src.len();
         
-        let mut output_storage = S::new(len, 0);
+        let mut output_storage = S::new(len, 0).map_err(|e| crate::Error::MemoryError(e))?;
         let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         let thresh_v = f32x8::splat(thresh as f32);
@@ -313,15 +390,12 @@ impl ComputeContext for CpuBackend {
             return Ok(input.clone());
         }
 
-        let pool = cv_core::BufferPool::global();
-        let mut current_guarded = pool.get_guarded(src_data.len());
-        current_guarded.copy_from_slice(src_data);
-        
-        let mut next_guarded = pool.get_guarded(src_data.len());
+        let mut current = src_data.to_vec();
+        let mut next = vec![0u8; src_data.len()];
 
         for _ in 0..iterations {
-            let src = &*current_guarded;
-            next_guarded.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
+            let src = &current;
+            next.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
                 let y = y as isize;
                 let mut x = 0;
                 
@@ -377,20 +451,18 @@ impl ComputeContext for CpuBackend {
                     row_out[cx_idx] = val;
                 }
             });
-            // Manual swap to avoid moving out of guards
-            let tmp = current_guarded.take();
-            *current_guarded = next_guarded.take();
-            *next_guarded = tmp;
+            std::mem::swap(&mut current, &mut next);
         }
 
         let result = Tensor {
-            storage: S::from_vec(current_guarded.to_vec()),
+            storage: S::from_vec(current).map_err(|e| crate::Error::MemoryError(e))?,
             shape: input.shape,
             dtype: input.dtype,
             _phantom: std::marker::PhantomData,
         };
-        
+
         Ok(result)
+            
     }
 
     fn warp<S: Storage<u8> + 'static>(
@@ -403,7 +475,7 @@ impl ComputeContext for CpuBackend {
         let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
         let (h, w) = input.shape.hw();
         let (nw, nh) = (new_shape.0, new_shape.1);
-        let mut output_storage = S::new(nw * nh, 0);
+        let mut output_storage = S::new(nw * nh, 0).map_err(|e| crate::Error::MemoryError(e))?;
         let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         dst.par_chunks_mut(nw).enumerate().for_each(|(y, row_out)| {
@@ -454,7 +526,7 @@ impl ComputeContext for CpuBackend {
     ) -> Result<Tensor<f32, S>> {
         let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
         let (h, w) = input.shape.hw();
-        let mut output_storage = S::new(input.shape.len(), 0.0);
+        let mut output_storage = S::new(input.shape.len(), 0.0).map_err(|e| crate::Error::MemoryError(e))?;
         let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
         let r = (window_size / 2) as isize;
 
@@ -571,7 +643,7 @@ impl ComputeContext for CpuBackend {
 
                 let r2 = cv_core::RotatedRect::new(data[idx2 * 6], data[idx2 * 6 + 1], data[idx2 * 6 + 2], data[idx2 * 6 + 3], data[idx2 * 6 + 4]);
                 
-                if rotated_iou(&r1, &r2) > iou_threshold {
+                if cv_core::rotated_iou(&r1, &r2) > iou_threshold {
                     suppressed[idx2] = true;
                 }
             }
@@ -610,7 +682,7 @@ impl ComputeContext for CpuBackend {
                 if suppressed[idx2] { continue; }
 
                 let p2 = &polygons[idx2];
-                if polygon_iou_internal(p1, p2) > iou_threshold {
+                if cv_core::polygon_iou(p1, p2) > iou_threshold {
                     suppressed[idx2] = true;
                 }
             }
@@ -626,7 +698,7 @@ impl ComputeContext for CpuBackend {
     ) -> Result<Tensor<f32, S>> {
         let src = points.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Points not on CPU".into()))?;
         let num_points = points.shape.height;
-        let mut output_storage = S::new(num_points * 4, 0.0);
+        let mut output_storage = S::new(num_points * 4, 0.0).map_err(|e| crate::Error::MemoryError(e))?;
         let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         dst.par_chunks_mut(4).enumerate().for_each(|(i, point_out)| {
@@ -658,7 +730,7 @@ impl ComputeContext for CpuBackend {
         
         let src = points.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Points not on CPU".into()))?;
         let num_points = points.shape.height;
-        let mut normals_storage = S::new(num_points * 4, 0.0);
+        let mut normals_storage = S::new(num_points * 4, 0.0).map_err(|e| crate::Error::MemoryError(e))?;
         let dst = normals_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         // Simple CPU neighborhood PCA implementation
@@ -680,7 +752,7 @@ impl ComputeContext for CpuBackend {
             let p = pts[i];
             
             // Find neighbors
-            let mut neighbors = tree.nearest_neighbor_iter(&[p.x, p.y, p.z, 0.0])
+            let neighbors = tree.nearest_neighbor_iter(&[p.x, p.y, p.z, 0.0])
                 .take(k)
                 .map(|neighbor| Vector3::new(neighbor[0], neighbor[1], neighbor[2]))
                 .collect::<Vec<_>>();
@@ -750,7 +822,7 @@ impl ComputeContext for CpuBackend {
         let voxels = voxel_volume.storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Voxels not on CPU".into()))?;
 
         let (img_h, img_w) = depth_image.shape.hw();
-        let (vx, vy, vz) = (voxel_volume.shape.width, voxel_volume.shape.height, voxel_volume.shape.channels);
+        let (vx, vy, _vz) = (voxel_volume.shape.width, voxel_volume.shape.height, voxel_volume.shape.channels);
         
         let fx = intrinsics[0];
         let fy = intrinsics[1];
@@ -809,7 +881,7 @@ impl ComputeContext for CpuBackend {
         _voxel_size: f32,
         _truncation: f32,
     ) -> Result<Tensor<f32, S>> {
-        Err(crate::Error::NotSupported("CPU tsdf_raycast pending implementation".into()))
+        Err(crate::Error::NotSupported("CPU tsdf_raycast not yet implemented".into()))
     }
 
     fn tsdf_extract_mesh<S: Storage<f32> + 'static>(
@@ -819,18 +891,86 @@ impl ComputeContext for CpuBackend {
         _iso_level: f32,
         _max_triangles: u32,
     ) -> Result<Vec<crate::gpu_kernels::marching_cubes::Vertex>> {
-        Err(crate::Error::NotSupported("CPU tsdf_extract_mesh pending implementation".into()))
+        Err(crate::Error::NotSupported("CPU tsdf_extract_mesh not yet implemented".into()))
     }
 
     fn optical_flow_lk<S: Storage<f32> + 'static>(
         &self,
-        _prev_pyramid: &[Tensor<f32, S>],
-        _next_pyramid: &[Tensor<f32, S>],
-        _points: &[[f32; 2]],
-        _window_size: usize,
-        _max_iters: u32,
+        prev_pyramid: &[Tensor<f32, S>],
+        next_pyramid: &[Tensor<f32, S>],
+        points: &[[f32; 2]],
+        window_size: usize,
+        max_iters: u32,
     ) -> Result<Vec<[f32; 2]>> {
-        Err(crate::Error::NotSupported("CPU optical_flow_lk pending implementation".into()))
+        if prev_pyramid.is_empty() || next_pyramid.is_empty() {
+            return Err(crate::Error::InvalidInput("Optical flow requires non-empty pyramids".into()));
+        }
+        
+        // Single level implementation for CPU fallback
+        let prev = &prev_pyramid[0];
+        let next = &next_pyramid[0];
+        let prev_data = prev.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Prev not on CPU".into()))?;
+        let next_data = next.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Next not on CPU".into()))?;
+        let (h, w) = prev.shape.hw();
+        
+        let win = window_size as i32;
+        let half_win = win / 2;
+
+        let results: Vec<[f32; 2]> = points.par_iter().map(|&pt| {
+            let mut u = pt[0];
+            let mut v = pt[1];
+            
+            // Initial guess is previous position (no motion assumption)
+            // Ideally we'd use the pyramid to get a coarse guess.
+            
+            for _ in 0..max_iters {
+                let ix = u.round() as i32;
+                let iy = v.round() as i32;
+                
+                if ix - half_win < 0 || ix + half_win >= w as i32 || iy - half_win < 0 || iy + half_win >= h as i32 {
+                    break;
+                }
+
+                let mut g: nalgebra::Matrix2<f32> = nalgebra::Matrix2::zeros();
+                let mut b: nalgebra::Vector2<f32> = nalgebra::Vector2::zeros();
+
+                for dy in -half_win..=half_win {
+                    for dx in -half_win..=half_win {
+                        let x = ix + dx;
+                        let y = iy + dy;
+                        let idx = (y * w as i32 + x) as usize;
+                        
+                        // Spatial gradient on prev image
+                        let i_x = (prev_data[idx + 1] - prev_data[idx - 1]) * 0.5;
+                        let i_y = (prev_data[idx + w as usize] - prev_data[idx - w as usize]) * 0.5;
+                        
+                        // Temporal gradient
+                        // Ideally interpolate next at (u+dx, v+dy)
+                        let next_val = get_val_cpu(next_data, w, h, x, y); // Should be subpixel interpolated
+                        let i_t = next_val - prev_data[idx];
+
+                        g[(0, 0)] += i_x * i_x;
+                        g[(0, 1)] += i_x * i_y;
+                        g[(1, 0)] += i_x * i_y;
+                        g[(1, 1)] += i_y * i_y;
+
+                        b[0] -= i_x * i_t;
+                        b[1] -= i_y * i_t;
+                    }
+                }
+
+                if let Some(delta) = g.try_inverse().map(|inv| inv * b) {
+                    u += delta[0];
+                    v += delta[1];
+                    if delta.norm_squared() < 0.01 { break; }
+                } else {
+                    break;
+                }
+            }
+            [u, v]
+        }).collect();
+
+        Ok(results)
     }
 
     fn dense_icp_step<S: Storage<f32> + 'static>(
@@ -842,7 +982,7 @@ impl ComputeContext for CpuBackend {
         _max_dist: f32,
         _max_angle: f32,
     ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
-        Err(crate::Error::NotSupported("CPU dense_icp_step pending implementation".into()))
+        Err(crate::Error::NotSupported("CPU dense_icp_step not yet implemented".into()))
     }
 
     fn cvt_color<S: Storage<u8> + 'static>(
@@ -859,7 +999,7 @@ impl ComputeContext for CpuBackend {
                 if c != 3 {
                     return Err(crate::Error::InvalidInput("RgbToGray requires 3 channels".into()));
                 }
-                let mut output_storage = S::new(h * w, 0);
+                let mut output_storage = S::new(h * w, 0).map_err(|e| crate::Error::MemoryError(e))?;
                 let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
                 
                 dst.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
@@ -886,7 +1026,7 @@ impl ComputeContext for CpuBackend {
                 if c != 1 {
                     return Err(crate::Error::InvalidInput("GrayToRgb requires 1 channel".into()));
                 }
-                let mut output_storage = S::new(h * w * 3, 0);
+                let mut output_storage = S::new(h * w * 3, 0).map_err(|e| crate::Error::MemoryError(e))?;
                 let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
                 dst.par_chunks_mut(w * 3).enumerate().for_each(|(y, row_out)| {
@@ -918,7 +1058,7 @@ impl ComputeContext for CpuBackend {
         let c = input.shape.channels;
         let (nw, nh) = new_shape;
 
-        let mut output_storage = S::new(nw * nh * c, 0);
+        let mut output_storage = S::new(nw * nh * c, 0).map_err(|e| crate::Error::MemoryError(e))?;
         let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         let scale_x = w as f32 / nw as f32;
@@ -961,7 +1101,7 @@ impl ComputeContext for CpuBackend {
             return Err(crate::Error::NotSupported("Bilateral filter currently only for grayscale".into()));
         }
 
-        let mut output_storage = S::new(h * w, 0);
+        let mut output_storage = S::new(h * w, 0).map_err(|e| crate::Error::MemoryError(e))?;
         let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         let radius = if d <= 0 { (sigma_space * 1.5).ceil() as i32 } else { d / 2 };
@@ -1008,7 +1148,7 @@ impl ComputeContext for CpuBackend {
     ) -> Result<Tensor<u8, S>> {
         let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
         let (h, w) = input.shape.hw();
-        let mut output_storage = S::new(h * w, 0);
+        let mut output_storage = S::new(h * w, 0).map_err(|e| crate::Error::MemoryError(e))?;
         let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         dst.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
@@ -1086,7 +1226,7 @@ impl ComputeContext for CpuBackend {
     ) -> Result<Tensor<u8, S>> {
         let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
         let (h, w) = input.shape.hw();
-        let mut output_storage = S::new(h * w, 0);
+        let mut output_storage = S::new(h * w, 0).map_err(|e| crate::Error::MemoryError(e))?;
         let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         let kernel = gaussian_kernel_1d(sigma, k_size);
@@ -1108,7 +1248,7 @@ impl ComputeContext for CpuBackend {
         let src_a = a.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("A not on CPU".into()))?;
         let src_b = b.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("B not on CPU".into()))?;
         
-        let mut output_storage = S::new(a.shape.len(), T::zeroed());
+        let mut output_storage = S::new(a.shape.len(), T::zeroed()).map_err(|e| crate::Error::MemoryError(e))?;
         let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         // This requires T to support subtraction. Since we use Pod + Debug, 
@@ -1242,7 +1382,7 @@ impl ComputeContext for CpuBackend {
             }
         });
 
-        Ok(Tensor::from_vec(dst, dog_curr.shape))
+        Ok(Tensor::from_vec(dst, dog_curr.shape).map_err(|e| crate::Error::RuntimeError(e.to_string()))?)
     }
 
     fn compute_sift_descriptors<S: Storage<f32> + 'static>(
@@ -1399,7 +1539,7 @@ impl ComputeContext for CpuBackend {
     ) -> crate::Result<Tensor<f32, S>> {
         let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
         let (h, w) = input.shape.hw();
-        let mut output_storage = S::new(input.shape.len(), 0.0);
+        let mut output_storage = S::new(input.shape.len(), 0.0).map_err(|e| crate::Error::MemoryError(e))?;
         let dst = output_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         let k2 = k * k;
@@ -1442,13 +1582,13 @@ impl ComputeContext for CpuBackend {
         let src = input.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("Input not on CPU".into()))?;
         let (h, w) = input.shape.hw();
         
-        let mut lx_storage = S::new(input.shape.len(), 0.0);
-        let mut ly_storage = S::new(input.shape.len(), 0.0);
-        let mut ldet_storage = S::new(input.shape.len(), 0.0);
+        let mut lx_storage = S::new(input.shape.len(), 0.0).map_err(|e| crate::Error::MemoryError(e))?;
+        let mut ly_storage = S::new(input.shape.len(), 0.0).map_err(|e| crate::Error::MemoryError(e))?;
+        let mut ldet_storage = S::new(input.shape.len(), 0.0).map_err(|e| crate::Error::MemoryError(e))?;
         
-        let lx_slice = lx_storage.as_mut_slice().unwrap();
-        let ly_slice = ly_storage.as_mut_slice().unwrap();
-        let ldet_slice = ldet_storage.as_mut_slice().unwrap();
+        let lx_slice = lx_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+        let ly_slice = ly_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
+        let ldet_slice = ldet_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         let get_val = |x: i32, y: i32| -> f32 {
             let cx = x.clamp(0, w as i32 - 1) as usize;
@@ -1508,7 +1648,7 @@ impl ComputeContext for CpuBackend {
 
         if mags.is_empty() { return Ok(0.03); }
         
-        mags.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        mags.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let idx = (mags.len() as f32 * 0.7) as usize;
         Ok(mags[idx.min(mags.len() - 1)])
     }
@@ -1522,8 +1662,8 @@ impl ComputeContext for CpuBackend {
     ) -> crate::Result<Tensor<f32, S>> {
         let x_slice = x.storage.as_slice().ok_or_else(|| crate::Error::MemoryError("X not on CPU".into()))?;
         let rows = row_ptr.len() - 1;
-        let mut y_storage = S::new(rows, 0.0);
-        let y_slice = y_storage.as_mut_slice().unwrap();
+        let mut y_storage = S::new(rows, 0.0).map_err(|e| crate::Error::MemoryError(e))?;
+        let y_slice = y_storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         y_slice.par_iter_mut().enumerate().for_each(|(i, val)| {
             let start = row_ptr[i] as usize;
@@ -1555,7 +1695,7 @@ impl ComputeContext for CpuBackend {
         let mask_data: &mut [u32] = mask.storage.as_mut_slice().ok_or_else(|| crate::Error::MemoryError("Mask not on CPU".into()))?;
         
         let width = params.width as usize;
-        let height = params.height as usize;
+        let _height = params.height as usize;
         let n_mixtures = params.n_mixtures as usize;
         let alpha = params.alpha;
         let var_threshold = params.var_threshold;
@@ -1670,87 +1810,3 @@ impl CpuBackend {
     }
 }
 
-fn rotated_iou(r1: &cv_core::RotatedRect, r2: &cv_core::RotatedRect) -> f32 {
-    let mut p1 = cv_core::Polygon::new(r1.points().to_vec());
-    let mut p2 = cv_core::Polygon::new(r2.points().to_vec());
-    p1.ensure_counter_clockwise();
-    p2.ensure_counter_clockwise();
-    polygon_iou_internal(&p1, &p2)
-}
-
-fn polygon_iou_internal(p1: &cv_core::Polygon, p2: &cv_core::Polygon) -> f32 {
-    let inter_area = intersection_area_polygons(p1, p2);
-    let a1 = p1.unsigned_area();
-    let a2 = p2.unsigned_area();
-    if inter_area <= 0.0 {
-        return 0.0;
-    }
-    let union_area = a1 + a2 - inter_area;
-    inter_area / union_area
-}
-
-fn intersection_area_polygons(p1: &cv_core::Polygon, p2: &cv_core::Polygon) -> f32 {
-    // Sutherland-Hodgman clipping for generic convex polygons
-    let pts1 = &p1.points;
-    let pts2 = &p2.points;
-
-    if pts1.len() < 3 || pts2.len() < 3 { return 0.0; }
-
-    let mut poly = pts1.clone();
-
-    // Clip pts1 against each edge of pts2
-    for i in 0..pts2.len() {
-        let edge_p1 = pts2[i];
-        let edge_p2 = pts2[(i + 1) % pts2.len()];
-
-        let mut next_poly = Vec::new();
-        if poly.is_empty() { return 0.0; }
-
-        for j in 0..poly.len() {
-            let cur = poly[j];
-            let prev = poly[(j + poly.len() - 1) % poly.len()];
-
-            let is_cur_inside = is_inside(edge_p1, edge_p2, cur);
-            let is_prev_inside = is_inside(edge_p1, edge_p2, prev);
-
-            if is_cur_inside {
-                if !is_prev_inside {
-                    next_poly.push(intersect(prev, cur, edge_p1, edge_p2));
-                }
-                next_poly.push(cur);
-            } else if is_prev_inside {
-                next_poly.push(intersect(prev, cur, edge_p1, edge_p2));
-            }
-        }
-        poly = next_poly;
-    }
-
-    if poly.len() < 3 { return 0.0; }
-    let mut area = 0.0;
-    for i in 0..poly.len() {
-        let p1 = poly[i];
-        let p2 = poly[(i + 1) % poly.len()];
-        area += p1[0] * p2[1] - p2[0] * p1[1];
-    }
-    area.abs() * 0.5
-}
-
-fn is_inside(p1: [f32; 2], p2: [f32; 2], p: [f32; 2]) -> bool {
-    (p2[0] - p1[0]) * (p[1] - p1[1]) - (p2[1] - p1[1]) * (p[0] - p1[0]) >= 0.0
-}
-
-fn intersect(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> [f32; 2] {
-    let a1 = b[1] - a[1];
-    let b1 = a[0] - b[0];
-    let c1 = a1 * a[0] + b1 * a[1];
-
-    let a2 = d[1] - c[1];
-    let b2 = c[0] - d[0];
-    let c2 = a2 * c[0] + b2 * c[1];
-
-    let det = a1 * b2 - a2 * b1;
-    if det.abs() < 1e-6 {
-        return a; // Parallel
-    }
-    [(b2 * c1 - b1 * c2) / det, (a1 * c2 - a2 * c1) / det]
-}

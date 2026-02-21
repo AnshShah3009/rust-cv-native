@@ -25,7 +25,13 @@ pub fn init_global_thread_pool(num_threads: Option<usize>) -> Result<(), String>
             builder = builder.num_threads(n);
         }
 
-        builder.build_global().map_err(|e| e.to_string())
+        builder.build_global().map_err(|e| e.to_string()).or_else(|e| {
+            if e.contains("already initialized") {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        })
     });
     res.clone()
 }
@@ -53,20 +59,20 @@ fn read_cpu_threads_from_env() -> Result<Option<usize>, String> {
 /// A size-bucketed global buffer pool for reusing memory allocations.
 pub struct BufferPool {
     // Buckets: 0: <64KB, 1: <1MB, 2: <16MB, 3: >=16MB
-    buckets: [Mutex<Vec<Vec<u8>>>; 4],
+    // Each bucket is sharded into 8 slots to reduce Mutex contention.
+    buckets: [[Mutex<Vec<Vec<u8>>>; 8]; 4],
 }
 
 static GLOBAL_BUFFER_POOL: OnceLock<BufferPool> = OnceLock::new();
 
 impl BufferPool {
     pub fn global() -> &'static self::BufferPool {
-        GLOBAL_BUFFER_POOL.get_or_init(|| BufferPool {
-            buckets: [
-                Mutex::new(Vec::new()),
-                Mutex::new(Vec::new()),
-                Mutex::new(Vec::new()),
-                Mutex::new(Vec::new()),
-            ],
+        GLOBAL_BUFFER_POOL.get_or_init(|| {
+            BufferPool {
+                buckets: std::array::from_fn(|_| {
+                    std::array::from_fn(|_| Mutex::new(Vec::new()))
+                })
+            }
         })
     }
 
@@ -82,18 +88,41 @@ impl BufferPool {
         }
     }
 
+    fn get_shard_index() -> usize {
+        // Simple hash-based sharding using thread ID or similar
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        std::thread::current().id().hash(&mut hasher);
+        (hasher.finish() % 8) as usize
+    }
+
     /// Get a buffer of at least `min_size` bytes.
     pub fn get(&self, min_size: usize) -> Vec<u8> {
-        let idx = Self::get_bucket_index(min_size);
+        let bucket_idx = Self::get_bucket_index(min_size);
+        let shard_idx = Self::get_shard_index();
         
-        // Try requested bucket and then larger buckets
-        for i in idx..4 {
-            if let Ok(mut bucket) = self.buckets[i].lock() {
-                // Find the first buffer that meets the capacity requirement
+        // Try preferred shard first, then linear search others in same bucket
+        for i in 0..8 {
+            let s = (shard_idx + i) % 8;
+            if let Ok(mut bucket) = self.buckets[bucket_idx][s].try_lock() {
                 if let Some(pos) = bucket.iter().position(|b| b.capacity() >= min_size) {
                     let mut buf = bucket.swap_remove(pos);
                     buf.clear();
                     return buf;
+                }
+            }
+        }
+        
+        // Fallback to larger buckets if current one is empty
+        for b in (bucket_idx + 1)..4 {
+            for s in 0..8 {
+                if let Ok(mut bucket) = self.buckets[b][s].try_lock() {
+                    if let Some(pos) = bucket.iter().position(|b| b.capacity() >= min_size) {
+                        let mut buf = bucket.swap_remove(pos);
+                        buf.clear();
+                        return buf;
+                    }
                 }
             }
         }
@@ -106,9 +135,11 @@ impl BufferPool {
         let cap = buf.capacity();
         if cap == 0 { return; }
         
-        let idx = Self::get_bucket_index(cap);
-        if let Ok(mut bucket) = self.buckets[idx].lock() {
-            if bucket.len() < 16 { // Limit per-bucket size
+        let bucket_idx = Self::get_bucket_index(cap);
+        let shard_idx = Self::get_shard_index();
+        
+        if let Ok(mut bucket) = self.buckets[bucket_idx][shard_idx].lock() {
+            if bucket.len() < 32 { // Sharded limit
                 buf.clear();
                 bucket.push(buf);
             }
@@ -136,15 +167,15 @@ impl<'a> DropBufferPool<'a> {
     }
 
     pub fn buffer(&self) -> &Vec<u8> {
-        self.buffer.as_ref().unwrap()
+        self.buffer.as_ref().expect("DropBufferPool: buffer accessed after being taken (use-after-move logic error)")
     }
 
     pub fn buffer_mut(&mut self) -> &mut Vec<u8> {
-        self.buffer.as_mut().unwrap()
+        self.buffer.as_mut().expect("DropBufferPool: buffer accessed after being taken (use-after-move logic error)")
     }
 
     pub fn take(mut self) -> Vec<u8> {
-        self.buffer.take().unwrap()
+        self.buffer.take().expect("DropBufferPool: buffer already taken")
     }
 }
 

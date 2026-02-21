@@ -35,11 +35,21 @@ pub enum StereoError {
 
     #[error("Rectification error: {0}")]
     RectificationError(String),
+
+    #[error("Core error: {0}")]
+    CoreError(#[from] cv_core::Error),
 }
+
+use cv_runtime::orchestrator::RuntimeRunner;
 
 /// Stereo matching algorithm trait
 pub trait StereoMatcher {
     fn compute(&self, left: &GrayImage, right: &GrayImage) -> Result<DisparityMap>;
+}
+
+/// Stereo matching algorithm trait with explicit context
+pub trait StereoMatcherCtx {
+    fn compute_ctx(&self, left: &GrayImage, right: &GrayImage, group: &RuntimeRunner) -> Result<DisparityMap>;
 }
 
 /// Disparity map representation

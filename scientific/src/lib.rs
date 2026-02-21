@@ -42,6 +42,26 @@ pub mod multiview;
 pub mod point_cloud;
 pub mod special;
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Decomposition failed: {0}")]
+    DecompositionError(String),
+    
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+    
+    #[error("Mathematical error: {0}")]
+    MathError(String),
+
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+
+    #[error("Core error: {0}")]
+    CoreError(#[from] cv_core::Error),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
 pub use geometry::*;
 pub use integrate::*;
 pub use jit::*;
@@ -85,13 +105,13 @@ impl Interp1d {
         if x_val <= self.x[0] {
             return self.y[0];
         }
-        if x_val >= *self.x.last().unwrap() {
-            return *self.y.last().unwrap();
+        if x_val >= *self.x.last().expect("Interp1d x is empty") {
+            return *self.y.last().expect("Interp1d y is empty");
         }
 
         let idx = self
             .x
-            .binary_search_by(|v| v.partial_cmp(&x_val).unwrap())
+            .binary_search_by(|v| v.partial_cmp(&x_val).expect("NaN in Interp1d"))
             .unwrap_or_else(|pos| pos - 1);
         let t = (x_val - self.x[idx]) / (self.x[idx + 1] - self.x[idx]);
         lerp(self.y[idx], self.y[idx + 1], t)

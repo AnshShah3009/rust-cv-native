@@ -26,14 +26,11 @@ pub enum GpuStereoAlgorithm {
 
 impl GpuStereoMatcher {
     pub async fn new(algorithm: GpuStereoAlgorithm) -> Result<Self> {
-        let ctx = GpuContext::global().ok_or_else(|| {
+        let global_ctx = GpuContext::global().map_err(|_| {
             StereoError::InvalidParameters("GPU not available or not initialized".to_string())
         })?;
         
-        let ctx = Arc::new(GpuContext {
-            device: ctx.device.clone(),
-            queue: ctx.queue.clone(),
-        });
+        let ctx = Arc::new(global_ctx.clone());
 
         // Create bind group layout for stereo parameters
         let params_bind_group_layout = 

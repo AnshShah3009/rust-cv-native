@@ -128,7 +128,7 @@ pub fn transform_points(
         pass.dispatch_workgroups(x, 1, 1);
     }
     ctx.submit(encoder);
-    ctx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    let _ = ctx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
 
     Ok(Tensor {
         storage: GpuStorage::from_buffer(Arc::new(output_buffer), num_points * 4),
@@ -183,7 +183,7 @@ pub fn compute_normals(
         pass.dispatch_workgroups(x, 1, 1);
     }
     ctx.submit(encoder);
-    ctx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    let _ = ctx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
 
     Ok(Tensor {
         storage: GpuStorage::from_buffer(Arc::new(output_buffer), num_points * 4),

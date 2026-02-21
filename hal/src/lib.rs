@@ -16,7 +16,7 @@ pub mod image;
 pub use gpu::*;
 pub use gpu_kernels::*;
 
-pub use backend::{BackendType, Capability, ComputeBackend, DeviceId, QueueId, QueueType};
+pub use backend::{BackendType, Capability, ComputeBackend, DeviceId, QueueId, QueueType, SubmissionIndex};
 pub use cpu::*;
 pub use device::*;
 pub use gpu_utils::{
@@ -50,6 +50,12 @@ pub enum Error {
 
     #[error("Invalid input: {0}")]
     InvalidInput(String),
+
+    #[error("Runtime error: {0}")]
+    RuntimeError(String),
+
+    #[error("Core error: {0}")]
+    CoreError(#[from] cv_core::Error),
 }
 
 impl Error {

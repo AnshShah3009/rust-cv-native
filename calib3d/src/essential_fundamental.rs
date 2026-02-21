@@ -1,12 +1,12 @@
 use crate::{CalibError, Result};
-use cv_core::{CameraExtrinsics, CameraIntrinsics};
+use cv_core::{Pose, CameraIntrinsics};
 use nalgebra::{DMatrix, Matrix3, Point2, Vector3};
 
 /// Compute Essential matrix from camera extrinsics (rotation and translation).
 ///
 /// The essential matrix is derived from: E = [t]_x * R
 /// where [t]_x is the skew-symmetric matrix of the translation vector.
-pub fn essential_from_extrinsics(extrinsics: &CameraExtrinsics) -> Matrix3<f64> {
+pub fn essential_from_extrinsics(extrinsics: &Pose) -> Matrix3<f64> {
     use cv_core::skew_symmetric;
     skew_symmetric(&extrinsics.translation) * extrinsics.rotation
 }

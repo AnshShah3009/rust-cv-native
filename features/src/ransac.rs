@@ -3,7 +3,7 @@
 //! RANSAC is used to robustly estimate geometric transformations
 //! (homography, fundamental matrix) from feature matches with outliers.
 
-use cv_core::{Matches, FeatureMatch, RobustModel, RobustConfig, Ransac};
+use cv_core::{Matches, RobustModel, RobustConfig, Ransac};
 use nalgebra::{Matrix3, Vector3};
 
 pub type RansacConfig = RobustConfig;
@@ -22,7 +22,7 @@ impl RobustModel<MatchPair> for HomographyEstimator {
     fn min_sample_size(&self) -> usize { 4 }
 
     fn estimate(&self, data: &[&MatchPair]) -> Option<Self::Model> {
-        let mut a = vec![0.0f64; 8 * 9];
+        let mut a = vec![0.0f64; data.len() * 2 * 9];
         for (i, m) in data.iter().enumerate() {
             let (x1, y1) = m.src;
             let (x2, y2) = m.dst;
@@ -33,7 +33,7 @@ impl RobustModel<MatchPair> for HomographyEstimator {
             a[row2 * 9 + 3] = -x1; a[row2 * 9 + 4] = -y1; a[row2 * 9 + 5] = -1.0;
             a[row2 * 9 + 6] = y2 * x1; a[row2 * 9 + 7] = y2 * y1; a[row2 * 9 + 8] = y2;
         }
-        solve_dlt_homography(&a)
+        solve_dlt_homography(&a, data.len() * 2)
     }
 
     fn compute_error(&self, model: &Self::Model, data: &MatchPair) -> f64 {
@@ -57,7 +57,7 @@ impl RobustModel<MatchPair> for FundamentalEstimator {
     fn min_sample_size(&self) -> usize { 8 }
 
     fn estimate(&self, data: &[&MatchPair]) -> Option<Self::Model> {
-        let mut a = vec![0.0f64; 8 * 9];
+        let mut a = vec![0.0f64; data.len() * 9];
         for (i, m) in data.iter().enumerate() {
             let (x1, y1) = m.src;
             let (x2, y2) = m.dst;
@@ -65,7 +65,7 @@ impl RobustModel<MatchPair> for FundamentalEstimator {
             a[i * 9 + 3] = y2 * x1; a[i * 9 + 4] = y2 * y1; a[i * 9 + 5] = y2;
             a[i * 9 + 6] = x1; a[i * 9 + 7] = y1; a[i * 9 + 8] = 1.0;
         }
-        solve_dlt_fundamental(&a)
+        solve_dlt_fundamental(&a, data.len())
     }
 
     fn compute_error(&self, model: &Self::Model, data: &MatchPair) -> f64 {
@@ -164,16 +164,23 @@ fn compute_homography_4pt(
     // Solve using simple least squares via pseudo-inverse approach
     // For simplicity, we'll use a basic implementation
     // In practice, you'd want to use a proper SVD implementation
-    let h = solve_dlt_homography(&a)?;
+    let h = solve_dlt_homography(&a, 4)?;
 
     Some(h)
 }
 
 /// Solve DLT for homography using SVD
-fn solve_dlt_homography(a: &[f64]) -> Option<Matrix3<f64>> {
-    let mut matrix = nalgebra::DMatrix::from_row_slice(8, 9, a);
-    let svd = matrix.svd(false, true);
+fn solve_dlt_homography(a: &[f64], n_rows: usize) -> Option<Matrix3<f64>> {
+    let mut matrix = nalgebra::DMatrix::from_row_slice(n_rows, 9, a);
     
+    // If underdetermined, pad with zeros to ensure we get 9 singular vectors
+    if n_rows < 9 {
+        let mut padded = nalgebra::DMatrix::zeros(9, 9);
+        padded.slice_mut((0, 0), (n_rows, 9)).copy_from(&matrix);
+        matrix = padded;
+    }
+    
+    let svd = matrix.svd(false, true);
     let v_t = svd.v_t?;
     let h_vec = v_t.row(8);
     
@@ -222,16 +229,23 @@ fn compute_fundamental_8pt(
     }
 
     // Solve using simple approach (placeholder)
-    let f = solve_dlt_fundamental(&a)?;
+    let f = solve_dlt_fundamental(&a, 8)?;
 
     Some(f)
 }
 
 /// Solve DLT for fundamental matrix using SVD
-fn solve_dlt_fundamental(a: &[f64]) -> Option<Matrix3<f64>> {
-    let mut matrix = nalgebra::DMatrix::from_row_slice(8, 9, a);
-    let svd = matrix.svd(false, true);
+fn solve_dlt_fundamental(a: &[f64], n_rows: usize) -> Option<Matrix3<f64>> {
+    let mut matrix = nalgebra::DMatrix::from_row_slice(n_rows, 9, a);
     
+    // If underdetermined, pad with zeros to ensure we get 9 singular vectors
+    if n_rows < 9 {
+        let mut padded = nalgebra::DMatrix::zeros(9, 9);
+        padded.slice_mut((0, 0), (n_rows, 9)).copy_from(&matrix);
+        matrix = padded;
+    }
+    
+    let svd = matrix.svd(false, true);
     let v_t = svd.v_t?;
     let f_vec = v_t.row(8);
     

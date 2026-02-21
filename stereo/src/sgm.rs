@@ -1,11 +1,10 @@
-//! Semi-Global Matching (SGM) Stereo Algorithm
-//!
-//! More accurate than block matching by enforcing smoothness constraints
-//! along multiple directions. Based on Hirschmuller's SGM algorithm.
-
-use crate::{DisparityMap, Result, StereoError};
+use crate::{DisparityMap, Result, StereoError, StereoMatcher, StereoMatcherCtx};
 use image::GrayImage;
 use rayon::prelude::*;
+use cv_runtime::orchestrator::RuntimeRunner;
+use cv_hal::compute::ComputeDevice;
+use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
+use cv_core::{Tensor, storage::Storage};
 
 /// SGM stereo matcher
 pub struct SgmMatcher {
@@ -40,6 +39,64 @@ impl Default for SgmMatcher {
     }
 }
 
+impl StereoMatcher for SgmMatcher {
+    fn compute(&self, left: &GrayImage, right: &GrayImage) -> Result<DisparityMap> {
+        let runner = cv_runtime::best_runner();
+        self.compute_ctx(left, right, &runner)
+    }
+}
+
+impl StereoMatcherCtx for SgmMatcher {
+    fn compute_ctx(&self, left: &GrayImage, right: &GrayImage, group: &RuntimeRunner) -> Result<DisparityMap> {
+        if left.width() != right.width() || left.height() != right.height() {
+            return Err(StereoError::SizeMismatch(
+                "Left and right images must have the same dimensions".to_string(),
+            ));
+        }
+
+        let width = left.width() as usize;
+        let height = left.height() as usize;
+        let num_disparities = (self.max_disparity - self.min_disparity + 1) as usize;
+
+        // Check for GPU acceleration
+        if let ComputeDevice::Gpu(gpu) = group.device() {
+            if let Ok(res) = self.compute_gpu(gpu, left, right) {
+                return Ok(res);
+            }
+        }
+
+        // Step 1: Compute pixel-wise matching costs (Census or SAD)
+        let cost_volume = self.compute_matching_costs(left, right);
+
+        // Step 2: Aggregate costs along multiple paths
+        let aggregated_costs = self.aggregate_costs(&cost_volume, width, height, num_disparities);
+
+        // Step 3: Winner-take-all to select disparities
+        let mut disparity = DisparityMap::new(
+            left.width(),
+            left.height(),
+            self.min_disparity,
+            self.max_disparity,
+        );
+
+        group.run(|| {
+            disparity
+                .data
+                .par_chunks_mut(width)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    for (x, px) in row.iter_mut().enumerate() {
+                        let best_d =
+                            self.find_best_disparity(&aggregated_costs, x, y, width, num_disparities);
+                        *px = best_d as f32;
+                    }
+                });
+        });
+
+        Ok(disparity)
+    }
+}
+
 impl SgmMatcher {
     pub fn new() -> Self {
         Self::default()
@@ -57,44 +114,34 @@ impl SgmMatcher {
         self
     }
 
-    pub fn compute(&self, left: &GrayImage, right: &GrayImage) -> Result<DisparityMap> {
-        if left.width() != right.width() || left.height() != right.height() {
-            return Err(StereoError::SizeMismatch(
-                "Left and right images must have the same dimensions".to_string(),
-            ));
-        }
-
-        let width = left.width() as usize;
-        let height = left.height() as usize;
-        let num_disparities = (self.max_disparity - self.min_disparity + 1) as usize;
-
-        // Step 1: Compute pixel-wise matching costs (Census or SAD)
-        let cost_volume = self.compute_matching_costs(left, right);
-
-        // Step 2: Aggregate costs along multiple paths
-        let aggregated_costs = self.aggregate_costs(&cost_volume, width, height, num_disparities);
-
-        // Step 3: Winner-take-all to select disparities
-        let mut disparity = DisparityMap::new(
-            left.width(),
-            left.height(),
-            self.min_disparity,
-            self.max_disparity,
-        );
-
-        disparity
-            .data
-            .par_chunks_mut(width)
-            .enumerate()
-            .for_each(|(y, row)| {
-                for (x, px) in row.iter_mut().enumerate() {
-                    let best_d =
-                        self.find_best_disparity(&aggregated_costs, x, y, width, num_disparities);
-                    *px = best_d as f32;
-                }
-            });
-
-        Ok(disparity)
+    fn compute_gpu(&self, gpu: &cv_hal::gpu::GpuContext, left: &GrayImage, right: &GrayImage) -> cv_hal::Result<DisparityMap> {
+        use cv_hal::context::{ComputeContext, StereoMatchParams, StereoMatchMethod};
+        
+        let l_tensor = cv_core::CpuTensor::from_vec(left.as_raw().to_vec(), cv_core::TensorShape::new(1, left.height() as usize, left.width() as usize))
+            .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+        let r_tensor = cv_core::CpuTensor::from_vec(right.as_raw().to_vec(), cv_core::TensorShape::new(1, right.height() as usize, right.width() as usize))
+            .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+            
+        let l_gpu = l_tensor.to_gpu_ctx(gpu)?;
+        let r_gpu = r_tensor.to_gpu_ctx(gpu)?;
+        
+        let params = StereoMatchParams {
+            method: StereoMatchMethod::SemiGlobalMatching,
+            min_disparity: self.min_disparity,
+            num_disparities: self.max_disparity - self.min_disparity,
+            block_size: 1, // SGM is pixel-wise usually
+        };
+        
+        let res_gpu: Tensor<f32, cv_hal::storage::GpuStorage<f32>> = gpu.stereo_match(&l_gpu, &r_gpu, &params)?;
+        let res_cpu = res_gpu.to_cpu_ctx(gpu)?;
+        
+        Ok(DisparityMap {
+            data: res_cpu.storage.as_slice().unwrap().to_vec(),
+            width: left.width(),
+            height: left.height(),
+            min_disparity: self.min_disparity,
+            max_disparity: self.max_disparity,
+        })
     }
 
     fn compute_matching_costs(&self, left: &GrayImage, right: &GrayImage) -> Vec<u32> {

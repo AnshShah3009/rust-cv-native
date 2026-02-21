@@ -3,7 +3,7 @@
 //! Edge-preserving smoothing filter that uses both spatial and range (intensity) distance.
 
 use rayon::prelude::*;
-use cv_runtime::orchestrator::{ResourceGroup, scheduler};
+use cv_runtime::orchestrator::RuntimeRunner;
 
 /// Bilateral filter parameters
 #[derive(Debug, Clone)]
@@ -51,16 +51,11 @@ pub fn bilateral_filter_depth(
     height: u32,
     params: BilateralFilterParams,
 ) -> Vec<f32> {
-    if let Ok(s) = scheduler() {
-        if let Ok(group) = s.get_default_group() {
-            return bilateral_filter_depth_ctx(depth, width, height, params, &group);
-        }
-    }
-    
-    // Fallback if scheduler fails
-    let mut output = vec![0.0f32; depth.len()];
-    bilateral_filter_depth_internal(depth, &mut output, width, height, params);
-    output
+    let runner = match cv_runtime::scheduler().and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)) {
+        Ok(group) => cv_runtime::RuntimeRunner::Group(group),
+        Err(_) => cv_runtime::default_runner(),
+    };
+    bilateral_filter_depth_ctx(depth, width, height, params, &runner)
 }
 
 fn bilateral_filter_depth_internal(
@@ -134,7 +129,7 @@ pub fn bilateral_filter_depth_ctx(
     width: u32,
     height: u32,
     params: BilateralFilterParams,
-    group: &ResourceGroup,
+    group: &RuntimeRunner,
 ) -> Vec<f32> {
     group.run(|| {
         let mut output = vec![0.0f32; depth.len()];
@@ -150,15 +145,11 @@ pub fn bilateral_filter_rgb(
     height: u32,
     params: BilateralFilterParams,
 ) -> Vec<u8> {
-    if let Ok(s) = scheduler() {
-        if let Ok(group) = s.get_default_group() {
-            return bilateral_filter_rgb_ctx(image, width, height, params, &group);
-        }
-    }
-    
-    let mut output = vec![0u8; image.len()];
-    bilateral_filter_rgb_internal(image, &mut output, width, height, params);
-    output
+    let runner = match cv_runtime::scheduler().and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)) {
+        Ok(group) => cv_runtime::RuntimeRunner::Group(group),
+        Err(_) => cv_runtime::default_runner(),
+    };
+    bilateral_filter_rgb_ctx(image, width, height, params, &runner)
 }
 
 fn bilateral_filter_rgb_internal(
@@ -241,7 +232,7 @@ pub fn bilateral_filter_rgb_ctx(
     width: u32,
     height: u32,
     params: BilateralFilterParams,
-    group: &ResourceGroup,
+    group: &RuntimeRunner,
 ) -> Vec<u8> {
     group.run(|| {
         let mut output = vec![0u8; image.len()];
@@ -258,15 +249,11 @@ pub fn joint_bilateral_filter(
     height: u32,
     params: BilateralFilterParams,
 ) -> Vec<f32> {
-    if let Ok(s) = scheduler() {
-        if let Ok(group) = s.get_default_group() {
-            return joint_bilateral_filter_ctx(depth, guidance, width, height, params, &group);
-        }
-    }
-    
-    let mut output = vec![0.0f32; depth.len()];
-    joint_bilateral_filter_internal(depth, guidance, &mut output, width, height, params);
-    output
+    let runner = match cv_runtime::scheduler().and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)) {
+        Ok(group) => cv_runtime::RuntimeRunner::Group(group),
+        Err(_) => cv_runtime::default_runner(),
+    };
+    joint_bilateral_filter_ctx(depth, guidance, width, height, params, &runner)
 }
 
 fn joint_bilateral_filter_internal(
@@ -361,7 +348,7 @@ pub fn joint_bilateral_filter_ctx(
     width: u32,
     height: u32,
     params: BilateralFilterParams,
-    group: &ResourceGroup,
+    group: &RuntimeRunner,
 ) -> Vec<f32> {
     group.run(|| {
         let mut output = vec![0.0f32; depth.len()];

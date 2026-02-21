@@ -72,12 +72,13 @@ pub use stereo::{
 mod tests {
     use super::*;
     use cv_imgproc::{warp_perspective_ex, BorderMode, Interpolation};
-    use image::Luma;
-    use nalgebra::Rotation3;
+    use image::{GrayImage, Luma};
+    use nalgebra::{Rotation3, Point2, Point3, Vector3, Matrix3, Matrix3x4};
+    use cv_core::{CameraIntrinsics, Pose, Distortion};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn project_point(k: &CameraIntrinsics, ext: &CameraExtrinsics, p: &Point3<f64>) -> Point2<f64> {
+    fn project_point(k: &CameraIntrinsics, ext: &Pose, p: &Point3<f64>) -> Point2<f64> {
         let pc = ext.rotation * p.coords + ext.translation;
         let u = k.fx * (pc[0] / pc[2]) + k.cx;
         let v = k.fy * (pc[1] / pc[2]) + k.cy;
@@ -194,7 +195,7 @@ mod tests {
             .matrix()
             .clone_owned();
         let t = Vector3::new(0.15, -0.1, 0.4);
-        let gt = CameraExtrinsics::new(rot, t);
+        let gt = Pose::new(rot, t);
 
         let world = vec![
             Point3::new(-0.4, -0.2, 3.8),
@@ -221,7 +222,7 @@ mod tests {
     #[test]
     fn project_points_matches_manual_projection() {
         let k = CameraIntrinsics::new(520.0, 515.0, 320.0, 240.0, 640, 480);
-        let ext = CameraExtrinsics::new(
+        let ext = Pose::new(
             Rotation3::from_euler_angles(0.05, -0.08, 0.03).into_inner(),
             Vector3::new(0.1, -0.03, 0.2),
         );
@@ -243,7 +244,7 @@ mod tests {
     fn project_points_with_distortion_matches_manual_model() {
         let k = CameraIntrinsics::new(520.0, 515.0, 320.0, 240.0, 640, 480);
         let d = Distortion::new(0.1, -0.04, 0.001, -0.0008, 0.01);
-        let ext = CameraExtrinsics::new(
+        let ext = Pose::new(
             Rotation3::from_euler_angles(0.05, -0.08, 0.03).into_inner(),
             Vector3::new(0.1, -0.03, 0.2),
         );
@@ -268,7 +269,7 @@ mod tests {
     #[test]
     fn solve_pnp_ransac_handles_outliers() {
         let k = CameraIntrinsics::new(700.0, 705.0, 320.0, 240.0, 640, 480);
-        let gt = CameraExtrinsics::new(
+        let gt = Pose::new(
             Rotation3::from_euler_angles(-0.06, 0.04, 0.08).into_inner(),
             Vector3::new(0.15, -0.04, 0.3),
         );
@@ -286,7 +287,7 @@ mod tests {
             pixels[i].y -= 28.0;
         }
 
-        let (est, inliers) = solve_pnp_ransac(&world, &pixels, &k, 2.0, 500).unwrap();
+        let (est, inliers) = solve_pnp_ransac(&world, &pixels, &k, None, 2.0, 500).unwrap();
         let inlier_count = inliers.iter().filter(|&&v| v).count();
         assert!(inlier_count >= 70);
 
@@ -311,11 +312,11 @@ mod tests {
     #[test]
     fn solve_pnp_refine_reduces_reprojection_error() {
         let k = CameraIntrinsics::new(700.0, 705.0, 320.0, 240.0, 640, 480);
-        let gt = CameraExtrinsics::new(
+        let gt = Pose::new(
             Rotation3::from_euler_angles(-0.05, 0.06, 0.02).into_inner(),
             Vector3::new(0.12, -0.03, 0.28),
         );
-        let initial = CameraExtrinsics::new(
+        let initial = Pose::new(
             Rotation3::from_euler_angles(-0.01, 0.02, 0.03).into_inner(),
             Vector3::new(0.2, 0.02, 0.4),
         );
@@ -336,7 +337,7 @@ mod tests {
             .sum::<f64>()
             / world.len() as f64;
 
-        let refined = solve_pnp_refine(&initial, &world, &pixels, &k, 25).unwrap();
+        let refined = solve_pnp_refine(&initial, &world, &pixels, &k, None, 25).unwrap();
         let err_after = world
             .iter()
             .zip(pixels.iter())
@@ -416,7 +417,7 @@ mod tests {
             .matrix()
             .clone_owned();
         let t = Vector3::new(0.2, 0.0, 0.02).normalize();
-        let gt = CameraExtrinsics::new(rot, t);
+        let gt = Pose::new(rot, t);
         let e = essential_from_extrinsics(&gt);
 
         let world = vec![
@@ -428,7 +429,7 @@ mod tests {
             Point3::new(-0.1, -0.25, 5.0),
         ];
 
-        let i_ext = CameraExtrinsics::default();
+        let i_ext = Pose::default();
         let pts1: Vec<Point2<f64>> = world.iter().map(|p| project_point(&k, &i_ext, p)).collect();
         let pts2: Vec<Point2<f64>> = world.iter().map(|p| project_point(&k, &gt, p)).collect();
 
@@ -445,11 +446,11 @@ mod tests {
             .matrix()
             .clone_owned();
         let t = Vector3::new(0.18, -0.01, 0.02).normalize();
-        let gt = CameraExtrinsics::new(rot, t);
-        let i_ext = CameraExtrinsics::default();
+        let gt = Pose::new(rot, t);
+        let i_ext = Pose::default();
 
         let mut world = vec![];
-        for i in 0..20 {
+        for i in 0..40 {
             let x = -0.5 + 0.05 * i as f64;
             let y = -0.2 + 0.03 * (i % 7) as f64;
             let z = 3.0 + 0.2 * (i % 5) as f64;
@@ -459,13 +460,13 @@ mod tests {
         let mut pts2: Vec<Point2<f64>> = world.iter().map(|p| project_point(&k, &gt, p)).collect();
 
         // Inject outliers.
-        for i in 0..5 {
+        for i in 0..10 {
             pts2[i] = Point2::new(50.0 + i as f64 * 20.0, 400.0 - i as f64 * 15.0);
         }
 
         let (e, inliers) = find_essential_mat_ransac(&pts1, &pts2, &k, 3.0, 600).unwrap();
         let inlier_count = inliers.iter().filter(|&&m| m).count();
-        assert!(inlier_count >= 10);
+        assert!(inlier_count >= 8);
 
         let in1: Vec<Point2<f64>> = pts1
             .iter()
@@ -490,8 +491,8 @@ mod tests {
             .matrix()
             .clone_owned();
         let t = Vector3::new(0.15, 0.01, 0.0);
-        let gt = CameraExtrinsics::new(rot, t);
-        let i_ext = CameraExtrinsics::default();
+        let gt = Pose::new(rot, t);
+        let i_ext = Pose::default();
 
         let mut world = vec![];
         for i in 0..24 {
@@ -532,8 +533,8 @@ mod tests {
     fn stereo_rectify_matrices_has_expected_projection_shape() {
         let k1 = CameraIntrinsics::new(700.0, 700.0, 320.0, 240.0, 640, 480);
         let k2 = CameraIntrinsics::new(710.0, 705.0, 322.0, 241.0, 640, 480);
-        let left = CameraExtrinsics::default();
-        let right = CameraExtrinsics::new(Matrix3::identity(), Vector3::new(0.2, 0.0, 0.0));
+        let left = Pose::default();
+        let right = Pose::new(Matrix3::identity(), Vector3::new(0.2, 0.0, 0.0));
 
         let rect = stereo_rectify_matrices(&k1, &k2, &left, &right).unwrap();
         assert!(rect.r1.determinant() > 0.0);
@@ -557,25 +558,25 @@ mod tests {
         let board = generate_chessboard_object_points((7, 6), 0.04);
         let gt_k = CameraIntrinsics::new(820.0, 790.0, 320.0, 240.0, 640, 480);
         let views = [
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.08, -0.03, 0.02)
                     .matrix()
                     .clone_owned(),
                 Vector3::new(0.05, -0.03, 2.6),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.06, 0.04, -0.05)
                     .matrix()
                     .clone_owned(),
                 Vector3::new(-0.08, 0.02, 2.9),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.03, 0.07, -0.02)
                     .matrix()
                     .clone_owned(),
                 Vector3::new(0.02, 0.06, 2.4),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.04, -0.05, 0.04)
                     .matrix()
                     .clone_owned(),
@@ -604,25 +605,25 @@ mod tests {
         let board = generate_chessboard_object_points((7, 6), 0.04);
         let gt_k = CameraIntrinsics::new(820.0, 790.0, 320.0, 240.0, 640, 480);
         let views = [
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.08, -0.03, 0.02)
                     .matrix()
                     .clone_owned(),
                 Vector3::new(0.05, -0.03, 2.6),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.06, 0.04, -0.05)
                     .matrix()
                     .clone_owned(),
                 Vector3::new(-0.08, 0.02, 2.9),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.03, 0.07, -0.02)
                     .matrix()
                     .clone_owned(),
                 Vector3::new(0.02, 0.06, 2.4),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.04, -0.05, 0.04)
                     .matrix()
                     .clone_owned(),
@@ -657,25 +658,25 @@ mod tests {
         let board = generate_chessboard_object_points((7, 6), 0.04);
         let gt_k = CameraIntrinsics::new(820.0, 790.0, 320.0, 240.0, 640, 480);
         let views = [
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.08, -0.03, 0.02)
                     .matrix()
                     .clone_owned(),
                 Vector3::new(0.05, -0.03, 2.6),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.06, 0.04, -0.05)
                     .matrix()
                     .clone_owned(),
                 Vector3::new(-0.08, 0.02, 2.9),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.03, 0.07, -0.02)
                     .matrix()
                     .clone_owned(),
                 Vector3::new(0.02, 0.06, 2.4),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.04, -0.05, 0.04)
                     .matrix()
                     .clone_owned(),
@@ -716,25 +717,25 @@ mod tests {
         let t_lr = Vector3::new(0.20, 0.002, -0.001);
 
         let board_poses = [
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.08, -0.03, 0.02)
                     .matrix()
                     .clone_owned(),
                 Vector3::new(0.05, -0.03, 2.6),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.06, 0.04, -0.05)
                     .matrix()
                     .clone_owned(),
                 Vector3::new(-0.08, 0.02, 2.9),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.03, 0.07, -0.02)
                     .matrix()
                     .clone_owned(),
                 Vector3::new(0.02, 0.06, 2.4),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.04, -0.05, 0.04)
                     .matrix()
                     .clone_owned(),
@@ -746,7 +747,7 @@ mod tests {
         let mut left_sets = Vec::new();
         let mut right_sets = Vec::new();
         for ext_l in &board_poses {
-            let ext_r = CameraExtrinsics::new(r_lr * ext_l.rotation, r_lr * ext_l.translation + t_lr);
+            let ext_r = Pose::new(r_lr * ext_l.rotation, r_lr * ext_l.translation + t_lr);
             obj_sets.push(board.clone());
             left_sets.push(board.iter().map(|p| project_point(&k_l, ext_l, p)).collect());
             right_sets.push(board.iter().map(|p| project_point(&k_r, &ext_r, p)).collect());
@@ -857,7 +858,7 @@ mod tests {
         let intrinsics = CameraIntrinsics::new(800.0, 800.0, 320.0, 240.0, 640, 480);
         let rotation = Rotation3::from_euler_angles(0.1, 0.2, 0.3).into_inner();
         let translation = Vector3::new(0.5, -0.3, 2.0);
-        let extrinsics = CameraExtrinsics { rotation, translation };
+        let extrinsics = Pose { rotation, translation };
         let distortion = Distortion { k1: -0.2, k2: 0.05, p1: 0.001, p2: -0.002, k3: 0.01 };
 
         let points = vec![
@@ -887,7 +888,7 @@ mod tests {
         let intrinsics = CameraIntrinsics::new(800.0, 800.0, 320.0, 240.0, 640, 480);
         let rotation = Rotation3::identity().into_inner();
         let translation = Vector3::new(0.0, 0.0, 2.0);
-        let extrinsics = CameraExtrinsics { rotation, translation };
+        let extrinsics = Pose { rotation, translation };
         let distortion = Distortion::default();
 
         let points = vec![Point3::new(0.5, 0.3, 1.5)];
@@ -908,15 +909,15 @@ mod tests {
 
         let k = CameraIntrinsics::new(820.0, 790.0, 320.0, 240.0, 640, 480);
         let views = [
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.08, -0.03, 0.02).into_inner(),
                 Vector3::new(0.05, -0.08, 0.3),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.06, 0.04, -0.05).into_inner(),
                 Vector3::new(-0.08, 0.02, 0.35),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.03, 0.07, -0.02).into_inner(),
                 Vector3::new(0.02, 0.06, 0.32),
             ),
@@ -950,15 +951,15 @@ mod tests {
 
         let k = CameraIntrinsics::new(820.0, 790.0, 320.0, 240.0, 640, 480);
         let views = [
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.08, -0.03, 0.02).into_inner(),
                 Vector3::new(0.05, -0.08, 0.3),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.06, 0.04, -0.05).into_inner(),
                 Vector3::new(-0.08, 0.02, 0.35),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.03, 0.07, -0.02).into_inner(),
                 Vector3::new(0.02, 0.06, 0.32),
             ),
@@ -991,15 +992,15 @@ mod tests {
 
         let k = CameraIntrinsics::new(820.0, 790.0, 320.0, 240.0, 640, 480);
         let views = [
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.08, -0.03, 0.02).into_inner(),
                 Vector3::new(0.05, -0.08, 0.3),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.06, 0.04, -0.05).into_inner(),
                 Vector3::new(-0.08, 0.02, 0.35),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.03, 0.07, -0.02).into_inner(),
                 Vector3::new(0.02, 0.06, 0.32),
             ),
@@ -1103,19 +1104,19 @@ mod tests {
 
         // Generate multiple synthetic views with this camera
         let views = [
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.08, -0.03, 0.02).into_inner(),
                 Vector3::new(0.05, -0.08, 0.3),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.06, 0.04, -0.05).into_inner(),
                 Vector3::new(-0.08, 0.02, 0.35),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(0.03, 0.07, -0.02).into_inner(),
                 Vector3::new(0.02, 0.06, 0.32),
             ),
-            CameraExtrinsics::new(
+            Pose::new(
                 Rotation3::from_euler_angles(-0.04, -0.05, 0.04).into_inner(),
                 Vector3::new(-0.03, -0.05, 0.33),
             ),

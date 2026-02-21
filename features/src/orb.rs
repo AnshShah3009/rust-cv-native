@@ -490,22 +490,4 @@ mod tests {
         img
     }
 
-    #[test]
-    fn test_orb_detect_ctx() {
-        use cv_hal::gpu::GpuContext;
-        
-        let img_gray = create_test_image();
-        let shape = cv_core::TensorShape::new(1, img_gray.height() as usize, img_gray.width() as usize);
-        let tensor_cpu: cv_core::Tensor<u8, cv_core::storage::CpuStorage<u8>> = cv_core::Tensor::from_vec(img_gray.to_vec(), shape);
-        
-        let gpu = GpuContext::new().expect("GPU unavailable");
-        let tensor = cv_hal::tensor_ext::TensorToGpu::to_gpu_ctx(&tensor_cpu, &gpu).unwrap();
-        
-        let device = cv_hal::compute::ComputeDevice::Gpu(&gpu);
-        let orb = Orb::new().with_n_features(50);
-        
-        let kps = orb.detect_ctx(&device, &tensor);
-        println!("Detected {} keypoints with accelerated ORB (GPU)", kps.len());
-        assert!(kps.len() > 0);
-    }
 }

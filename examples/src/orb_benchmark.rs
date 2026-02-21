@@ -54,11 +54,11 @@ fn main() {
     };
     
     let device = ComputeDevice::Gpu(&gpu);
-    let group = scheduler().get_default_group();
+    let group = scheduler().unwrap().get_default_group().unwrap();
     
     // Upload image to GPU
     let shape = TensorShape::new(1, height as usize, width as usize);
-    let tensor_cpu: Tensor<u8, cv_core::storage::CpuStorage<u8>> = Tensor::from_vec(img.to_vec(), shape);
+    let tensor_cpu: Tensor<u8, cv_core::storage::CpuStorage<u8>> = Tensor::from_vec(img.to_vec(), shape).unwrap();
     let tensor_gpu = cv_hal::tensor_ext::TensorToGpu::to_gpu_ctx(&tensor_cpu, &gpu).unwrap();
 
     // Warm-up

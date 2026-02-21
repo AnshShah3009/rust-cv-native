@@ -4,7 +4,6 @@
 
 use image::GrayImage;
 use crate::line_matcher::LineDescriptor;
-use cv_core::{Tensor, TensorShape, storage::CpuStorage};
 use rayon::prelude::*;
 
 pub struct LbdParams {

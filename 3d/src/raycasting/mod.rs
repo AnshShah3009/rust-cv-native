@@ -5,6 +5,9 @@
 use crate::mesh::TriangleMesh;
 use nalgebra::{Point3, Vector3};
 
+use cv_runtime::orchestrator::RuntimeRunner;
+use cv_hal::compute::ComputeDevice;
+
 /// Ray representation
 #[derive(Debug, Clone, Copy)]
 pub struct Ray {
@@ -62,13 +65,26 @@ pub fn cast_ray_mesh(ray: &Ray, mesh: &TriangleMesh) -> Option<RayHit> {
     closest_hit
 }
 
-/// Cast multiple rays against a mesh (parallel)
+/// Cast multiple rays against a mesh using best available runner
 pub fn cast_rays_mesh(rays: &[Ray], mesh: &TriangleMesh) -> Vec<Option<RayHit>> {
-    use rayon::prelude::*;
+    let runner = cv_runtime::best_runner();
+    cast_rays_mesh_ctx(rays, mesh, &runner)
+}
 
-    rays.par_iter()
-        .map(|ray| cast_ray_mesh(ray, mesh))
-        .collect()
+/// Cast multiple rays against a mesh with explicit context
+pub fn cast_rays_mesh_ctx(rays: &[Ray], mesh: &TriangleMesh, group: &RuntimeRunner) -> Vec<Option<RayHit>> {
+    let device = group.device();
+    
+    if let ComputeDevice::Gpu(_gpu) = device {
+        // TODO: Dispatch to HAL raycast_mesh
+    }
+
+    use rayon::prelude::*;
+    group.run(|| {
+        rays.par_iter()
+            .map(|ray| cast_ray_mesh(ray, mesh))
+            .collect()
+    })
 }
 
 /// Ray-triangle intersection using Möller-Trumbore algorithm
@@ -217,17 +233,29 @@ fn closest_point_on_triangle(
     (point, (query.coords - point.coords).norm())
 }
 
-/// Batch distance queries (parallel)
+/// Batch distance queries using best available runner
 pub fn closest_points_on_mesh(
     queries: &[Point3<f32>],
     mesh: &TriangleMesh,
 ) -> Vec<(Point3<f32>, f32, usize)> {
+    let runner = cv_runtime::best_runner();
+    closest_points_on_mesh_ctx(queries, mesh, &runner)
+}
+
+/// Batch distance queries with explicit context
+pub fn closest_points_on_mesh_ctx(
+    queries: &[Point3<f32>],
+    mesh: &TriangleMesh,
+    group: &RuntimeRunner,
+) -> Vec<(Point3<f32>, f32, usize)> {
     use rayon::prelude::*;
 
-    queries
-        .par_iter()
-        .map(|query| closest_point_on_mesh(query, mesh))
-        .collect()
+    group.run(|| {
+        queries
+            .par_iter()
+            .map(|query| closest_point_on_mesh(query, mesh))
+            .collect()
+    })
 }
 
 /// Compute mesh distance to another mesh (Hausdorff distance)

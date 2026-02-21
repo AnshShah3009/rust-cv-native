@@ -102,11 +102,13 @@ pub fn alpha_shapes(cloud: &PointCloud, alpha: f32) -> TriangleMesh {
 
 // Helper structures and functions
 
+#[allow(dead_code)]
 struct Octree {
     depth: usize,
     root: OctreeNode,
 }
 
+#[allow(dead_code)]
 struct OctreeNode {
     children: Option<Box<[OctreeNode; 8]>>,
     sample_indices: Vec<usize>,
@@ -218,6 +220,7 @@ impl ImplicitFunction {
         Self
     }
 
+    #[allow(dead_code)]
     fn eval(&self, _x: f32, _y: f32, _z: f32) -> f32 {
         // Placeholder
         0.0

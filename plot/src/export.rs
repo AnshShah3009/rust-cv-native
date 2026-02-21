@@ -4,7 +4,6 @@ use crate::chart::{Figure, PlotType};
 use crate::style::COLORS;
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
 
 /// Convert plot to SVG string
 pub fn to_svg(figure: &Figure) -> String {

@@ -12,6 +12,12 @@ cv-imgproc = { path = "./imgproc" }
 cv-features = { path = "./features" }
 cv-stereo = { path = "./stereo" }
 cv-video = { path = "./video" }
+cv-3d = { path = "./3d" }
+cv-calib3d = { path = "./calib3d" }
+cv-sfm = { path = "./sfm" }
+cv-slam = { path = "./slam" }
+cv-runtime = { path = "./runtime" }
+cv-optimize = { path = "./optimize" }
 rayon = { workspace = true }
 
 [dev-dependencies]
@@ -53,7 +59,6 @@ members = [
     "videoio",
     "calib3d",
     "photo",
-    "dnn",
     "sfm",
     "slam",
     "runtime",

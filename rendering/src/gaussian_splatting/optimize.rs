@@ -1,8 +1,8 @@
-use nalgebra::{Matrix3, Point3, Vector3, Vector4};
+use nalgebra::{Point3, Vector3};
 use rand::Rng;
 
-use super::rasterize::{DifferentiableRasterizer, GaussianGradient};
-use super::types::{Gaussian, GaussianCloud, SphericalHarmonics};
+use super::rasterize::DifferentiableRasterizer;
+use super::types::{Gaussian, GaussianCloud};
 
 #[derive(Clone, Debug)]
 pub struct DensificationConfig {
@@ -296,6 +296,7 @@ impl GaussianTrainer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nalgebra::Vector4;
 
     #[test]
     fn test_densification_config_default() {

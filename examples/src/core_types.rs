@@ -90,7 +90,8 @@ fn point_cloud_example() {
     // With colors
     let cloud_with_colors =
         PointCloud::new(vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)])
-            .with_colors(vec![Point3::new(1.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)]);
+            .with_colors(vec![Point3::new(1.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)])
+            .unwrap();
 
     println!("  Point cloud with colors: {}", cloud_with_colors.len());
 }

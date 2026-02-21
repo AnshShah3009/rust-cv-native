@@ -30,7 +30,7 @@ pub use global::{
 pub use gnc::{registration_gnc, GNCOptimizer, GNCResult, RobustLoss, RobustLossType};
 
 use cv_core::point_cloud::PointCloud;
-use nalgebra::{Matrix4, Point3, Vector3};
+use nalgebra::{Matrix4, Point3};
 
 /// Simple KD-tree-like structure for nearest neighbor search
 struct SimpleNN {
@@ -94,7 +94,7 @@ pub fn registration_icp_point_to_plane(
         for (src_idx, src_point) in source.points.iter().enumerate() {
             let transformed = transformation.transform_point(src_point);
 
-            if let Some((target_point, target_idx, dist_sq)) = target_nn.nearest(&transformed) {
+            if let Some((_target_point, target_idx, dist_sq)) = target_nn.nearest(&transformed) {
                 let dist = dist_sq.sqrt();
 
                 if dist <= max_correspondence_distance {
@@ -188,15 +188,15 @@ pub fn registration_icp_point_to_plane_ctx(
     let source_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(
         source.points.iter().flat_map(|p| [p.x, p.y, p.z, 1.0]).collect(),
         cv_core::TensorShape::new(1, source.points.len(), 4)
-    );
+    ).expect("Failed to create source tensor");
     let target_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(
         target.points.iter().flat_map(|p| [p.x, p.y, p.z, 1.0]).collect(),
         cv_core::TensorShape::new(1, target.points.len(), 4)
-    );
+    ).expect("Failed to create target tensor");
     let target_normals_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(
         target.normals.as_ref().unwrap().iter().flat_map(|n| [n.x, n.y, n.z, 0.0]).collect(),
         cv_core::TensorShape::new(1, target.points.len(), 4)
-    );
+    ).expect("Failed to create target normals tensor");
 
     // If using GPU, upload once
     let (s_gpu, t_gpu, n_gpu) = if let cv_hal::compute::ComputeDevice::Gpu(gpu) = ctx {

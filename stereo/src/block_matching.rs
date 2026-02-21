@@ -1,12 +1,11 @@
-//! Block Matching Stereo Algorithm
-//!
-//! Simple but fast stereo matching using Sum of Absolute Differences (SAD)
-//! or Sum of Squared Differences (SSD) over a local window.
-
-use crate::{DisparityMap, Result, StereoError};
+use crate::{DisparityMap, Result, StereoError, StereoMatcher, StereoMatcherCtx};
 use image::GrayImage;
 use rayon::prelude::*;
 use wide::*;
+use cv_runtime::orchestrator::RuntimeRunner;
+use cv_hal::compute::ComputeDevice;
+use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
+use cv_core::{Tensor, storage::Storage};
 
 /// Block matching stereo matcher
 pub struct BlockMatcher {
@@ -36,6 +35,66 @@ impl Default for BlockMatcher {
     }
 }
 
+impl StereoMatcher for BlockMatcher {
+    fn compute(&self, left: &GrayImage, right: &GrayImage) -> Result<DisparityMap> {
+        let runner = cv_runtime::best_runner();
+        self.compute_ctx(left, right, &runner)
+    }
+}
+
+impl StereoMatcherCtx for BlockMatcher {
+    fn compute_ctx(&self, left: &GrayImage, right: &GrayImage, group: &RuntimeRunner) -> Result<DisparityMap> {
+        if left.width() != right.width() || left.height() != right.height() {
+            return Err(StereoError::SizeMismatch(
+                "Left and right images must have the same dimensions".to_string(),
+            ));
+        }
+
+        let width = left.width() as i32;
+        let height = left.height() as i32;
+        let width_usize = left.width() as usize;
+        let half_block = (self.block_size / 2) as i32;
+
+        // Check for GPU acceleration
+        if let ComputeDevice::Gpu(gpu) = group.device() {
+            if let Ok(res) = self.compute_gpu(gpu, left, right) {
+                return Ok(res);
+            }
+        }
+
+        let left_data = left.as_raw();
+        let right_data = right.as_raw();
+
+        let mut disparity = DisparityMap::new(
+            left.width(),
+            left.height(),
+            self.min_disparity,
+            self.max_disparity,
+        );
+
+        // Compute disparity map row-wise in parallel.
+        group.run(|| {
+            disparity
+                .data
+                .par_chunks_mut(width_usize)
+                .enumerate()
+                .for_each(|(y_usize, row)| {
+                    let y = y_usize as i32;
+                    if y < half_block || y >= height - half_block {
+                        return;
+                    }
+                    for x in half_block..width - half_block {
+                        let best_disparity =
+                            self.find_best_disparity(left_data, right_data, width_usize, x, y, half_block);
+                        row[x as usize] = best_disparity as f32;
+                    }
+                });
+        });
+
+        Ok(disparity)
+    }
+}
+
 impl BlockMatcher {
     pub fn new() -> Self {
         Self::default()
@@ -57,45 +116,34 @@ impl BlockMatcher {
         self
     }
 
-    pub fn compute(&self, left: &GrayImage, right: &GrayImage) -> Result<DisparityMap> {
-        if left.width() != right.width() || left.height() != right.height() {
-            return Err(StereoError::SizeMismatch(
-                "Left and right images must have the same dimensions".to_string(),
-            ));
-        }
-
-        let width = left.width() as i32;
-        let height = left.height() as i32;
-        let width_usize = left.width() as usize;
-        let half_block = (self.block_size / 2) as i32;
-        let left_data = left.as_raw();
-        let right_data = right.as_raw();
-
-        let mut disparity = DisparityMap::new(
-            left.width(),
-            left.height(),
-            self.min_disparity,
-            self.max_disparity,
-        );
-
-        // Compute disparity map row-wise in parallel.
-        disparity
-            .data
-            .par_chunks_mut(width_usize)
-            .enumerate()
-            .for_each(|(y_usize, row)| {
-                let y = y_usize as i32;
-                if y < half_block || y >= height - half_block {
-                    return;
-                }
-                for x in half_block..width - half_block {
-                    let best_disparity =
-                        self.find_best_disparity(left_data, right_data, width_usize, x, y, half_block);
-                    row[x as usize] = best_disparity as f32;
-                }
-            });
-
-        Ok(disparity)
+    fn compute_gpu(&self, gpu: &cv_hal::gpu::GpuContext, left: &GrayImage, right: &GrayImage) -> cv_hal::Result<DisparityMap> {
+        use cv_hal::context::{ComputeContext, StereoMatchParams, StereoMatchMethod};
+        
+        let l_tensor = cv_core::CpuTensor::from_vec(left.as_raw().to_vec(), cv_core::TensorShape::new(1, left.height() as usize, left.width() as usize))
+            .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+        let r_tensor = cv_core::CpuTensor::from_vec(right.as_raw().to_vec(), cv_core::TensorShape::new(1, right.height() as usize, right.width() as usize))
+            .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+            
+        let l_gpu = l_tensor.to_gpu_ctx(gpu)?;
+        let r_gpu = r_tensor.to_gpu_ctx(gpu)?;
+        
+        let params = StereoMatchParams {
+            method: StereoMatchMethod::BlockMatching,
+            min_disparity: self.min_disparity,
+            num_disparities: self.max_disparity - self.min_disparity,
+            block_size: self.block_size,
+        };
+        
+        let res_gpu: Tensor<f32, cv_hal::storage::GpuStorage<f32>> = gpu.stereo_match(&l_gpu, &r_gpu, &params)?;
+        let res_cpu = res_gpu.to_cpu_ctx(gpu)?;
+        
+        Ok(DisparityMap {
+            data: res_cpu.storage.as_slice().unwrap().to_vec(),
+            width: left.width(),
+            height: left.height(),
+            min_disparity: self.min_disparity,
+            max_disparity: self.max_disparity,
+        })
     }
 
     fn find_best_disparity(

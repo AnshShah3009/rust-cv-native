@@ -1,7 +1,8 @@
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::registration::registration_icp_point_to_plane_ctx;
+    use cv_core::point_cloud::PointCloud;
     use nalgebra::{Matrix4, Point3, Vector3};
     use cv_hal::cpu::CpuBackend;
     use cv_hal::compute::ComputeDevice;
@@ -11,8 +12,8 @@ mod tests {
         let cpu = CpuBackend::new().unwrap();
         let device = ComputeDevice::Cpu(&cpu);
         
-        let mut source = PointCloud::new();
-        let mut target = PointCloud::new();
+        let mut source = PointCloud::new(Vec::new());
+        let mut target = PointCloud::new(Vec::new());
         
         // Create a simple plane with normals
         for y in 0..10 {

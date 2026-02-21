@@ -1053,9 +1053,8 @@ mod tests {
         // Test that thread pool is initialized (respects RUSTCV_CPU_THREADS)
         use cv_core::{init_global_thread_pool, current_cpu_threads};
 
-        // Initialize thread pool
-        let result = init_global_thread_pool(None);
-        assert!(result.is_ok());
+        // Initialize thread pool (may already be initialized by other tests)
+        let _ = init_global_thread_pool(None);
 
         // Verify thread pool is active
         let threads = current_cpu_threads();

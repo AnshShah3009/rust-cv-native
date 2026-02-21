@@ -1,22 +1,23 @@
 use cv_calib3d::solve_pnp_ransac;
-use cv_core::{CameraExtrinsics, CameraIntrinsics, KeyPoints, Tensor, storage::Storage};
-use cv_features::{DescriptorExtractor, Descriptors, Orb, detect_and_compute_ctx};
+use cv_core::{Pose, CameraIntrinsics, KeyPoints, Tensor, storage::Storage, slam::WorldMap};
+use cv_features::{Descriptors, Orb, detect_and_compute_ctx};
 use cv_hal::compute::ComputeDevice;
 use cv_runtime::orchestrator::ResourceGroup;
-use nalgebra::Point2;
+use nalgebra::{Point2, Point3};
 use std::sync::Arc;
+use crate::mapping::MapExt;
 
-pub struct Frame<S: Storage<u8> + 'static> {
+pub struct TrackingFrame<S: Storage<u8> + 'static> {
     pub image: Tensor<u8, S>,
     pub keypoints: KeyPoints,
     pub descriptors: Descriptors,
-    pub pose: CameraExtrinsics,
+    pub pose: Pose,
 }
 
 pub struct Tracker {
     pub group: Arc<ResourceGroup>,
-    pub current_frame: Option<Frame<cv_core::storage::CpuStorage<u8>>>,
-    pub last_frame: Option<Frame<cv_core::storage::CpuStorage<u8>>>,
+    pub current_frame: Option<TrackingFrame<cv_core::storage::CpuStorage<u8>>>,
+    pub last_frame: Option<TrackingFrame<cv_core::storage::CpuStorage<u8>>>,
     pub intrinsics: CameraIntrinsics,
     pub detector: Orb,
 }
@@ -35,8 +36,8 @@ impl Tracker {
     pub fn process_frame<S: Storage<u8> + 'static>(
         &mut self,
         image: &Tensor<u8, S>,
-        map: &crate::mapping::Map,
-    ) -> Result<(CameraExtrinsics, Vec<usize>), String> {
+        map: &WorldMap,
+    ) -> Result<(Pose, Vec<usize>), String> {
         use cv_core::storage::CpuStorage;
         let device = self.group.device();
         
@@ -45,11 +46,11 @@ impl Tracker {
         // Convert to CPU for long-term storage and frame-to-frame matching if needed
         let cpu_img_tensor = convert_to_cpu(&device, image);
 
-        let mut frame = Frame {
+        let mut frame = TrackingFrame {
             image: cpu_img_tensor,
             keypoints,
             descriptors,
-            pose: CameraExtrinsics::default(),
+            pose: Pose::default(),
         };
 
         let mut tracking_success = false;
@@ -61,12 +62,12 @@ impl Tracker {
             let map_desc_tensor: Tensor<u8, CpuStorage<u8>> = Tensor::from_vec(
                 map_descs.descriptors.iter().flat_map(|d| d.data.clone()).collect(),
                 cv_core::TensorShape::new(1, map_descs.len(), 32)
-            );
+            ).map_err(|e| e.to_string())?;
             
             let query_desc_tensor: Tensor<u8, CpuStorage<u8>> = Tensor::from_vec(
                 frame.descriptors.descriptors.iter().flat_map(|d| d.data.clone()).collect(),
                 cv_core::TensorShape::new(1, frame.descriptors.len(), 32)
-            );
+            ).map_err(|e| e.to_string())?;
 
             // Use accelerated matching via the device
             let matches = device.match_descriptors(&query_desc_tensor, &map_desc_tensor, 0.7)
@@ -77,13 +78,15 @@ impl Tracker {
                 let mut image_pts = Vec::new();
 
                 for m in &matches.matches {
-                    object_pts.push(map.points[m.train_idx as usize].position);
-                    let kp = &frame.keypoints.keypoints[m.query_idx as usize];
-                    image_pts.push(Point2::new(kp.x, kp.y));
+                    if let Ok(p) = map.points[m.train_idx as usize].read() {
+                        object_pts.push(Point3::new(p.world_pos.x as f64, p.world_pos.y as f64, p.world_pos.z as f64));
+                        let kp = &frame.keypoints.keypoints[m.query_idx as usize];
+                        image_pts.push(Point2::new(kp.x, kp.y));
+                    }
                 }
 
                 if let Ok((pose, inliers)) =
-                    solve_pnp_ransac(&object_pts, &image_pts, &self.intrinsics, 2.0, 100)
+                    solve_pnp_ransac(&object_pts, &image_pts, &self.intrinsics, None, 2.0, 100)
                 {
                     frame.pose = pose;
                     tracked_indices = matches

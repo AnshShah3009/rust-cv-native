@@ -2,17 +2,10 @@ use image::GrayImage;
 use rayon::prelude::*;
 use crate::{canny, sobel};
 use cv_runtime::orchestrator::{ResourceGroup, scheduler};
+use cv_hal::compute::ComputeDevice;
+use cv_hal::tensor_ext::TensorToGpu;
 use std::sync::atomic::{AtomicU32, Ordering};
 use rand::Rng;
-
-/// Hough Circle result
-#[derive(Debug, Clone, Copy)]
-pub struct Circle {
-    pub x: f32,
-    pub y: f32,
-    pub radius: f32,
-    pub score: f32,
-}
 
 /// Hough Line result (rho, theta)
 #[derive(Debug, Clone, Copy)]
@@ -36,7 +29,7 @@ pub fn hough_circles(
     min_radius: f32,
     max_radius: f32,
     threshold: u32,
-) -> Vec<Circle> {
+) -> Vec<cv_core::HoughCircle> {
     if let Ok(s) = scheduler() {
         if let Ok(group) = s.get_default_group() {
             return hough_circles_ctx(src, min_radius, max_radius, threshold, &group);
@@ -69,7 +62,7 @@ pub fn hough_circles(
         }
         for (i, &count) in acc.iter().enumerate() {
             if count >= threshold {
-                all_circles.push(Circle { x: (i % width) as f32, y: (i / width) as f32, radius: r_f, score: count as f32 });
+                all_circles.push(cv_core::HoughCircle::new((i % width) as f32, (i / width) as f32, r_f, count));
             }
         }
     }
@@ -83,7 +76,15 @@ pub fn hough_circles_ctx(
     max_radius: f32,
     threshold: u32,
     group: &ResourceGroup,
-) -> Vec<Circle> {
+) -> Vec<cv_core::HoughCircle> {
+    let device = group.device();
+    
+    if let ComputeDevice::Gpu(gpu) = device {
+        if let Ok(res) = hough_circles_gpu(gpu, src, min_radius, max_radius, threshold) {
+            return res;
+        }
+    }
+
     let edges = canny(src, 50, 150);
     let (gx, gy) = sobel(src);
     
@@ -124,17 +125,32 @@ pub fn hough_circles_ctx(
         for (i, atomic_count) in acc_atomic.into_iter().enumerate() {
             let count = atomic_count.into_inner();
             if count >= threshold {
-                all_circles.push(Circle {
-                    x: (i % width) as f32,
-                    y: (i / width) as f32,
-                    radius: r_f,
-                    score: count as f32,
-                });
+                all_circles.push(cv_core::HoughCircle::new(
+                    (i % width) as f32,
+                    (i / width) as f32,
+                    r_f,
+                    count,
+                ));
             }
         }
     }
     
     all_circles
+}
+
+fn hough_circles_gpu(
+    gpu: &cv_hal::gpu::GpuContext,
+    src: &GrayImage,
+    min_radius: f32,
+    max_radius: f32,
+    threshold: u32,
+) -> cv_hal::Result<Vec<cv_core::HoughCircle>> {
+    use cv_hal::context::ComputeContext;
+    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize))
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+    let input_gpu = input_tensor.to_gpu_ctx(gpu).map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+    
+    gpu.hough_circles(&input_gpu, min_radius, max_radius, threshold)
 }
 
 pub fn hough_lines(
@@ -159,6 +175,14 @@ pub fn hough_lines_ctx(
     threshold: u32,
     group: &ResourceGroup,
 ) -> Vec<Line> {
+    let device = group.device();
+    
+    if let ComputeDevice::Gpu(gpu) = device {
+        if let Ok(res) = hough_lines_gpu(gpu, src, rho_res, theta_res, threshold) {
+            return res;
+        }
+    }
+
     let edges = canny(src, 50, 150);
     let width = src.width();
     let height = src.height();
@@ -205,6 +229,28 @@ pub fn hough_lines_ctx(
     }
     
     lines
+}
+
+fn hough_lines_gpu(
+    gpu: &cv_hal::gpu::GpuContext,
+    src: &GrayImage,
+    rho_res: f32,
+    theta_res: f32,
+    threshold: u32,
+) -> cv_hal::Result<Vec<Line>> {
+    use cv_hal::context::ComputeContext;
+    let edges = canny(src, 50, 150);
+    let input_tensor = cv_core::CpuTensor::from_vec(edges.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize))
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+    let input_gpu = input_tensor.to_gpu_ctx(gpu).map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+    
+    let res_hal = gpu.hough_lines(&input_gpu, rho_res, theta_res, threshold)?;
+    
+    Ok(res_hal.into_iter().map(|l| Line {
+        rho: l.rho,
+        theta: l.theta,
+        score: l.score,
+    }).collect())
 }
 
 /// Progressive Probabilistic Hough Transform for line segment detection
@@ -314,6 +360,7 @@ pub fn hough_lines_p(
                 // 5. Remove processed points from accumulator and edge list
                 // (Simplified: just mark them as processed)
                 // In real PPHT, we'd iterate along the segment and decrement votes
+                processed_edges[y * width as usize + x] = true;
             }
         }
     }

@@ -2,13 +2,23 @@ use nalgebra::{Matrix3, Matrix4, Point2, Point3, Vector3};
 
 pub type Vector6<T> = nalgebra::Vector6<T>;
 
+/// Trait defining a camera model for projecting 3D points to 2D pixels and vice versa.
 pub trait CameraModel<T: nalgebra::Scalar> {
+    /// Projects a 3D point in camera coordinates to 2D pixel coordinates.
     fn project(&self, point: &Point3<T>) -> Point2<T>;
+    
+    /// Unprojects a 2D pixel coordinate to a 3D point at a given depth.
     fn unproject(&self, pixel: &Point2<T>, depth: T) -> Point3<T>;
+    
+    /// Returns the image width in pixels.
     fn width(&self) -> u32;
+    
+    /// Returns the image height in pixels.
     fn height(&self) -> u32;
 }
 
+/// A standard Pinhole Camera Model with radial and tangential distortion.
+/// Uses `f64` precision.
 #[derive(Debug, Clone, Copy)]
 pub struct PinholeModel {
     pub intrinsics: CameraIntrinsics,
@@ -44,6 +54,8 @@ impl CameraModel<f64> for PinholeModel {
     fn height(&self) -> u32 { self.intrinsics.height }
 }
 
+/// A standard Pinhole Camera Model with radial and tangential distortion.
+/// Uses `f32` precision.
 #[derive(Debug, Clone, Copy)]
 pub struct PinholeModelF32 {
     pub intrinsics: CameraIntrinsicsF32,
@@ -79,6 +91,7 @@ impl CameraModel<f32> for PinholeModelF32 {
     fn height(&self) -> u32 { self.intrinsics.height }
 }
 
+/// Camera intrinsic parameters (focal length, principal point) for `f64`.
 #[derive(Debug, Clone, Copy)]
 pub struct CameraIntrinsics {
     pub fx: f64,
@@ -140,6 +153,7 @@ impl CameraIntrinsics {
 
 pub type CameraIntrinsicsf32 = CameraIntrinsicsF32;
 
+/// Camera intrinsic parameters (focal length, principal point) for `f32`.
 #[derive(Debug, Clone, Copy)]
 pub struct CameraIntrinsicsF32 {
     pub fx: f32,
@@ -194,13 +208,16 @@ impl CameraIntrinsicsF32 {
     }
 }
 
+/// A 3D rigid body transformation (Rotation + Translation).
+/// `Pose` transforms points from the local frame to the parent frame (e.g. Camera to World).
+/// Note: Sometimes conventions differ. Here, `transform_point` applies R*p + t.
 #[derive(Debug, Clone, Copy)]
-pub struct CameraExtrinsics {
+pub struct Pose {
     pub rotation: Matrix3<f64>,
     pub translation: Vector3<f64>,
 }
 
-impl CameraExtrinsics {
+impl Pose {
     pub fn new(rotation: Matrix3<f64>, translation: Vector3<f64>) -> Self {
         Self {
             rotation,
@@ -212,6 +229,13 @@ impl CameraExtrinsics {
         Self {
             rotation: *r,
             translation: *t,
+        }
+    }
+
+    pub fn identity() -> Self {
+        Self {
+            rotation: Matrix3::identity(),
+            translation: Vector3::zeros(),
         }
     }
 
@@ -244,7 +268,7 @@ impl CameraExtrinsics {
     }
 }
 
-impl Default for CameraExtrinsics {
+impl Default for Pose {
     fn default() -> Self {
         Self {
             rotation: Matrix3::identity(),
@@ -253,15 +277,16 @@ impl Default for CameraExtrinsics {
     }
 }
 
-pub type CameraExtrinsicsf32 = CameraExtrinsicsF32;
+pub type PoseF32 = PoseF32Struct;
 
+/// A 3D rigid body transformation (Rotation + Translation) using `f32`.
 #[derive(Debug, Clone, Copy)]
-pub struct CameraExtrinsicsF32 {
+pub struct PoseF32Struct {
     pub rotation: Matrix3<f32>,
     pub translation: Vector3<f32>,
 }
 
-impl CameraExtrinsicsF32 {
+impl PoseF32Struct {
     pub fn new(rotation: Matrix3<f32>, translation: Vector3<f32>) -> Self {
         Self {
             rotation,
@@ -269,7 +294,7 @@ impl CameraExtrinsicsF32 {
         }
     }
 
-    pub fn from_extrinsics(e: &CameraExtrinsics) -> Self {
+    pub fn from_pose(e: &Pose) -> Self {
         Self {
             rotation: Matrix3::new(
                 e.rotation.m11 as f32,
@@ -312,7 +337,7 @@ impl CameraExtrinsicsF32 {
     }
 }
 
-impl Default for CameraExtrinsicsF32 {
+impl Default for PoseF32Struct {
     fn default() -> Self {
         Self {
             rotation: Matrix3::identity(),
@@ -342,6 +367,10 @@ pub fn skew_symmetric(v: &Vector3<f64>) -> Matrix3<f64> {
     Matrix3::new(0.0, -v[2], v[1], v[2], 0.0, -v[0], -v[1], v[0], 0.0)
 }
 
+/// Radial and Tangential distortion coefficients (Brown-Conrady model).
+/// 
+/// - `k1, k2, k3`: Radial distortion coefficients.
+/// - `p1, p2`: Tangential distortion coefficients.
 #[derive(Debug, Clone, Copy)]
 pub struct Distortion {
     pub k1: f64,
@@ -366,6 +395,7 @@ impl Distortion {
         }
     }
 
+    /// Apply distortion to normalized coordinates (x, y).
     pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
         let r2 = x * x + y * y;
         let radial = 1.0 + self.k1 * r2 + self.k2 * r2 * r2 + self.k3 * r2 * r2 * r2;
@@ -374,6 +404,7 @@ impl Distortion {
         (x * radial + dx, y * radial + dy)
     }
 
+    /// Remove distortion from distorted normalized coordinates (x, y) using iterative optimization.
     pub fn remove(&self, x: f64, y: f64) -> (f64, f64) {
         let mut xd = x;
         let mut yd = y;
@@ -394,6 +425,7 @@ impl Default for Distortion {
 
 pub type Distortionf32 = DistortionF32;
 
+/// Radial and Tangential distortion coefficients for `f32`.
 #[derive(Debug, Clone, Copy)]
 pub struct DistortionF32 {
     pub k1: f32,
@@ -454,8 +486,8 @@ impl Default for DistortionF32 {
     }
 }
 
-/// Fisheye camera distortion model (Kannala-Brandt)
-/// Maps theta (angle from optical axis) to theta_d
+/// Fisheye camera distortion model (Kannala-Brandt).
+/// Maps theta (angle from optical axis) to theta_d.
 #[derive(Debug, Clone, Copy)]
 pub struct FisheyeDistortion {
     pub k1: f64,
@@ -519,6 +551,7 @@ impl Default for FisheyeDistortion {
     }
 }
 
+/// Fisheye camera distortion model (Kannala-Brandt) for `f32`.
 #[derive(Debug, Clone, Copy)]
 pub struct FisheyeDistortionF32 {
     pub k1: f32,
@@ -590,6 +623,7 @@ impl Default for FisheyeDistortionF32 {
     }
 }
 
+/// A 2D axis-aligned rectangle.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Rect {
     pub x: f32,
@@ -639,6 +673,7 @@ impl Rect {
     }
 }
 
+/// A 2D rotated rectangle defined by center, size, and angle.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RotatedRect {
     pub cx: f32,
@@ -683,6 +718,7 @@ impl RotatedRect {
     }
 }
 
+/// A generic 2D polygon defined by vertices.
 #[derive(Debug, Clone, Default)]
 pub struct Polygon {
     pub points: Vec<[f32; 2]>,
@@ -718,6 +754,143 @@ impl Polygon {
 
     pub fn unsigned_area(&self) -> f32 {
         self.area().abs()
+    }
+}
+
+/// Calculates the Intersection over Union (IoU) of two rotated rectangles.
+pub fn rotated_iou(r1: &RotatedRect, r2: &RotatedRect) -> f32 {
+    let mut p1 = Polygon::new(r1.points().to_vec());
+    let mut p2 = Polygon::new(r2.points().to_vec());
+    p1.ensure_counter_clockwise();
+    p2.ensure_counter_clockwise();
+    polygon_iou(&p1, &p2)
+}
+
+/// Calculates the Intersection over Union (IoU) of two polygons.
+pub fn polygon_iou(p1: &Polygon, p2: &Polygon) -> f32 {
+    let inter_area = intersection_area_polygons(p1, p2);
+    let a1 = p1.unsigned_area();
+    let a2 = p2.unsigned_area();
+    if inter_area <= 0.0 {
+        return 0.0;
+    }
+    let union_area = a1 + a2 - inter_area;
+    inter_area / union_area
+}
+
+/// Calculates the intersection area of two convex polygons using Sutherland-Hodgman clipping.
+pub fn intersection_area_polygons(p1: &Polygon, p2: &Polygon) -> f32 {
+    // Sutherland-Hodgman clipping for generic convex polygons
+    let pts1 = &p1.points;
+    let pts2 = &p2.points;
+
+    if pts1.len() < 3 || pts2.len() < 3 { return 0.0; }
+
+    let mut poly = pts1.clone();
+
+    // Clip pts1 against each edge of pts2
+    for i in 0..pts2.len() {
+        let edge_p1 = pts2[i];
+        let edge_p2 = pts2[(i + 1) % pts2.len()];
+
+        let mut next_poly = Vec::new();
+        if poly.is_empty() { return 0.0; }
+
+        for j in 0..poly.len() {
+            let cur = poly[j];
+            let prev = poly[(j + poly.len() - 1) % poly.len()];
+
+            let is_cur_inside = is_inside(edge_p1, edge_p2, cur);
+            let is_prev_inside = is_inside(edge_p1, edge_p2, prev);
+
+            if is_cur_inside {
+                if !is_prev_inside {
+                    next_poly.push(intersect(prev, cur, edge_p1, edge_p2));
+                }
+                next_poly.push(cur);
+            } else if is_prev_inside {
+                next_poly.push(intersect(prev, cur, edge_p1, edge_p2));
+            }
+        }
+        poly = next_poly;
+    }
+
+    if poly.len() < 3 { return 0.0; }
+    let mut area = 0.0;
+    for i in 0..poly.len() {
+        let p1 = poly[i];
+        let p2 = poly[(i + 1) % poly.len()];
+        area += p1[0] * p2[1] - p2[0] * p1[1];
+    }
+    area.abs() * 0.5
+}
+
+fn is_inside(p1: [f32; 2], p2: [f32; 2], p: [f32; 2]) -> bool {
+    (p2[0] - p1[0]) * (p[1] - p1[1]) - (p2[1] - p1[1]) * (p[0] - p1[0]) >= 0.0
+}
+
+fn intersect(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> [f32; 2] {
+    let a1 = b[1] - a[1];
+    let b1 = a[0] - b[0];
+    let c1 = a1 * a[0] + b1 * a[1];
+
+    let a2 = d[1] - c[1];
+    let b2 = c[0] - d[0];
+    let c2 = a2 * c[0] + b2 * c[1];
+
+    let det = a1 * b2 - a2 * b1;
+    if det.abs() < 1e-6 {
+        return a; // Parallel
+    }
+    [(b2 * c1 - b1 * c2) / det, (a1 * c2 - a2 * c1) / det]
+}
+
+/// A line in Hesse normal form (rho, theta).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HoughLine {
+    /// Distance from the origin.
+    pub rho: f32,
+    /// Angle in radians.
+    pub theta: f32,
+    /// Accumulator score.
+    pub score: u32,
+}
+
+impl HoughLine {
+    pub fn new(rho: f32, theta: f32, score: u32) -> Self {
+        Self { rho, theta, score }
+    }
+}
+
+/// A circle in (x, y, radius) form.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HoughCircle {
+    pub cx: f32,
+    pub cy: f32,
+    pub r: f32,
+    pub score: u32,
+}
+
+impl HoughCircle {
+    pub fn new(cx: f32, cy: f32, r: f32, score: u32) -> Self {
+        Self { cx, cy, r, score }
+    }
+}
+
+/// An object detection result.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Detection {
+    /// Bounding box of the detection.
+    pub rect: Rect,
+    /// Confidence score (0.0 to 1.0).
+    pub score: f32,
+    /// Class identifier.
+    pub class_id: i32,
+}
+
+impl Detection {
+    pub fn new(rect: Rect, score: f32, class_id: i32) -> Self {
+        Self { rect, score, class_id }
     }
 }
 

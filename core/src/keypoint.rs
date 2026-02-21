@@ -164,6 +164,7 @@ impl Default for Matches {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct KeyPoints {
     pub keypoints: Vec<KeyPoint>,
 }

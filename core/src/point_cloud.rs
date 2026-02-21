@@ -16,30 +16,30 @@ impl<T: Scalar> PointCloud<T> {
         }
     }
 
-    pub fn with_colors(mut self, colors: Vec<Point3<T>>) -> Self {
+    pub fn with_colors(mut self, colors: Vec<Point3<T>>) -> crate::Result<Self> {
         if colors.len() == self.points.len() {
             self.colors = Some(colors);
+            Ok(self)
         } else {
-            panic!(
+            Err(crate::Error::InvalidInput(format!(
                 "Color count {} does not match point count {}",
                 colors.len(),
                 self.points.len()
-            );
+            ).into()))
         }
-        self
     }
 
-    pub fn with_normals(mut self, normals: Vec<Vector3<T>>) -> Self {
+    pub fn with_normals(mut self, normals: Vec<Vector3<T>>) -> crate::Result<Self> {
         if normals.len() == self.points.len() {
             self.normals = Some(normals);
+            Ok(self)
         } else {
-            panic!(
+            Err(crate::Error::InvalidInput(format!(
                 "Normal count {} does not match point count {}",
                 normals.len(),
                 self.points.len()
-            );
+            ).into()))
         }
-        self
     }
 
     pub fn len(&self) -> usize {

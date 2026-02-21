@@ -50,7 +50,7 @@ pub fn morphology(
     
     // We need an output buffer. If iterations > 1, we also need a temp buffer for ping-pong.
     let output_buffer = ctx.get_buffer(byte_size, usages);
-    let mut temp_buffer: Option<wgpu::Buffer> = if iterations > 1 {
+    let temp_buffer: Option<wgpu::Buffer> = if iterations > 1 {
         Some(ctx.get_buffer(byte_size, usages))
     } else {
         None
@@ -123,31 +123,20 @@ pub fn morphology(
         if i + 1 < iterations {
             if i == 0 {
                 current_src = &output_buffer;
-                current_dst = temp_buffer.as_ref().unwrap();
+                current_dst = temp_buffer.as_ref().ok_or_else(|| crate::Error::KernelError("temp_buffer missing for multi-iteration morphology".into()))?;
             } else {
                 std::mem::swap(&mut current_src, &mut current_dst);
             }
         }
     }
 
-    // Result is in current_dst? No, the LAST pass wrote to current_dst.
-    // Let's re-trace:
-    // iter 0: src=input, dst=output. Result in output.
-    // if iterations=1: done. Result in output.
-    // if iterations=2:
-    // pass 0: src=input, dst=output. result in output. Swap -> src=output, dst=temp.
-    // pass 1: src=output, dst=temp. result in temp.
-    // Result in temp.
-    
-    // We need to return the buffer that has the final result.
-    // And return the other one to the pool.
-    
+    // Return the unused buffer to the pool and wrap the result buffer
     let result_handle = if std::ptr::eq(current_dst, &output_buffer) {
         if let Some(tb) = temp_buffer { ctx.return_buffer(tb, usages); }
         output_buffer
     } else {
         ctx.return_buffer(output_buffer, usages);
-        temp_buffer.unwrap()
+        temp_buffer.ok_or_else(|| crate::Error::KernelError("temp_buffer lost in morphology swap".into()))?
     };
 
     Ok(Tensor {

@@ -42,11 +42,22 @@ pub enum QueueType {
     Graphics,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeviceId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct QueueId(pub u32);
+
+/// Monotonically increasing submission index for tracking GPU operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct SubmissionIndex(pub u64);
+
+impl SubmissionIndex {
+    pub fn next(&mut self) -> Self {
+        self.0 += 1;
+        *self
+    }
+}
 
 pub trait ComputeBackend: Send + Sync {
     fn backend_type(&self) -> BackendType;

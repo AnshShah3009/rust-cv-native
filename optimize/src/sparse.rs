@@ -1,8 +1,7 @@
-use faer::sparse::SparseColMat;
 pub use faer::sparse::Triplet;
 use nalgebra::DVector;
 use cv_hal::compute::ComputeDevice;
-use cv_core::{Tensor, Storage};
+use cv_core::{Tensor};
 
 /// Sparse Matrix representation in CSR format for GPU optimization
 pub struct SparseMatrix {
@@ -51,21 +50,38 @@ impl SparseMatrix {
         let x_f32: Vec<f32> = x.iter().map(|&v| v as f32).collect();
         let values_f32: Vec<f32> = self.values.iter().map(|&v| v as f32).collect();
         
-        let x_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(x_f32, cv_core::TensorShape::new(1, x.len(), 1));
+        let x_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(x_f32, cv_core::TensorShape::new(1, x.len(), 1)).expect("SpMV input tensor creation failed");
         
         // SpMV always returns a result tensor on the same device as input x
         match ctx {
             ComputeDevice::Gpu(gpu) => {
-                let x_gpu = cv_hal::tensor_ext::TensorToGpu::to_gpu_ctx(&x_tensor, gpu).unwrap();
-                let res_gpu = ctx.spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_gpu).unwrap();
-                let res_cpu = cv_hal::tensor_ext::TensorToCpu::to_cpu_ctx(&res_gpu, gpu).unwrap();
-                DVector::from_vec(res_cpu.as_slice().iter().map(|&v| v as f64).collect())
+                use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
+                let x_gpu = x_tensor.to_gpu_ctx(gpu).expect("Upload to GPU failed");
+                let res_gpu = ctx.spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_gpu).expect("GPU SpMV failed");
+                let res_cpu = res_gpu.to_cpu_ctx(gpu).expect("Download from GPU failed");
+                DVector::from_vec(res_cpu.as_slice().expect("Data not on CPU").iter().map(|&v| v as f64).collect())
             },
             ComputeDevice::Cpu(_cpu) => {
-                let res_cpu = ctx.spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_tensor).unwrap();
-                DVector::from_vec(res_cpu.as_slice().iter().map(|&v| v as f64).collect())
+                let res_cpu = ctx.spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_tensor).expect("CPU SpMV failed");
+                DVector::from_vec(res_cpu.as_slice().expect("Data not on CPU").iter().map(|&v| v as f64).collect())
+            }
+            ComputeDevice::Mlx(_) => {
+                todo!("MLX SpMV not implemented yet")
             }
         }
+    }
+
+    pub fn transpose_spmv_ctx(&self, _ctx: &ComputeDevice, y: &DVector<f64>) -> DVector<f64> {
+        let mut res = DVector::zeros(self.cols);
+        for r in 0..self.rows {
+            let start = self.row_ptr[r] as usize;
+            let end = self.row_ptr[r+1] as usize;
+            for i in start..end {
+                let c = self.col_indices[i] as usize;
+                res[c] += self.values[i] * y[r];
+            }
+        }
+        res
     }
 }
 

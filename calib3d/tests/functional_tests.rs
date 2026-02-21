@@ -1,5 +1,5 @@
 use cv_calib3d::*;
-use cv_core::{CameraIntrinsics, Distortion, CameraExtrinsics};
+use cv_core::{CameraIntrinsics, Distortion, Pose};
 use nalgebra::{Point2, Point3, Matrix3, Vector3};
 use image::{GrayImage, Luma};
 
@@ -25,7 +25,7 @@ fn test_corner_subpix_basic() {
 #[test]
 fn test_project_points_roundtrip() {
     let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
-    let extrinsics = CameraExtrinsics {
+    let extrinsics = Pose {
         rotation: Matrix3::identity(),
         translation: Vector3::zeros(),
     };
