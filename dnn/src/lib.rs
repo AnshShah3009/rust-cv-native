@@ -4,14 +4,12 @@
 //! using ONNX Runtime (via the `ort` crate).
 
 use cv_core::Tensor;
-use cv_hal::compute::ComputeDevice;
-use cv_runtime::orchestrator::ResourceGroup;
+use cv_runtime::orchestrator::RuntimeRunner;
 use image::DynamicImage;
 use ort::session::Session;
 use ort::value::Value;
 use std::path::Path;
-use std::sync::Arc;
-use rayon::prelude::*;
+use std::sync::{Arc, Mutex};
 
 pub type Result<T> = std::result::Result<T, DnnError>;
 
@@ -31,7 +29,7 @@ pub enum DnnError {
 }
 
 pub struct DnnNet {
-    session: Arc<Session>,
+    session: Arc<Mutex<Session>>,
     input_shape: Vec<usize>,
 }
 
@@ -42,12 +40,8 @@ impl DnnNet {
             .commit_from_file(path)
             .map_err(|e| DnnError::Initialization(e.to_string()))?;
         
-        let session = Arc::new(session);
-        
-        // Extract input shape from model (assuming first input)
-        // In ort 2.0, we can use inputs[0] directly if it's visible or via method.
-        // Let's use a more generic approach to find shape.
-        let shape = vec![1, 3, 224, 224]; // Default fallback or extract properly
+        let session = Arc::new(Mutex::new(session));
+        let shape = vec![1, 3, 224, 224]; // Default fallback
 
         Ok(Self {
             session,
@@ -68,46 +62,41 @@ impl DnnNet {
         let array = ndarray::Array4::from_shape_vec(input_shape, slice.to_vec())
             .map_err(|e| DnnError::Inference(e.to_string()))?;
 
-        // ort::Value::from_array returns Result<Value, Error>
         let input_value = Value::from_array(array)
             .map_err(|e| DnnError::Inference(e.to_string()))?;
 
-        // Session::run takes SessionInputs. For ort 2.0, inputs! macro is used.
-        let outputs = self.session.run(ort::inputs![input_value].map_err(|e| DnnError::Inference(e.to_string()))?)
+        let mut session = self.session.lock().map_err(|_| DnnError::Inference("Failed to lock session".to_string()))?;
+        let outputs = session.run(ort::inputs![input_value])
             .map_err(|e| DnnError::Inference(e.to_string()))?;
 
         let mut results = Vec::new();
         for (_, value) in outputs {
-            let view = value.try_extract_tensor::<f32>()
+            let (shape, data_slice) = value.try_extract_tensor::<f32>()
                 .map_err(|e| DnnError::Inference(e.to_string()))?;
             
-            let shape = view.view().shape();
-            
             let tensor_shape = match shape.len() {
-                1 => cv_core::TensorShape::new(1, 1, shape[0]),
-                2 => cv_core::TensorShape::new(1, shape[0], shape[1]),
-                3 => cv_core::TensorShape::new(shape[0], shape[1], shape[2]),
-                4 => cv_core::TensorShape::new(shape[1], shape[2], shape[3]), // Assuming NCHW
-                _ => cv_core::TensorShape::new(1, 1, shape.iter().product()),
+                1 => cv_core::TensorShape::new(1, 1, shape[0] as usize),
+                2 => cv_core::TensorShape::new(1, shape[0] as usize, shape[1] as usize),
+                3 => cv_core::TensorShape::new(shape[0] as usize, shape[1] as usize, shape[2] as usize),
+                4 => cv_core::TensorShape::new(shape[1] as usize, shape[2] as usize, shape[3] as usize),
+                _ => cv_core::TensorShape::new(1, 1, shape.iter().map(|&d| d as usize).product()),
             };
             
-            let data = view.view().as_slice().ok_or_else(|| DnnError::Inference("Failed to get view as slice".into()))?.to_vec();
-            results.push(Tensor::from_vec(data, tensor_shape).map_err(|e| DnnError::Inference(e.to_string()))?);
+            results.push(Tensor::from_vec(data_slice.to_vec(), tensor_shape).map_err(|e| DnnError::Inference(e.to_string()))?);
         }
 
         Ok(results)
     }
 
     /// Preprocess an image for the network (Resize + Normalize)
-    pub fn preprocess(&self, img: &DynamicImage, _ctx: &ComputeDevice, group: &ResourceGroup) -> Result<Tensor<f32>> {
+    pub fn preprocess(&self, img: &DynamicImage, runner: &RuntimeRunner) -> Result<Tensor<f32>> {
         let target_w = self.input_shape[3];
         let target_h = self.input_shape[2];
         let channels = self.input_shape[1];
         
         let gray = img.to_luma8();
-        let resized = cv_imgproc::resize_ctx(&gray, target_w as u32, target_h as u32, cv_imgproc::Interpolation::Linear, group);
+        let resized = cv_imgproc::resize_ctx(&gray, target_w as u32, target_h as u32, cv_imgproc::Interpolation::Linear, runner);
         
-        // Use standard iter for now to avoid par_iter trait issues
         let data: Vec<f32> = resized.as_raw().iter().map(|&v| v as f32 / 255.0).collect();
 
         Tensor::from_vec(data, cv_core::TensorShape::new(channels, target_h, target_w)).map_err(|e| DnnError::Preprocessing(e.to_string()))

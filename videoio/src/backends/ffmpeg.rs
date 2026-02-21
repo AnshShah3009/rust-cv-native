@@ -12,6 +12,7 @@ pub struct NativeFfmpegCapture {
     width: u32,
     height: u32,
     scaler: ffmpeg::software::scaling::Context,
+    current_frame: Option<GrayImage>,
 }
 
 impl std::fmt::Debug for NativeFfmpegCapture {
@@ -62,6 +63,7 @@ impl NativeFfmpegCapture {
             width,
             height,
             scaler,
+            current_frame: None,
         })
     }
 }
@@ -72,31 +74,95 @@ impl VideoCapture for NativeFfmpegCapture {
     }
 
     fn grab(&mut self) -> Result<()> {
-        // Handled in retrieve for simplicity in this native wrapper
-        Ok(())
-    }
-
-    fn retrieve(&mut self) -> Result<GrayImage> {
+        // Read packets until a frame is decoded
         for (stream, packet) in self.ictx.packets() {
             if stream.index() == self.stream_index {
-                self.decoder.send_packet(&packet).unwrap();
+                self.decoder.send_packet(&packet)
+                    .map_err(|e| VideoError::CaptureFailed(format!("Send packet failed: {}", e)))?;
+                
                 let mut decoded = ffmpeg::util::frame::Video::empty();
                 if self.decoder.receive_frame(&mut decoded).is_ok() {
-                    let mut gray_frame = ffmpeg::util::frame::Video::empty();
-                    self.scaler.run(&decoded, &mut gray_frame).unwrap();
+                    let mut gray_frame = ffmpeg::util::frame::Video::new(
+                        ffmpeg::format::Pixel::GRAY8,
+                        self.width,
+                        self.height
+                    );
+                    
+                    self.scaler.run(&decoded, &mut gray_frame)
+                        .map_err(|e| VideoError::CaptureFailed(format!("Scaling failed: {}", e)))?;
                     
                     let data = gray_frame.data(0).to_vec();
-                    return GrayImage::from_raw(self.width, self.height, data)
-                        .ok_or_else(|| VideoError::CaptureFailed("Image creation failed".to_string()));
+                    let stride = gray_frame.stride(0) as usize; // Stride is usually i32/isize, cast to usize
+                    let width = self.width as usize;
+                    
+                    let final_data = if stride == width {
+                        data
+                    } else {
+                        // Copy row by row removing padding
+                        let height = self.height as usize;
+                        let mut unpadded = Vec::with_capacity(width * height);
+                        for i in 0..height {
+                            let start = i * stride;
+                            let end = start + width;
+                            if end <= data.len() {
+                                unpadded.extend_from_slice(&data[start..end]);
+                            }
+                        }
+                        unpadded
+                    };
+
+                    let img = GrayImage::from_raw(self.width, self.height, final_data)
+                        .ok_or_else(|| VideoError::CaptureFailed("Image creation failed".to_string()))?;
+                    
+                    self.current_frame = Some(img);
+                    return Ok(());
                 }
             }
         }
+        
+        // If we reach here, EOF or no more frames
+        // Flush decoder
+        self.decoder.send_eof().ok();
+        let mut decoded = ffmpeg::util::frame::Video::empty();
+        if self.decoder.receive_frame(&mut decoded).is_ok() {
+             let mut gray_frame = ffmpeg::util::frame::Video::new(
+                ffmpeg::format::Pixel::GRAY8,
+                self.width,
+                self.height
+            );
+
+            self.scaler.run(&decoded, &mut gray_frame)
+                .map_err(|e| VideoError::CaptureFailed(format!("Scaling failed: {}", e)))?;
+            
+            let data = gray_frame.data(0).to_vec();
+            let stride = gray_frame.stride(0) as usize;
+            let width = self.width as usize;
+             let final_data = if stride == width {
+                data
+            } else {
+                let height = self.height as usize;
+                let mut unpadded = Vec::with_capacity(width * height);
+                for i in 0..height {
+                    let start = i * stride;
+                    let end = start + width;
+                    if end <= data.len() {
+                        unpadded.extend_from_slice(&data[start..end]);
+                    }
+                }
+                unpadded
+            };
+
+            let img = GrayImage::from_raw(self.width, self.height, final_data)
+                .ok_or_else(|| VideoError::CaptureFailed("Image creation failed".to_string()))?;
+            self.current_frame = Some(img);
+            return Ok(());
+        }
+
         Err(VideoError::CaptureFailed("End of stream".to_string()))
     }
-}
 
-impl Drop for NativeFfmpegCapture {
-    fn drop(&mut self) {
-        cv_hal::gpu_kernels::global_pool().clear();
+    fn retrieve(&mut self) -> Result<GrayImage> {
+        self.current_frame.clone()
+            .ok_or_else(|| VideoError::CaptureFailed("No frame grabbed".to_string()))
     }
 }

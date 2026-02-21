@@ -82,9 +82,3 @@ impl VideoCapture for V4L2Capture {
         Ok(gray)
     }
 }
-
-impl Drop for V4L2Capture {
-    fn drop(&mut self) {
-        cv_hal::gpu_kernels::global_pool().clear();
-    }
-}

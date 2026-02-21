@@ -69,6 +69,7 @@ members = [
     "viewer",
     "io",
     "objdetect",
+    "dnn",
     "3d", "rendering", "registration", "plot",
     "examples",
 ]
@@ -86,7 +87,7 @@ futures = "0.3.31"
 thiserror = "2.0"
 criterion = { version = "0.5", default-features = false, features = ["rayon", "cargo_bench_support", "async_tokio"] }
 core_affinity = "0.8"
-ndarray = "0.15"
+ndarray = "0.17"
 tokio = "1.43"
 ffmpeg-next = "7.1"
 rand = "0.8"

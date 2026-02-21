@@ -12,4 +12,4 @@ image = { workspace = true }
 ort = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
-ndarray = "0.15"
+ndarray = { workspace = true }
