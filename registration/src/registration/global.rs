@@ -382,6 +382,10 @@ fn evaluate_registration(
         }
     }
 
+    if source.points.is_empty() {
+        return (0.0, 0.0);
+    }
+
     let fitness = inlier_count as f32 / source.points.len() as f32;
     let rmse = if inlier_count > 0 {
         (total_error / inlier_count as f32).sqrt()

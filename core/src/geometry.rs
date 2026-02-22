@@ -50,8 +50,13 @@ impl CameraModel<f64> for PinholeModel {
     }
 
     fn unproject(&self, pixel: &Point2<f64>, depth: f64) -> Point3<f64> {
-        let x = (pixel.x - self.intrinsics.cx) / self.intrinsics.fx;
-        let y = (pixel.y - self.intrinsics.cy) / self.intrinsics.fy;
+        let fx = self.intrinsics.fx;
+        let fy = self.intrinsics.fy;
+        if fx.abs() < 1e-10 || fy.abs() < 1e-10 {
+            return Point3::new(0.0, 0.0, depth);
+        }
+        let x = (pixel.x - self.intrinsics.cx) / fx;
+        let y = (pixel.y - self.intrinsics.cy) / fy;
         let (xu, yu) = self.distortion.remove(x, y);
         Point3::new(xu * depth, yu * depth, depth)
     }
@@ -97,8 +102,13 @@ impl CameraModel<f32> for PinholeModelF32 {
     }
 
     fn unproject(&self, pixel: &Point2<f32>, depth: f32) -> Point3<f32> {
-        let x = (pixel.x - self.intrinsics.cx) / self.intrinsics.fx;
-        let y = (pixel.y - self.intrinsics.cy) / self.intrinsics.fy;
+        let fx = self.intrinsics.fx;
+        let fy = self.intrinsics.fy;
+        if fx.abs() < 1e-7 || fy.abs() < 1e-7 {
+            return Point3::new(0.0, 0.0, depth);
+        }
+        let x = (pixel.x - self.intrinsics.cx) / fx;
+        let y = (pixel.y - self.intrinsics.cy) / fy;
         let (xu, yu) = self.distortion.remove(x, y);
         Point3::new(xu * depth, yu * depth, depth)
     }

@@ -144,9 +144,13 @@ pub fn registration_icp_point_to_plane(
             transformation = update * transformation;
         }
 
-        // Evaluate
+        let source_len = source.points.len();
+        if correspondences.is_empty() || source_len == 0 {
+            return None;
+        }
+
         let rmse = (total_residual / correspondences.len() as f32).sqrt();
-        let fitness = correspondences.len() as f32 / source.points.len() as f32;
+        let fitness = correspondences.len() as f32 / source_len as f32;
 
         if fitness > best_fitness {
             best_fitness = fitness;

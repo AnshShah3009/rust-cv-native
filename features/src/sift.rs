@@ -121,7 +121,13 @@ impl Sift {
                         self.edge_threshold,
                     )
                     .unwrap();
-                let cand_slice = candidates.storage.as_slice().unwrap();
+                let cand_slice = match candidates.storage.as_slice() {
+                    Some(slice) => slice,
+                    None => {
+                        eprintln!("Warning: Failed to get candidate slice");
+                        continue;
+                    }
+                };
 
                 for y in 1..h - 1 {
                     for x in 1..w - 1 {
@@ -294,9 +300,18 @@ fn refine_point(
     for _ in 0..5 {
         let (h, w) = dog_layers[0].shape.hw();
 
-        let d_s = &dog_layers[curr_s].storage.as_slice().unwrap();
-        let d_prev = &dog_layers[curr_s - 1].storage.as_slice().unwrap();
-        let d_next = &dog_layers[curr_s + 1].storage.as_slice().unwrap();
+        let d_s = match dog_layers[curr_s].storage.as_slice() {
+            Some(s) => s,
+            None => return None,
+        };
+        let d_prev = match dog_layers[curr_s - 1].storage.as_slice() {
+            Some(s) => s,
+            None => return None,
+        };
+        let d_next = match dog_layers[curr_s + 1].storage.as_slice() {
+            Some(s) => s,
+            None => return None,
+        };
 
         let dx = (d_s[curr_y * w + curr_x + 1] - d_s[curr_y * w + curr_x - 1]) / 2.0;
         let dy = (d_s[(curr_y + 1) * w + curr_x] - d_s[(curr_y - 1) * w + curr_x]) / 2.0;

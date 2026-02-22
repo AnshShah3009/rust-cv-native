@@ -130,12 +130,13 @@ impl ShmCoordinator {
     /// The mmap must be at least as large as `size_of::<ShmHeader>()`.
     fn header_mut(mmap: &mut memmap2::MmapMut) -> &mut ShmHeader {
         let header_size = std::mem::size_of::<ShmHeader>();
-        debug_assert!(
-            mmap.len() >= header_size,
-            "Mmap too small for header: {} < {}",
-            mmap.len(),
-            header_size
-        );
+        if mmap.len() < header_size {
+            panic!(
+                "Mmap too small for header: {} < {}",
+                mmap.len(),
+                header_size
+            );
+        }
         unsafe { &mut *(mmap.as_mut_ptr() as *mut ShmHeader) }
     }
 
@@ -229,12 +230,13 @@ impl ShmCoordinator {
     /// Get the header from the mmap (read-only) with bounds validation.
     fn header(&self) -> &ShmHeader {
         let header_size = std::mem::size_of::<ShmHeader>();
-        debug_assert!(
-            self.mmap.len() >= header_size,
-            "Mmap too small for header: {} < {}",
-            self.mmap.len(),
-            header_size
-        );
+        if self.mmap.len() < header_size {
+            panic!(
+                "Mmap too small for header: {} < {}",
+                self.mmap.len(),
+                header_size
+            );
+        }
         unsafe { &*(self.mmap.as_ptr() as *const ShmHeader) }
     }
 

@@ -84,7 +84,7 @@ impl DeviceRuntime {
         if let Ok(mut last) = self.last_submitted.lock() {
             last.next()
         } else {
-            SubmissionIndex::new(0)
+            SubmissionIndex(0)
         }
     }
 
@@ -104,7 +104,7 @@ impl DeviceRuntime {
             .lock()
             .ok()
             .map(|l| *l)
-            .unwrap_or_else(SubmissionIndex::new)
+            .unwrap_or_else(|| SubmissionIndex(0))
     }
 }
 
@@ -152,10 +152,9 @@ impl DeviceRegistry {
             }
         }
     }
-    }
 
     pub fn get_device(&self, id: DeviceId) -> Option<Arc<DeviceRuntime>> {
-        self.devices.lock().unwrap().get(&id).cloned()
+        self.devices.lock().ok()?.get(&id).cloned()
     }
 
     pub fn default_cpu(&self) -> Arc<DeviceRuntime> {
@@ -164,12 +163,16 @@ impl DeviceRegistry {
     }
 
     pub fn default_gpu(&self) -> Option<Arc<DeviceRuntime>> {
-        let id = *self.default_gpu.lock().unwrap();
+        let id = *self.default_gpu.lock().ok()?;
         id.and_then(|id| self.get_device(id))
     }
 
     pub fn all_devices(&self) -> Vec<Arc<DeviceRuntime>> {
-        self.devices.lock().unwrap().values().cloned().collect()
+        self.devices
+            .lock()
+            .ok()
+            .map(|m| m.values().cloned().collect())
+            .unwrap_or_default()
     }
 }
 
