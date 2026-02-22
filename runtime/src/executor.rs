@@ -151,13 +151,17 @@ impl Executor {
     fn do_resize(&self, new_num_threads: usize) -> Result<()> {
         let timeout = Duration::from_secs(RESIZE_TIMEOUT_SECS);
         let start = Instant::now();
+        let mut sleep_duration = Duration::from_micros(100);
+        let max_sleep = Duration::from_millis(100);
+        
         while self.load() > 0 {
             if start.elapsed() > timeout {
                 return Err(crate::Error::RuntimeError(
                     "Timeout waiting for jobs to complete during resize".into()
                 ));
             }
-            std::thread::yield_now();
+            std::thread::sleep(sleep_duration);
+            sleep_duration = (sleep_duration * 2).min(max_sleep);
         }
 
         let mut config = self.config.write();
@@ -183,13 +187,17 @@ impl Executor {
     fn do_set_core_affinity(&self, cores: Vec<usize>) -> Result<()> {
         let timeout = Duration::from_secs(RESIZE_TIMEOUT_SECS);
         let start = Instant::now();
+        let mut sleep_duration = Duration::from_micros(100);
+        let max_sleep = Duration::from_millis(100);
+        
         while self.load() > 0 {
             if start.elapsed() > timeout {
                 return Err(crate::Error::RuntimeError(
                     "Timeout waiting for jobs to complete during core affinity change".into()
                 ));
             }
-            std::thread::yield_now();
+            std::thread::sleep(sleep_duration);
+            sleep_duration = (sleep_duration * 2).min(max_sleep);
         }
 
         let mut config = self.config.write();

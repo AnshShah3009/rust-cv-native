@@ -162,14 +162,23 @@ impl Pipeline {
                         .filter_map(|&id| allocator.get_buffer(id))
                         .collect();
                     
-                    let _output_sizes: Vec<_> = outputs.iter()
+                    let output_sizes: Vec<_> = outputs.iter()
                         .filter_map(|&id| self.buffers.get(&id).copied())
                         .collect();
 
                     #[cfg(feature = "tracing")]
-                    tracing::debug!("Executing kernel: {}", name);
+                    tracing::debug!("Executing kernel: {} ({} inputs, {} outputs)", 
+                        name, input_buffers.len(), output_sizes.len());
                     
-                    let _ = (name, params, device_runtime.as_ref());
+                    if !outputs.is_empty() {
+                        for (i, &output_id) in outputs.iter().enumerate() {
+                            if i < output_sizes.len() {
+                                allocator.allocate_or_update(output_id, output_sizes[i], &[])?;
+                            }
+                        }
+                    }
+                    
+                    let _: (_, _, _) = (name, params, device_runtime.as_ref());
                 }
                 PipelineNode::CpuOp { inputs, outputs, op } => {
                     let input_data: Vec<Vec<u8>> = inputs.iter()

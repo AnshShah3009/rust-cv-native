@@ -49,7 +49,15 @@ impl TensorShape {
     }
 
     pub fn len(&self) -> usize {
-        self.channels * self.height * self.width
+        self.channels
+            .saturating_mul(self.height)
+            .saturating_mul(self.width)
+    }
+
+    pub fn checked_len(&self) -> Option<usize> {
+        self.channels
+            .checked_mul(self.height)
+            .and_then(|partial| partial.checked_mul(self.width))
     }
 
     pub fn is_1d(&self) -> bool {

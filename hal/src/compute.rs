@@ -586,9 +586,11 @@ pub fn get_device_by_id(id: crate::DeviceId) -> Result<ComputeDevice<'static>> {
         }
     } else {
         // Try to init if it's the only one
-        let cpu = CPU_CONTEXT.get_or_init(|| CpuBackend::new().unwrap());
-        if cpu.device_id() == id {
-            return Ok(ComputeDevice::Cpu(cpu));
+        if let Some(cpu_backend) = CpuBackend::new() {
+            let cpu = CPU_CONTEXT.get_or_init(move || cpu_backend);
+            if cpu.device_id() == id {
+                return Ok(ComputeDevice::Cpu(cpu));
+            }
         }
     }
 
@@ -621,9 +623,9 @@ pub fn get_device() -> Result<ComputeDevice<'static>> {
     match GpuContext::global() {
         Ok(gpu) => Ok(ComputeDevice::Gpu(gpu)),
         Err(_) => {
-            let cpu = CPU_CONTEXT.get_or_init(|| {
-                CpuBackend::new().expect("CPU backend must be available as fallback")
-            });
+            let cpu_backend = CpuBackend::new()
+                .ok_or_else(|| crate::Error::InitError("CPU backend unavailable".into()))?;
+            let cpu = CPU_CONTEXT.get_or_init(|| cpu_backend);
             Ok(ComputeDevice::Cpu(cpu))
         }
     }

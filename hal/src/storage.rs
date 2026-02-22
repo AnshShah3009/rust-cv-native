@@ -1,9 +1,9 @@
-use cv_core::storage::{Storage, DeviceType};
 use crate::gpu::GpuContext;
-use std::sync::Arc;
-use std::marker::PhantomData;
-use std::fmt;
+use cv_core::storage::{DeviceType, Storage};
 use std::any::Any;
+use std::fmt;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 /// GPU storage using wgpu buffers.
 ///
@@ -19,10 +19,20 @@ pub struct GpuStorage<T> {
 
 impl<T> GpuStorage<T> {
     pub fn from_buffer(buffer: Arc<wgpu::Buffer>, len: usize) -> Self {
-        Self::from_buffer_with_usage(buffer, len, wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST)
+        Self::from_buffer_with_usage(
+            buffer,
+            len,
+            wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+        )
     }
 
-    pub fn from_buffer_with_usage(buffer: Arc<wgpu::Buffer>, len: usize, usage: wgpu::BufferUsages) -> Self {
+    pub fn from_buffer_with_usage(
+        buffer: Arc<wgpu::Buffer>,
+        len: usize,
+        usage: wgpu::BufferUsages,
+    ) -> Self {
         Self {
             buffer: Some(buffer),
             len,
@@ -31,9 +41,16 @@ impl<T> GpuStorage<T> {
         }
     }
 
-    /// Access the underlying buffer. Panics if the buffer has been dropped (which should not happen during normal use).
+    /// Access the underlying buffer. Returns None if the buffer has been dropped.
     pub fn buffer(&self) -> &wgpu::Buffer {
-        self.buffer.as_ref().expect("GpuStorage buffer accessed after drop")
+        self.buffer
+            .as_ref()
+            .expect("GpuStorage buffer accessed after drop")
+    }
+
+    /// Try to access the underlying buffer. Returns None if the buffer has been dropped.
+    pub fn try_buffer(&self) -> Option<&wgpu::Buffer> {
+        self.buffer.as_deref()
     }
 }
 
@@ -51,7 +68,7 @@ impl<T> Drop for GpuStorage<T> {
 
 impl<T: bytemuck::Pod + fmt::Debug + Any> Storage<T> for GpuStorage<T> {
     fn device(&self) -> DeviceType {
-        DeviceType::Vulkan 
+        DeviceType::Vulkan
     }
 
     fn len(&self) -> usize {
@@ -66,11 +83,16 @@ impl<T: bytemuck::Pod + fmt::Debug + Any> Storage<T> for GpuStorage<T> {
         None
     }
 
-    fn new(size: usize, _default_value: T) -> std::result::Result<Self, String> where T: Clone {
+    fn new(size: usize, _default_value: T) -> std::result::Result<Self, String>
+    where
+        T: Clone,
+    {
         let ctx = GpuContext::global().map_err(|e| e.to_string())?;
         let byte_size = (size * std::mem::size_of::<T>()) as u64;
-        let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
-        
+        let usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC;
+
         let buffer = ctx.get_buffer(byte_size, usage);
 
         Ok(Self {
@@ -84,10 +106,13 @@ impl<T: bytemuck::Pod + fmt::Debug + Any> Storage<T> for GpuStorage<T> {
     fn from_vec(data: Vec<T>) -> std::result::Result<Self, String> {
         let ctx = GpuContext::global().map_err(|e| e.to_string())?;
         let byte_size = (data.len() * std::mem::size_of::<T>()) as u64;
-        let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
-        
+        let usage = wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC;
+
         let buffer = ctx.get_buffer(byte_size, usage);
-        ctx.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&data));
+        ctx.queue
+            .write_buffer(&buffer, 0, bytemuck::cast_slice(&data));
 
         Ok(Self {
             buffer: Some(Arc::new(buffer)),

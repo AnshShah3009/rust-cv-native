@@ -85,6 +85,10 @@ impl ShmCoordinator {
 
         let mut mmap = unsafe { memmap2::MmapOptions::new().map_mut(&file)? };
 
+        for byte in mmap.iter_mut() {
+            *byte = 0;
+        }
+
         let header = Self::header_mut(&mut mmap);
         let magic = 0x43565254;
 
@@ -190,16 +194,24 @@ impl ShmCoordinator {
 
 impl LoadCoordinator for ShmCoordinator {
     fn update_load(&self, device_load: &HashMap<DeviceId, usize>) -> std::io::Result<()> {
-        let timestamp = Self::current_timestamp();
-
-        for (&device_id, &load) in device_load {
-            let slot = self.get_slot();
-            slot.with_lock(|s| {
-                s.device_id.store(device_id.0, Ordering::Relaxed);
-                s.load.store(load as u32, Ordering::Relaxed);
-                s.timestamp.store(timestamp, Ordering::Relaxed);
-            });
+        if device_load.is_empty() {
+            return Ok(());
         }
+
+        let timestamp = Self::current_timestamp();
+        let total_load: usize = device_load.values().sum();
+        let primary_device = device_load
+            .iter()
+            .max_by_key(|(_, &load)| load)
+            .map(|(id, _)| id.0)
+            .unwrap_or(0);
+
+        let slot = self.get_slot();
+        slot.with_lock(|s| {
+            s.device_id.store(primary_device, Ordering::Relaxed);
+            s.load.store(total_load as u32, Ordering::Relaxed);
+            s.timestamp.store(timestamp, Ordering::Relaxed);
+        });
 
         Ok(())
     }

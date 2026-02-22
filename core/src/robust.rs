@@ -2,8 +2,8 @@
 //!
 //! Provides a generic RANSAC implementation that can be used for any model estimation task.
 
-use std::marker::PhantomData;
 use rand::seq::SliceRandom;
+use std::marker::PhantomData;
 
 /// Configuration for robust estimation
 #[derive(Debug, Clone)]
@@ -104,9 +104,15 @@ impl<D, M: RobustModel<D>> Ransac<D, M> {
                     }
                 }
 
-                let residual = if num_inliers > 0 { total_error / num_inliers as f64 } else { f64::INFINITY };
+                let residual = if num_inliers > 0 {
+                    total_error / num_inliers as f64
+                } else {
+                    f64::INFINITY
+                };
 
-                if num_inliers > best_num_inliers || (num_inliers == best_num_inliers && residual < best_residual) {
+                if num_inliers > best_num_inliers
+                    || (num_inliers == best_num_inliers && residual < best_residual)
+                {
                     best_num_inliers = num_inliers;
                     best_inliers = inliers;
                     best_model = Some(model);
@@ -167,14 +173,19 @@ impl<D, M: RobustModel<D>> LMedS<D, M> {
             let sample: Vec<&D> = (0..k).map(|i| &data[indices[i]]).collect();
 
             if let Some(model) = estimator.estimate(&sample) {
-                let mut errors: Vec<f64> = data.iter()
+                let mut errors: Vec<f64> = data
+                    .iter()
                     .map(|d| estimator.compute_error(&model, d))
+                    .filter(|&e| e.is_finite())
                     .collect();
-                
-                // Sort errors to find median
-                errors.sort_by(|a, b| a.partial_cmp(b).expect("NaN residual in LMedS"));
-                
-                let median_error = errors[n / 2];
+
+                if errors.is_empty() {
+                    continue;
+                }
+
+                errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+                let median_error = errors[errors.len() / 2];
 
                 if median_error < best_median_error {
                     best_median_error = median_error;
@@ -202,7 +213,11 @@ impl<D, M: RobustModel<D>> LMedS<D, M> {
                     total_error += err;
                 }
             }
-            best_residual = if num_inliers > 0 { total_error / num_inliers as f64 } else { f64::INFINITY };
+            best_residual = if num_inliers > 0 {
+                total_error / num_inliers as f64
+            } else {
+                f64::INFINITY
+            };
         }
 
         RobustResult {
@@ -228,7 +243,7 @@ impl<D, M: RobustModel<D>> Prosac<D, M> {
         }
     }
 
-    /// Run PROSAC estimation. 
+    /// Run PROSAC estimation.
     /// data: The data points, MUST BE SORTED BY QUALITY (best first).
     pub fn run(&self, estimator: &M, data: &[D]) -> RobustResult<M::Model> {
         let n = data.len();
@@ -249,12 +264,12 @@ impl<D, M: RobustModel<D>> Prosac<D, M> {
         let mut best_residual = f64::INFINITY;
 
         let mut rng = rand::thread_rng();
-        
+
         // PROSAC parameters
         let t_max = self.config.max_iterations;
         let mut n_sub = m;
         let mut t_n = 1.0;
-        
+
         for t in 1..=t_max {
             // 1. Determine size of subset to sample from (Growth Function)
             // Progressive sampling: starts with small subset of high-quality data
@@ -264,7 +279,7 @@ impl<D, M: RobustModel<D>> Prosac<D, M> {
                 for i in 0..m {
                     num *= (n_sub - i) as f64 / (m - i) as f64;
                 }
-                t_n = num * t_max as f64 / n as f64; 
+                t_n = num * t_max as f64 / n as f64;
             }
 
             // 2. Sample
@@ -272,9 +287,9 @@ impl<D, M: RobustModel<D>> Prosac<D, M> {
             if n_sub < n {
                 // Choice of m-1 points from n_sub-1 and 1 point being the n_sub-th
                 sample_indices.push(n_sub - 1);
-                let mut pool: Vec<usize> = (0..n_sub-1).collect();
+                let mut pool: Vec<usize> = (0..n_sub - 1).collect();
                 pool.shuffle(&mut rng);
-                for i in 0..m-1 {
+                for i in 0..m - 1 {
                     sample_indices.push(pool[i]);
                 }
             } else {
@@ -303,9 +318,15 @@ impl<D, M: RobustModel<D>> Prosac<D, M> {
                     }
                 }
 
-                let residual = if num_inliers > 0 { total_error / num_inliers as f64 } else { f64::INFINITY };
+                let residual = if num_inliers > 0 {
+                    total_error / num_inliers as f64
+                } else {
+                    f64::INFINITY
+                };
 
-                if num_inliers > best_num_inliers || (num_inliers == best_num_inliers && residual < best_residual) {
+                if num_inliers > best_num_inliers
+                    || (num_inliers == best_num_inliers && residual < best_residual)
+                {
                     best_num_inliers = num_inliers;
                     best_inliers = inliers;
                     best_model = Some(model);
