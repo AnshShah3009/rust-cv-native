@@ -164,8 +164,13 @@ fn match_template_gpu(
     let out_w = image.width() - templ.width() + 1;
     let out_h = image.height() - templ.height() + 1;
     
+    let data = res_cpu.storage.as_slice()
+        .ok_or_else(|| cv_hal::Error::RuntimeError(
+            "Template match GPU result not accessible as CPU slice".to_string()
+        ))?
+        .to_vec();
     Ok(MatchResult {
-        data: res_cpu.storage.as_slice().unwrap().to_vec(),
+        data,
         width: out_w,
         height: out_h,
     })
