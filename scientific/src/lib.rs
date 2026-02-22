@@ -102,11 +102,14 @@ impl Interp1d {
     }
 
     pub fn call(&self, x_val: f64) -> f64 {
+        if self.x.is_empty() || self.y.is_empty() {
+            return f64::NAN;
+        }
         if x_val <= self.x[0] {
             return self.y[0];
         }
-        if x_val >= *self.x.last().expect("Interp1d x is empty") {
-            return *self.y.last().expect("Interp1d y is empty");
+        if x_val >= *self.x.last().unwrap() {
+            return *self.y.last().unwrap();
         }
 
         let idx = self
