@@ -1,16 +1,12 @@
 //! GPU-accelerated point cloud operations
 //!
-//! This module re-exports point cloud functionality from cv-3d GPU module,
-//! providing a unified interface for GPU-accelerated operations including:
-//! - Normal computation with configurable compute modes
-//! - Point cloud filtering (statistical and radius outlier removal)
-//! - Point cloud clustering (DBSCAN, Euclidean)
-//! - Point cloud downsampling
+//! This module re-exports point cloud functionality from cv-3d GPU module
 
-pub mod normals;
 pub mod filtering;
+pub mod normals;
 
-// Re-export main GPU types and functions
-pub use cv_3d::gpu::{ComputeMode, NormalComputeConfig};
-pub use normals::*;
 pub use filtering::*;
+pub use normals::*;
+
+// Re-export ComputeMode and NormalComputeConfig from crate root
+pub use crate::{ComputeMode, NormalComputeConfig};

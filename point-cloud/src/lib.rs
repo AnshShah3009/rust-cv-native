@@ -32,5 +32,60 @@
 pub mod cpu;
 pub mod gpu;
 
-// Re-export GPU types and configuration at crate level
-pub use gpu::{ComputeMode, NormalComputeConfig};
+#[derive(Debug, Clone, Copy, Default)]
+pub enum ComputeMode {
+    #[default]
+    CPU,
+    GPU,
+    Hybrid,
+    Adaptive,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NormalComputeConfig {
+    pub k: usize,
+    pub voxel_size: f32,
+    pub mode: ComputeMode,
+}
+
+impl NormalComputeConfig {
+    pub fn default() -> Self {
+        Self {
+            k: 15,
+            voxel_size: 0.01,
+            mode: ComputeMode::CPU,
+        }
+    }
+
+    pub fn cpu() -> Self {
+        Self {
+            k: 15,
+            voxel_size: 0.01,
+            mode: ComputeMode::CPU,
+        }
+    }
+
+    pub fn gpu() -> Self {
+        Self {
+            k: 15,
+            voxel_size: 0.01,
+            mode: ComputeMode::GPU,
+        }
+    }
+
+    pub fn fast() -> Self {
+        Self {
+            k: 10,
+            voxel_size: 0.02,
+            mode: ComputeMode::CPU,
+        }
+    }
+
+    pub fn high_quality() -> Self {
+        Self {
+            k: 30,
+            voxel_size: 0.005,
+            mode: ComputeMode::CPU,
+        }
+    }
+}

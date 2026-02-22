@@ -5,6 +5,4 @@
 //! - DBSCAN clustering
 //! - FPFH feature computation
 
-pub use cv_scientific::point_cloud::{
-    segment_plane, cluster_dbscan, compute_fpfh_feature,
-};
+pub use cv_scientific::point_cloud::{cluster_dbscan, compute_fpfh_feature, segment_plane};
