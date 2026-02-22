@@ -182,3 +182,139 @@ pub fn filter_matches_by_ratio_test(
 
     good_matches
 }
+
+#[cfg(test)]
+#[allow(missing_docs)]
+mod tests {
+    use super::*;
+    use cv_core::KeyPoint;
+
+    fn make_descriptors_from_bytes(values: &[&[u8]]) -> Descriptors {
+        let mut ds = Descriptors::new();
+        for (i, &v) in values.iter().enumerate() {
+            let kp = KeyPoint::new(i as f64, 0.0);
+            ds.push(crate::descriptor::Descriptor::new(v.to_vec(), kp));
+        }
+        ds
+    }
+
+    #[test]
+    fn matcher_new() {
+        let m = Matcher::new(MatchType::BruteForce);
+        assert!(!m.cross_check);
+        assert!(m.ratio_threshold.is_none());
+    }
+
+    #[test]
+    fn matcher_with_cross_check() {
+        let m = Matcher::new(MatchType::BruteForce).with_cross_check();
+        assert!(m.cross_check);
+    }
+
+    #[test]
+    fn matcher_with_ratio_test() {
+        let m = Matcher::new(MatchType::BruteForce).with_ratio_test(0.7);
+        assert_eq!(m.ratio_threshold, Some(0.7));
+    }
+
+    #[test]
+    fn match_descriptors_identical_sets() {
+        let query = make_descriptors_from_bytes(&[&[0u8; 8], &[0xFFu8; 8]]);
+        let train = make_descriptors_from_bytes(&[&[0u8; 8], &[0xFFu8; 8]]);
+        let result = match_descriptors(&query, &train, None);
+        assert_eq!(result.matches.len(), 2);
+        assert!(result.matches.iter().all(|m| (m.distance as u32) == 0));
+    }
+
+    #[test]
+    fn match_descriptors_empty_query() {
+        let query = Descriptors::new();
+        let train = make_descriptors_from_bytes(&[&[0u8; 8]]);
+        let result = match_descriptors(&query, &train, None);
+        assert!(result.matches.is_empty());
+    }
+
+    #[test]
+    fn match_descriptors_empty_train() {
+        let query = make_descriptors_from_bytes(&[&[0u8; 8]]);
+        let train = Descriptors::new();
+        let result = match_descriptors(&query, &train, None);
+        assert!(result.matches.is_empty());
+    }
+
+    #[test]
+    fn match_descriptors_with_ratio_filter() {
+        let query = make_descriptors_from_bytes(&[&[0u8; 1]]);
+        let train = make_descriptors_from_bytes(&[&[0u8; 1], &[0xFFu8; 1]]);
+        let result = match_descriptors(&query, &train, Some(0.75));
+        assert_eq!(result.matches.len(), 1);
+    }
+
+    #[test]
+    fn knn_match_returns_k_results() {
+        let query = make_descriptors_from_bytes(&[&[0u8; 4]]);
+        let train = make_descriptors_from_bytes(&[&[0u8; 4], &[0x0Fu8; 4], &[0xFFu8; 4]]);
+        let results = knn_match(&query, &train, 2);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].len(), 2);
+        assert!(results[0][0].distance <= results[0][1].distance);
+    }
+
+    #[test]
+    fn knn_match_fewer_than_k() {
+        let query = make_descriptors_from_bytes(&[&[0u8; 4]]);
+        let train = make_descriptors_from_bytes(&[&[0u8; 4], &[0xFFu8; 4]]);
+        let results = knn_match(&query, &train, 5);
+        assert_eq!(results[0].len(), 2);
+    }
+
+    #[test]
+    fn knn_match_empty_train() {
+        let query = make_descriptors_from_bytes(&[&[0u8; 4]]);
+        let train = Descriptors::new();
+        let results = knn_match(&query, &train, 2);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_empty());
+    }
+
+    #[test]
+    fn filter_matches_by_distance_boundary() {
+        let mut m = Matches {
+            matches: vec![
+                FeatureMatch::new(0, 0, 0.3),
+                FeatureMatch::new(1, 1, 0.5),
+                FeatureMatch::new(2, 2, 0.8),
+            ],
+            mask: None,
+        };
+        filter_matches_by_distance(&mut m, 0.5);
+        assert_eq!(m.matches.len(), 2);
+    }
+
+    #[test]
+    fn filter_matches_by_ratio_test_accepts_good() {
+        let matches = vec![vec![
+            FeatureMatch::new(0, 0, 0.3),
+            FeatureMatch::new(0, 1, 1.0),
+        ]];
+        let result = filter_matches_by_ratio_test(&matches, 0.75);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn filter_matches_by_ratio_test_rejects_ambiguous() {
+        let matches = vec![vec![
+            FeatureMatch::new(0, 0, 0.8),
+            FeatureMatch::new(0, 1, 0.9),
+        ]];
+        let result = filter_matches_by_ratio_test(&matches, 0.75);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_matches_single_neighbor_rejected() {
+        let matches = vec![vec![FeatureMatch::new(0, 0, 0.1)]];
+        let result = filter_matches_by_ratio_test(&matches, 0.75);
+        assert!(result.is_empty());
+    }
+}

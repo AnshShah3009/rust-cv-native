@@ -204,3 +204,177 @@ impl Default for KeyPoints {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[allow(missing_docs)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keypoint_new_default_fields() {
+        let kp = KeyPoint::new(1.0, 2.0);
+        assert_eq!(kp.x, 1.0);
+        assert_eq!(kp.y, 2.0);
+        assert_eq!(kp.size, 1.0);
+        assert_eq!(kp.angle, -1.0);
+        assert_eq!(kp.response, 0.0);
+        assert_eq!(kp.octave, 0);
+        assert_eq!(kp.class_id, -1);
+    }
+
+    #[test]
+    fn keypoint_builder_chain() {
+        let kp = KeyPoint::new(0.0, 0.0)
+            .with_size(5.0)
+            .with_angle(45.0)
+            .with_response(0.8)
+            .with_octave(2);
+        assert_eq!(kp.size, 5.0);
+        assert_eq!(kp.angle, 45.0);
+        assert_eq!(kp.response, 0.8);
+        assert_eq!(kp.octave, 2);
+    }
+
+    #[test]
+    fn keypoint_pt_returns_point2() {
+        let kp = KeyPoint::new(3.5, 4.5);
+        let pt = kp.pt();
+        assert_eq!(pt.x, 3.5);
+        assert_eq!(pt.y, 4.5);
+    }
+
+    #[test]
+    fn keypoint_scaled_pt_applies_scale() {
+        let kp = KeyPoint::new(4.0, 8.0);
+        let scaled = kp.scaled_pt(2.0);
+        assert_eq!(scaled.x, 8.0);
+        assert_eq!(scaled.y, 16.0);
+    }
+
+    #[test]
+    fn keypoint_scaled_pt_zero_scale() {
+        let kp = KeyPoint::new(4.0, 8.0);
+        let scaled = kp.scaled_pt(0.0);
+        assert_eq!(scaled.x, 0.0);
+        assert_eq!(scaled.y, 0.0);
+    }
+
+    #[test]
+    fn keypoint_default() {
+        let kp = KeyPoint::default();
+        assert_eq!(kp.x, 0.0);
+        assert_eq!(kp.y, 0.0);
+        assert_eq!(kp.size, 1.0);
+        assert_eq!(kp.octave, 0);
+    }
+
+    #[test]
+    fn keypoint_f32_conversion() {
+        let kp = KeyPoint::new(1.5, 2.5)
+            .with_size(3.0)
+            .with_angle(45.0)
+            .with_response(0.9)
+            .with_octave(1);
+        let kp32: KeyPointF32 = kp.into();
+        assert!((kp32.x - 1.5_f32).abs() < 1e-6);
+        assert!((kp32.y - 2.5_f32).abs() < 1e-6);
+        assert!((kp32.size - 3.0_f32).abs() < 1e-6);
+    }
+
+    #[test]
+    fn feature_match_new() {
+        let m = FeatureMatch::new(0, 1, 0.5);
+        assert_eq!(m.query_idx, 0);
+        assert_eq!(m.train_idx, 1);
+        assert!((m.distance - 0.5).abs() < 1e-6);
+        assert_eq!(m.img_idx, 0);
+    }
+
+    #[test]
+    fn feature_match_with_img_idx() {
+        let m = FeatureMatch::new(0, 1, 0.5).with_img_idx(3);
+        assert_eq!(m.img_idx, 3);
+    }
+
+    #[test]
+    fn matches_new_empty() {
+        let m = Matches::new();
+        assert!(m.is_empty());
+        assert_eq!(m.len(), 0);
+    }
+
+    #[test]
+    fn matches_with_capacity() {
+        let m = Matches::with_capacity(10);
+        assert!(m.is_empty());
+        assert_eq!(m.matches.capacity(), 10);
+    }
+
+    #[test]
+    fn matches_push_and_len() {
+        let mut m = Matches::new();
+        m.push(FeatureMatch::new(0, 0, 0.5));
+        assert_eq!(m.len(), 1);
+        m.push(FeatureMatch::new(1, 1, 0.7));
+        assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn matches_filter_by_distance() {
+        let mut m = Matches::new();
+        m.push(FeatureMatch::new(0, 0, 0.3));
+        m.push(FeatureMatch::new(1, 1, 0.5));
+        m.push(FeatureMatch::new(2, 2, 0.8));
+        m.filter_by_distance(0.5);
+        assert_eq!(m.len(), 2);
+        assert!(m.matches.iter().all(|match_| match_.distance <= 0.5));
+    }
+
+    #[test]
+    fn matches_apply_ratio_test() {
+        let mut m = Matches::new();
+        m.push(FeatureMatch::new(0, 0, 0.3));
+        m.push(FeatureMatch::new(1, 1, 0.8));
+        let filtered = m.apply_ratio_test(0.5);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].distance, 0.3);
+    }
+
+    #[test]
+    fn keypoints_new_empty() {
+        let kps = KeyPoints::new();
+        assert!(kps.is_empty());
+        assert_eq!(kps.len(), 0);
+    }
+
+    #[test]
+    fn keypoints_with_capacity() {
+        let kps = KeyPoints::with_capacity(5);
+        assert!(kps.is_empty());
+        assert_eq!(kps.keypoints.capacity(), 5);
+    }
+
+    #[test]
+    fn keypoints_push_and_len() {
+        let mut kps = KeyPoints::new();
+        kps.push(KeyPoint::new(1.0, 2.0));
+        assert_eq!(kps.len(), 1);
+        assert!(!kps.is_empty());
+    }
+
+    #[test]
+    fn keypoints_iter() {
+        let mut kps = KeyPoints::new();
+        kps.push(KeyPoint::new(1.0, 2.0));
+        kps.push(KeyPoint::new(3.0, 4.0));
+        let collected: Vec<_> = kps.iter().collect();
+        assert_eq!(collected.len(), 2);
+        assert_eq!(collected[0].x, 1.0);
+    }
+
+    #[test]
+    fn keypoints_default() {
+        let kps = KeyPoints::default();
+        assert!(kps.is_empty());
+    }
+}

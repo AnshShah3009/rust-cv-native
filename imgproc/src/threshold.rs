@@ -1,9 +1,4 @@
 use crate::{gaussian_blur_with_border, BorderMode};
-use cv_core::storage::Storage;
-use cv_hal::compute::ComputeDevice;
-use cv_hal::context::ThresholdType as HalThresholdType;
-use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
-use cv_runtime::orchestrator::RuntimeRunner;
 use image::GrayImage;
 use wide::*;
 
@@ -23,58 +18,7 @@ pub enum AdaptiveMethod {
 }
 
 pub fn threshold(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType) -> GrayImage {
-    let runner = cv_runtime::best_runner();
-    threshold_ctx(src, thresh, max_value, typ, &runner)
-}
-
-pub fn threshold_ctx(
-    src: &GrayImage,
-    thresh: u8,
-    max_value: u8,
-    typ: ThresholdType,
-    group: &RuntimeRunner,
-) -> GrayImage {
-    let device = group.device();
-
-    if let ComputeDevice::Gpu(gpu) = device {
-        if let Ok(result) = threshold_gpu(gpu, src, thresh, max_value, typ) {
-            return result;
-        }
-    }
-
-    group.run(|| threshold_cpu(src, thresh, max_value, typ))
-}
-
-fn threshold_gpu(
-    gpu: &cv_hal::gpu::GpuContext,
-    src: &GrayImage,
-    thresh: u8,
-    max_value: u8,
-    typ: ThresholdType,
-) -> cv_hal::Result<GrayImage> {
-    use cv_hal::context::ComputeContext;
-
-    let input_tensor = cv_core::CpuTensor::from_vec(
-        src.as_raw().to_vec(),
-        cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize),
-    )
-    .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
-    let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
-
-    let hal_typ = match typ {
-        ThresholdType::Binary => HalThresholdType::Binary,
-        ThresholdType::BinaryInv => HalThresholdType::BinaryInv,
-        ThresholdType::Trunc => HalThresholdType::Trunc,
-        ThresholdType::ToZero => HalThresholdType::ToZero,
-        ThresholdType::ToZeroInv => HalThresholdType::ToZeroInv,
-    };
-
-    let output_gpu = gpu.threshold(&input_gpu, thresh, max_value, hal_typ)?;
-    let output_cpu = output_gpu.to_cpu_ctx(gpu)?;
-
-    let data = output_cpu.storage.as_slice().unwrap().to_vec();
-    GrayImage::from_raw(src.width(), src.height(), data)
-        .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
+    threshold_cpu(src, thresh, max_value, typ)
 }
 
 pub fn threshold_cpu(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType) -> GrayImage {
@@ -167,8 +111,7 @@ pub fn threshold_otsu(src: &GrayImage, max_value: u8, typ: ThresholdType) -> (u8
         }
     }
 
-    let runner = cv_runtime::best_runner();
-    let dst = threshold_ctx(src, best_threshold, max_value, typ, &runner);
+    let dst = threshold_cpu(src, best_threshold, max_value, typ);
     (best_threshold, dst)
 }
 
@@ -338,7 +281,7 @@ fn local_mean_image(src: &GrayImage, block_size: u32) -> GrayImage {
 
 fn local_gaussian_image(src: &GrayImage, block_size: u32) -> GrayImage {
     let sigma = 0.3 * (((block_size as f32) - 1.0) * 0.5 - 1.0) + 0.8;
-    gaussian_blur_with_border(src, sigma, BorderMode::Reflect101)
+    gaussian_blur_with_border(src, sigma, BorderMode::Reflect101).unwrap_or_else(|_| src.clone())
 }
 
 #[cfg(test)]
