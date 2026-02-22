@@ -1,5 +1,5 @@
 use crate::{CalibError, Result};
-use cv_core::{Pose, CameraIntrinsics};
+use cv_core::{CameraIntrinsics, Pose};
 use nalgebra::{DMatrix, Matrix3, Point2, Vector3};
 
 /// Compute Essential matrix from camera extrinsics (rotation and translation).
@@ -47,10 +47,7 @@ pub fn find_essential_mat(
 ///
 /// Uses the 8-point algorithm with Hartley normalization for numerical stability.
 /// Requires at least 8 point pairs.
-pub fn find_fundamental_mat(
-    pts1: &[Point2<f64>],
-    pts2: &[Point2<f64>],
-) -> Result<Matrix3<f64>> {
+pub fn find_fundamental_mat(pts1: &[Point2<f64>], pts2: &[Point2<f64>]) -> Result<Matrix3<f64>> {
     if pts1.len() != pts2.len() || pts1.len() < 8 {
         return Err(CalibError::InvalidParameters(
             "find_fundamental_mat needs >=8 paired points".to_string(),
@@ -59,13 +56,15 @@ pub fn find_fundamental_mat(
     estimate_fundamental_8_point(pts1, pts2)
 }
 
-use cv_core::{RobustModel, RobustConfig, Ransac};
+use cv_core::{Ransac, RobustConfig, RobustModel};
 
 pub struct EssentialEstimator;
 
 impl RobustModel<(Point2<f64>, Point2<f64>)> for EssentialEstimator {
     type Model = Matrix3<f64>;
-    fn min_sample_size(&self) -> usize { 8 }
+    fn min_sample_size(&self) -> usize {
+        8
+    }
     fn estimate(&self, data: &[&(Point2<f64>, Point2<f64>)]) -> Option<Self::Model> {
         let pts1: Vec<Point2<f64>> = data.iter().map(|p| p.0).collect();
         let pts2: Vec<Point2<f64>> = data.iter().map(|p| p.1).collect();
@@ -80,7 +79,9 @@ pub struct FundamentalEstimator;
 
 impl RobustModel<(Point2<f64>, Point2<f64>)> for FundamentalEstimator {
     type Model = Matrix3<f64>;
-    fn min_sample_size(&self) -> usize { 8 }
+    fn min_sample_size(&self) -> usize {
+        8
+    }
     fn estimate(&self, data: &[&(Point2<f64>, Point2<f64>)]) -> Option<Self::Model> {
         let pts1: Vec<Point2<f64>> = data.iter().map(|p| p.0).collect();
         let pts2: Vec<Point2<f64>> = data.iter().map(|p| p.1).collect();
@@ -101,21 +102,23 @@ pub fn find_essential_mat_ransac(
 ) -> Result<(Matrix3<f64>, Vec<bool>)> {
     let (n1, n2) = normalize_with_intrinsics(pts1, pts2, intrinsics);
     let data: Vec<(Point2<f64>, Point2<f64>)> = n1.into_iter().zip(n2.into_iter()).collect();
-    
+
     let f = 0.5 * (intrinsics.fx + intrinsics.fy);
     let thresh_norm = threshold_px / f.max(1e-12);
-    
+
     let config = RobustConfig {
         threshold: thresh_norm * thresh_norm,
         max_iterations: max_iters,
         confidence: 0.99,
         min_sample_size: 8,
     };
-    
+
     let ransac = Ransac::new(config);
     let res = ransac.run(&EssentialEstimator, &data);
-    
-    let model = res.model.ok_or_else(|| CalibError::InvalidParameters("RANSAC failed".into()))?;
+
+    let model = res
+        .model
+        .ok_or_else(|| CalibError::InvalidParameters("RANSAC failed".into()))?;
     Ok((model, res.inliers))
 }
 
@@ -126,19 +129,22 @@ pub fn find_fundamental_mat_ransac(
     threshold_px: f64,
     max_iters: usize,
 ) -> Result<(Matrix3<f64>, Vec<bool>)> {
-    let data: Vec<(Point2<f64>, Point2<f64>)> = pts1.iter().cloned().zip(pts2.iter().cloned()).collect();
-    
+    let data: Vec<(Point2<f64>, Point2<f64>)> =
+        pts1.iter().cloned().zip(pts2.iter().cloned()).collect();
+
     let config = RobustConfig {
         threshold: threshold_px * threshold_px,
         max_iterations: max_iters,
         confidence: 0.99,
         min_sample_size: 8,
     };
-    
+
     let ransac = Ransac::new(config);
     let res = ransac.run(&FundamentalEstimator, &data);
-    
-    let model = res.model.ok_or_else(|| CalibError::InvalidParameters("RANSAC failed".into()))?;
+
+    let model = res
+        .model
+        .ok_or_else(|| CalibError::InvalidParameters("RANSAC failed".into()))?;
     Ok((model, res.inliers))
 }
 
@@ -240,7 +246,10 @@ fn enforce_essential_constraints(e: &Matrix3<f64>) -> Result<Matrix3<f64>> {
 ///
 /// Includes Hartley normalization for numerical stability and
 /// enforces the rank-2 constraint on the resulting matrix.
-fn estimate_fundamental_8_point(pts1: &[Point2<f64>], pts2: &[Point2<f64>]) -> Result<Matrix3<f64>> {
+fn estimate_fundamental_8_point(
+    pts1: &[Point2<f64>],
+    pts2: &[Point2<f64>],
+) -> Result<Matrix3<f64>> {
     let (n1, t1) = normalize_points_hartley(pts1)?;
     let (n2, t2) = normalize_points_hartley(pts2)?;
     let n = n1.len();
@@ -281,7 +290,6 @@ fn estimate_fundamental_8_point(pts1: &[Point2<f64>], pts2: &[Point2<f64>]) -> R
     let f = t2.transpose() * f_rank2 * t1;
     Ok(f)
 }
-
 
 /// Hartley normalization: translate to centroid and scale for unit mean distance.
 ///

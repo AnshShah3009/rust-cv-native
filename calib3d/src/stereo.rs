@@ -1,7 +1,7 @@
 use crate::calibration::*;
 use crate::essential_fundamental::*;
 use crate::pattern::find_chessboard_corners;
-use cv_core::{Pose, CameraIntrinsics};
+use cv_core::{CameraIntrinsics, Pose};
 use image::GrayImage;
 use nalgebra::{Matrix3, Matrix3x4, Matrix4, Point2, Point3, Vector3};
 use std::path::Path;
@@ -68,8 +68,12 @@ pub fn stereo_calibrate_planar_with_options(
         ));
     }
 
-    let left =
-        calibrate_camera_planar_with_options(object_points, left_image_points, image_size, options)?;
+    let left = calibrate_camera_planar_with_options(
+        object_points,
+        left_image_points,
+        image_size,
+        options,
+    )?;
     let right = calibrate_camera_planar_with_options(
         object_points,
         right_image_points,
@@ -184,7 +188,13 @@ pub fn stereo_calibrate_from_chessboard_images_with_options(
         )));
     }
 
-    stereo_calibrate_planar_with_options(&object_points, &left_points, &right_points, (w, h), options)
+    stereo_calibrate_planar_with_options(
+        &object_points,
+        &left_points,
+        &right_points,
+        (w, h),
+        options,
+    )
 }
 
 pub fn stereo_calibrate_from_chessboard_files<P: AsRef<Path>>(
@@ -263,17 +273,21 @@ pub fn stereo_calibrate_from_chessboard_files_with_options<P: AsRef<Path>>(
         CalibError::InvalidParameters("no readable stereo pairs in provided file lists".to_string())
     })?;
 
-    let calib =
-        stereo_calibrate_planar_with_options(&object_points, &left_points, &right_points, dims, options).map_err(
-            |e| {
-                CalibError::InvalidParameters(format!(
-                    "stereo calibration failed for file subset (used {} / {} pairs): {}",
-                    object_points.len(),
-                    left_paths.len(),
-                    e
-                ))
-            },
-        )?;
+    let calib = stereo_calibrate_planar_with_options(
+        &object_points,
+        &left_points,
+        &right_points,
+        dims,
+        options,
+    )
+    .map_err(|e| {
+        CalibError::InvalidParameters(format!(
+            "stereo calibration failed for file subset (used {} / {} pairs): {}",
+            object_points.len(),
+            left_paths.len(),
+            e
+        ))
+    })?;
     let report = StereoCalibrationFileReport {
         total_pairs: left_paths.len(),
         used_pairs: object_points.len(),

@@ -5,7 +5,7 @@
 //! Jacobian computation for optimization tasks.
 
 use crate::{CalibError, Result};
-use cv_core::{Pose, CameraIntrinsics, Distortion};
+use cv_core::{CameraIntrinsics, Distortion, Pose};
 use nalgebra::{DMatrix, Matrix3, Point2, Point3, Vector3};
 use rayon::prelude::*;
 
@@ -18,7 +18,9 @@ pub struct ProjectPointsOptions {
 
 impl Default for ProjectPointsOptions {
     fn default() -> Self {
-        Self { compute_jacobians: false }
+        Self {
+            compute_jacobians: false,
+        }
     }
 }
 
@@ -150,10 +152,26 @@ pub fn project_points_with_jacobian(
     let mut image_points = Vec::with_capacity(n);
 
     // Initialize Jacobian matrices if requested
-    let mut jac_rot = if options.compute_jacobians { Some(DMatrix::zeros(2*n, 3)) } else { None };
-    let mut jac_trans = if options.compute_jacobians { Some(DMatrix::zeros(2*n, 3)) } else { None };
-    let mut jac_intr = if options.compute_jacobians { Some(DMatrix::zeros(2*n, 4)) } else { None };
-    let mut jac_dist = if options.compute_jacobians { Some(DMatrix::zeros(2*n, 5)) } else { None };
+    let mut jac_rot = if options.compute_jacobians {
+        Some(DMatrix::zeros(2 * n, 3))
+    } else {
+        None
+    };
+    let mut jac_trans = if options.compute_jacobians {
+        Some(DMatrix::zeros(2 * n, 3))
+    } else {
+        None
+    };
+    let mut jac_intr = if options.compute_jacobians {
+        Some(DMatrix::zeros(2 * n, 4))
+    } else {
+        None
+    };
+    let mut jac_dist = if options.compute_jacobians {
+        Some(DMatrix::zeros(2 * n, 5))
+    } else {
+        None
+    };
 
     // Convert rotation matrix to axis-angle for Jacobian computation
     let rvec = if options.compute_jacobians {
@@ -185,14 +203,23 @@ pub fn project_points_with_jacobian(
         image_points.push(Point2::new(u, v));
 
         // Compute Jacobians if requested
-        if let (Some(ref mut jr), Some(ref mut jt), Some(ref mut jk), Some(ref mut jd), Some(ref rv)) =
-            (&mut jac_rot, &mut jac_trans, &mut jac_intr, &mut jac_dist, &rvec) {
-
+        if let (
+            Some(ref mut jr),
+            Some(ref mut jt),
+            Some(ref mut jk),
+            Some(ref mut jd),
+            Some(ref rv),
+        ) = (
+            &mut jac_rot,
+            &mut jac_trans,
+            &mut jac_intr,
+            &mut jac_dist,
+            &rvec,
+        ) {
             // Chain rule: ∂pixel/∂params = ∂pixel/∂distorted × ∂distorted/∂normalized × ∂normalized/∂camera × ∂camera/∂params
             compute_projection_jacobians(
-                i, p_obj, &p_cam, x, y, xd, yd,
-                intrinsics, extrinsics, distortion, rv,
-                jr, jt, jk, jd
+                i, p_obj, &p_cam, x, y, xd, yd, intrinsics, extrinsics, distortion, rv, jr, jt, jk,
+                jd,
             );
         }
     }
@@ -209,22 +236,22 @@ pub fn project_points_with_jacobian(
 /// Convert rotation matrix to Rodrigues axis-angle representation
 fn rotation_matrix_to_rodrigues(r: &Matrix3<f64>) -> Vector3<f64> {
     // Use Rodrigues formula: θ = arccos((trace(R) - 1) / 2)
-    let trace = r[(0,0)] + r[(1,1)] + r[(2,2)];
+    let trace = r[(0, 0)] + r[(1, 1)] + r[(2, 2)];
     let theta = ((trace - 1.0) / 2.0).clamp(-1.0, 1.0).acos();
 
     if theta.abs() < 1e-6 {
         // Small angle approximation
         Vector3::new(
-            (r[(2,1)] - r[(1,2)]) / 2.0,
-            (r[(0,2)] - r[(2,0)]) / 2.0,
-            (r[(1,0)] - r[(0,1)]) / 2.0,
+            (r[(2, 1)] - r[(1, 2)]) / 2.0,
+            (r[(0, 2)] - r[(2, 0)]) / 2.0,
+            (r[(1, 0)] - r[(0, 1)]) / 2.0,
         )
     } else {
         let k = theta / (2.0 * theta.sin());
         Vector3::new(
-            k * (r[(2,1)] - r[(1,2)]),
-            k * (r[(0,2)] - r[(2,0)]),
-            k * (r[(1,0)] - r[(0,1)]),
+            k * (r[(2, 1)] - r[(1, 2)]),
+            k * (r[(0, 2)] - r[(2, 0)]),
+            k * (r[(1, 0)] - r[(0, 1)]),
         )
     }
 }
@@ -238,11 +265,7 @@ fn rodrigues_to_rotation_matrix(rvec: &Vector3<f64>) -> Matrix3<f64> {
         let rx = rvec[0];
         let ry = rvec[1];
         let rz = rvec[2];
-        Matrix3::new(
-            1.0, -rz, ry,
-            rz, 1.0, -rx,
-            -ry, rx, 1.0,
-        )
+        Matrix3::new(1.0, -rz, ry, rz, 1.0, -rx, -ry, rx, 1.0)
     } else {
         // Rodrigues formula: R = I + sin(θ)/θ [r]× + (1-cos(θ))/θ² [r]×²
         let r = rvec / theta;
@@ -255,9 +278,15 @@ fn rodrigues_to_rotation_matrix(rvec: &Vector3<f64>) -> Matrix3<f64> {
         let rz = r[2];
 
         Matrix3::new(
-            t*rx*rx + c,    t*rx*ry - s*rz, t*rx*rz + s*ry,
-            t*rx*ry + s*rz, t*ry*ry + c,    t*ry*rz - s*rx,
-            t*rx*rz - s*ry, t*ry*rz + s*rx, t*rz*rz + c,
+            t * rx * rx + c,
+            t * rx * ry - s * rz,
+            t * rx * rz + s * ry,
+            t * rx * ry + s * rz,
+            t * ry * ry + c,
+            t * ry * rz - s * rx,
+            t * rx * rz - s * ry,
+            t * ry * rz + s * rx,
+            t * rz * rz + c,
         )
     }
 }
@@ -268,8 +297,10 @@ fn compute_projection_jacobians(
     point_idx: usize,
     p_obj: &Point3<f64>,
     _p_cam: &Vector3<f64>,
-    x: f64, y: f64,
-    xd: f64, yd: f64,
+    x: f64,
+    y: f64,
+    xd: f64,
+    yd: f64,
     intrinsics: &CameraIntrinsics,
     extrinsics: &Pose,
     distortion: &Distortion,
@@ -290,7 +321,7 @@ fn compute_projection_jacobians(
         let r_pert = rodrigues_to_rotation_matrix(&rvec_pert);
         let ext_pert = Pose {
             rotation: r_pert,
-            translation: extrinsics.translation
+            translation: extrinsics.translation,
         };
 
         let p_cam_pert = ext_pert.rotation * p_obj.coords + ext_pert.translation;
@@ -330,13 +361,13 @@ fn compute_projection_jacobians(
     let u_base = intrinsics.fx * xd + intrinsics.cx;
     let v_base = intrinsics.fy * yd + intrinsics.cy;
 
-    jac_intr[(row, 0)] = xd;  // ∂u/∂fx
+    jac_intr[(row, 0)] = xd; // ∂u/∂fx
     jac_intr[(row, 1)] = 0.0; // ∂u/∂fy
     jac_intr[(row, 2)] = 1.0; // ∂u/∂cx
     jac_intr[(row, 3)] = 0.0; // ∂u/∂cy
 
     jac_intr[(row + 1, 0)] = 0.0; // ∂v/∂fx
-    jac_intr[(row + 1, 1)] = yd;  // ∂v/∂fy
+    jac_intr[(row + 1, 1)] = yd; // ∂v/∂fy
     jac_intr[(row + 1, 2)] = 0.0; // ∂v/∂cx
     jac_intr[(row + 1, 3)] = 1.0; // ∂v/∂cy
 

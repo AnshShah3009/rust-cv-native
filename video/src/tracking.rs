@@ -179,7 +179,10 @@ impl MeanShiftTracker {
     }
 
     fn compute_mean_shift(&self, frame: &GrayImage, cx: f64, cy: f64) -> (f64, f64) {
-        let target = self.target_model.as_ref().unwrap();
+        let target = match self.target_model.as_ref() {
+            Some(t) => t,
+            None => return (cx, cy),
+        };
         let (half_w, half_h) = (
             self.window_size.0 as f64 / 2.0,
             self.window_size.1 as f64 / 2.0,

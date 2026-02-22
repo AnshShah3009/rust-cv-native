@@ -2,12 +2,11 @@
 ///
 /// This module provides functions to estimate camera pose (rotation and translation)
 /// given a set of 3D object points and their 2D image projections.
-
 use crate::CalibError;
-use cv_core::{Pose, CameraIntrinsics};
+use cv_core::{CameraIntrinsics, Pose};
+use cv_runtime::RuntimeRunner;
 use nalgebra::{DMatrix, Matrix3, Matrix3x4, Point2, Point3, Rotation3, Vector3};
 use rayon::prelude::*;
-use cv_runtime::RuntimeRunner;
 
 pub type Result<T> = std::result::Result<T, CalibError>;
 
@@ -63,9 +62,9 @@ pub fn solve_pnp_dlt(
     }
 
     let svd = a.svd(true, true);
-    let vt = svd.v_t.ok_or_else(|| {
-        CalibError::InvalidParameters("SVD failed in solve_pnp_dlt".to_string())
-    })?;
+    let vt = svd
+        .v_t
+        .ok_or_else(|| CalibError::InvalidParameters("SVD failed in solve_pnp_dlt".to_string()))?;
     let p = vt.row(vt.nrows() - 1);
 
     let mut pmat = Matrix3x4::<f64>::zeros();
@@ -97,8 +96,8 @@ pub fn solve_pnp_dlt(
     })?;
 
     let mut r = u * vt_m;
-    let scale = (svd_m.singular_values[0] + svd_m.singular_values[1] + svd_m.singular_values[2])
-        / 3.0;
+    let scale =
+        (svd_m.singular_values[0] + svd_m.singular_values[1] + svd_m.singular_values[2]) / 3.0;
     if scale.abs() < 1e-12 {
         return Err(CalibError::InvalidParameters(
             "Degenerate solve_pnp_dlt scale".to_string(),
@@ -151,7 +150,13 @@ pub fn solve_pnp_ransac(
         let mut count = 0usize;
         let mut sum_err = 0.0f64;
         for j in 0..n {
-            let err = reprojection_error_px_dist(&pose, intrinsics, distortion, &object_points[j], &image_points[j]);
+            let err = reprojection_error_px_dist(
+                &pose,
+                intrinsics,
+                distortion,
+                &object_points[j],
+                &image_points[j],
+            );
             if err.is_finite() && err <= reprojection_threshold_px {
                 inliers[j] = true;
                 count += 1;
@@ -186,7 +191,15 @@ pub fn solve_pnp_ransac(
         .collect();
 
     let refined_pose = if inlier_obj.len() >= 6 {
-        solve_pnp_refine(&best_pose, &inlier_obj, &inlier_img, intrinsics, distortion, 20).unwrap_or(best_pose)
+        solve_pnp_refine(
+            &best_pose,
+            &inlier_obj,
+            &inlier_img,
+            intrinsics,
+            distortion,
+            20,
+        )
+        .unwrap_or(best_pose)
     } else {
         best_pose
     };
@@ -214,7 +227,15 @@ pub fn solve_pnp_refine(
     max_iters: usize,
 ) -> Result<Pose> {
     let runner = cv_runtime::default_runner();
-    solve_pnp_refine_ctx(initial, object_points, image_points, intrinsics, distortion, max_iters, &runner)
+    solve_pnp_refine_ctx(
+        initial,
+        object_points,
+        image_points,
+        intrinsics,
+        distortion,
+        max_iters,
+        &runner,
+    )
 }
 
 /// Context-aware PnP refinement using Levenberg-Marquardt
@@ -239,43 +260,60 @@ pub fn solve_pnp_refine_ctx(
 
     let mut current_err = group.run(|| {
         let base = params_to_extrinsics(&params);
-        object_points.par_iter().zip(image_points.par_iter()).map(|(p3, p2)| {
-            let pred = project_point_dist(intrinsics, distortion, &base, p3);
-            (pred.x - p2.x).powi(2) + (pred.y - p2.y).powi(2)
-        }).sum::<f64>()
+        object_points
+            .par_iter()
+            .zip(image_points.par_iter())
+            .map(|(p3, p2)| {
+                let pred = project_point_dist(intrinsics, distortion, &base, p3);
+                (pred.x - p2.x).powi(2) + (pred.y - p2.y).powi(2)
+            })
+            .sum::<f64>()
     });
 
     for _ in 0..max_iters {
         let base = params_to_extrinsics(&params);
-        
+
         // Parallel Jacobian and Residual calculation
         let (jtj, jtr) = group.run(|| {
             let eps = 1e-7;
-            
+
             // Compute Jacobians point-wise
-            let results: Vec<(nalgebra::Matrix6<f64>, nalgebra::Vector6<f64>)> = (0..n_pts).into_par_iter().map(|i| {
-                let p3 = &object_points[i];
-                let p2 = &image_points[i];
-                let pred0 = project_point_dist(intrinsics, distortion, &base, p3);
+            let results: Vec<(nalgebra::Matrix6<f64>, nalgebra::Vector6<f64>)> = (0..n_pts)
+                .into_par_iter()
+                .map(|i| {
+                    let p3 = &object_points[i];
+                    let p2 = &image_points[i];
+                    let pred0 = project_point_dist(intrinsics, distortion, &base, p3);
 
-                let mut j_point = [[0.0f64; 6]; 2];
-                for k in 0..6 {
-                    let mut p_perturbed = params;
-                    p_perturbed[k] += eps;
-                    let ext_p = params_to_extrinsics(&p_perturbed);
-                    let pred1 = project_point_dist(intrinsics, distortion, &ext_p, p3);
-                    j_point[0][k] = (pred1.x - pred0.x) / eps;
-                    j_point[1][k] = (pred1.y - pred0.y) / eps;
-                }
+                    let mut j_point = [[0.0f64; 6]; 2];
+                    for k in 0..6 {
+                        let mut p_perturbed = params;
+                        p_perturbed[k] += eps;
+                        let ext_p = params_to_extrinsics(&p_perturbed);
+                        let pred1 = project_point_dist(intrinsics, distortion, &ext_p, p3);
+                        j_point[0][k] = (pred1.x - pred0.x) / eps;
+                        j_point[1][k] = (pred1.y - pred0.y) / eps;
+                    }
 
-                let j = nalgebra::Matrix2x6::from_row_slice(&[
-                    j_point[0][0], j_point[0][1], j_point[0][2], j_point[0][3], j_point[0][4], j_point[0][5],
-                    j_point[1][0], j_point[1][1], j_point[1][2], j_point[1][3], j_point[1][4], j_point[1][5],
-                ]);
-                let r = nalgebra::Vector2::new(pred0.x - p2.x, pred0.y - p2.y);
-                
-                (j.transpose() * j, j.transpose() * r)
-            }).collect();
+                    let j = nalgebra::Matrix2x6::from_row_slice(&[
+                        j_point[0][0],
+                        j_point[0][1],
+                        j_point[0][2],
+                        j_point[0][3],
+                        j_point[0][4],
+                        j_point[0][5],
+                        j_point[1][0],
+                        j_point[1][1],
+                        j_point[1][2],
+                        j_point[1][3],
+                        j_point[1][4],
+                        j_point[1][5],
+                    ]);
+                    let r = nalgebra::Vector2::new(pred0.x - p2.x, pred0.y - p2.y);
+
+                    (j.transpose() * j, j.transpose() * r)
+                })
+                .collect();
 
             let mut local_ata = nalgebra::Matrix6::<f64>::zeros();
             let mut local_atb = nalgebra::Vector6::<f64>::zeros();
@@ -294,21 +332,29 @@ pub fn solve_pnp_refine_ctx(
 
         if let Some(delta) = lhs.lu().solve(&jtr) {
             let mut next_params = params;
-            for k in 0..6 { next_params[k] -= delta[k]; }
+            for k in 0..6 {
+                next_params[k] -= delta[k];
+            }
 
             let next_err = group.run(|| {
                 let next_ext = params_to_extrinsics(&next_params);
-                object_points.par_iter().zip(image_points.par_iter()).map(|(p3, p2)| {
-                    let pred = project_point_dist(intrinsics, distortion, &next_ext, p3);
-                    (pred.x - p2.x).powi(2) + (pred.y - p2.y).powi(2)
-                }).sum::<f64>()
+                object_points
+                    .par_iter()
+                    .zip(image_points.par_iter())
+                    .map(|(p3, p2)| {
+                        let pred = project_point_dist(intrinsics, distortion, &next_ext, p3);
+                        (pred.x - p2.x).powi(2) + (pred.y - p2.y).powi(2)
+                    })
+                    .sum::<f64>()
             });
 
             if next_err < current_err {
                 params = next_params;
                 current_err = next_err;
                 lambda /= 10.0;
-                if delta.norm() < 1e-8 { break; }
+                if delta.norm() < 1e-8 {
+                    break;
+                }
             } else {
                 lambda *= 10.0;
             }
@@ -324,8 +370,12 @@ fn extrinsics_to_params(ext: &Pose) -> [f64; 6] {
     let r = Rotation3::from_matrix_unchecked(ext.rotation);
     let omega = r.scaled_axis();
     [
-        omega[0], omega[1], omega[2],
-        ext.translation[0], ext.translation[1], ext.translation[2],
+        omega[0],
+        omega[1],
+        omega[2],
+        ext.translation[0],
+        ext.translation[1],
+        ext.translation[2],
     ]
 }
 
@@ -335,7 +385,12 @@ fn params_to_extrinsics(params: &[f64; 6]) -> Pose {
     Pose::new(rot, t)
 }
 
-fn project_point_dist(intrinsics: &CameraIntrinsics, distortion: Option<&cv_core::Distortion>, ext: &Pose, p: &Point3<f64>) -> Point2<f64> {
+fn project_point_dist(
+    intrinsics: &CameraIntrinsics,
+    distortion: Option<&cv_core::Distortion>,
+    ext: &Pose,
+    p: &Point3<f64>,
+) -> Point2<f64> {
     let pc = ext.rotation * p.coords + ext.translation;
     if pc[2].abs() <= 1e-12 {
         return Point2::new(0.0, 0.0);

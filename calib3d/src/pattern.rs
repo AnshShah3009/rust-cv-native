@@ -244,10 +244,7 @@ fn assign_grid_points(
         ));
     }
 
-    let mean = points
-        .iter()
-        .fold(Vector2::zeros(), |acc, p| acc + p)
-        / points.len() as f64;
+    let mean = points.iter().fold(Vector2::zeros(), |acc, p| acc + p) / points.len() as f64;
     let mut cov = Matrix2::<f64>::zeros();
     for p in &points {
         let d = p - mean;

@@ -118,8 +118,11 @@ pub fn fisheye_init_undistort_rectify_map(
     let k_new_inv = new_intrinsics.matrix().try_inverse().unwrap();
     let r_inv = rectification.try_inverse().unwrap();
 
-    map_x.par_chunks_mut(width as usize).zip(map_y.par_chunks_mut(width as usize))
-        .enumerate().for_each(|(y, (row_x, row_y))| {
+    map_x
+        .par_chunks_mut(width as usize)
+        .zip(map_y.par_chunks_mut(width as usize))
+        .enumerate()
+        .for_each(|(y, (row_x, row_y))| {
             for x in 0..width {
                 let dst = Vector3::new(x as f64, y as f64, 1.0);
                 let rectified_norm = &k_new_inv * dst;
@@ -128,7 +131,7 @@ pub fn fisheye_init_undistort_rectify_map(
                 let xn = original_norm[0] / original_norm[2];
                 let yn = original_norm[1] / original_norm[2];
                 let (xd, yd) = distortion.apply(xn, yn);
-                
+
                 row_x[x as usize] = (intrinsics.fx * xd + intrinsics.cx) as f32;
                 row_y[x as usize] = (intrinsics.fy * yd + intrinsics.cy) as f32;
             }

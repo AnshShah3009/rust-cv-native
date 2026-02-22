@@ -20,66 +20,62 @@ pub enum CalibError {
 
 // Module declarations
 pub mod distortion;
-pub use distortion::{undistort_points, init_undistort_rectify_map, undistort_image};
+pub use distortion::{init_undistort_rectify_map, undistort_image, undistort_points};
 
 pub mod project;
-pub use project::{project_points, project_points_with_distortion, project_points_with_jacobian, ProjectPointsOptions, ProjectPointsResult};
+pub use project::{
+    project_points, project_points_with_distortion, project_points_with_jacobian,
+    ProjectPointsOptions, ProjectPointsResult,
+};
 
 pub mod pattern;
-pub use pattern::{find_chessboard_corners, corner_subpix};
+pub use pattern::{corner_subpix, find_chessboard_corners};
 
 pub mod pnp;
 pub use pnp::{solve_pnp_dlt, solve_pnp_ransac, solve_pnp_refine};
 
 pub mod essential_fundamental;
 pub use essential_fundamental::{
-    essential_from_extrinsics, fundamental_from_essential, find_essential_mat,
-    find_essential_mat_ransac, find_fundamental_mat, find_fundamental_mat_ransac,
+    essential_from_extrinsics, find_essential_mat, find_essential_mat_ransac, find_fundamental_mat,
+    find_fundamental_mat_ransac, fundamental_from_essential,
 };
 
 pub mod triangulation;
-pub use triangulation::{triangulate_points, recover_pose_from_essential};
+pub use triangulation::{recover_pose_from_essential, triangulate_points};
 
 pub mod calibration;
 pub use calibration::{
-    CameraCalibrationOptions, CameraCalibrationResult, CalibrationFileReport,
-    generate_chessboard_object_points, calibrate_camera_planar, calibrate_camera_planar_with_options,
-    calibrate_camera_from_chessboard_images, calibrate_camera_from_chessboard_images_with_options,
     calibrate_camera_from_chessboard_files, calibrate_camera_from_chessboard_files_with_options,
-    refine_camera_calibration_iterative,
+    calibrate_camera_from_chessboard_images, calibrate_camera_from_chessboard_images_with_options,
+    calibrate_camera_planar, calibrate_camera_planar_with_options,
+    generate_chessboard_object_points, refine_camera_calibration_iterative, CalibrationFileReport,
+    CameraCalibrationOptions, CameraCalibrationResult,
 };
 
 pub mod stereo;
 pub use stereo::{
-    StereoRectifyMatrices, StereoCalibrationResult, StereoCalibrationFileReport,
-    stereo_calibrate_planar, stereo_calibrate_planar_with_options,
-    stereo_calibrate_from_chessboard_images, stereo_calibrate_from_chessboard_images_with_options,
     stereo_calibrate_from_chessboard_files, stereo_calibrate_from_chessboard_files_with_options,
-    stereo_rectify_matrices,
+    stereo_calibrate_from_chessboard_images, stereo_calibrate_from_chessboard_images_with_options,
+    stereo_calibrate_planar, stereo_calibrate_planar_with_options, stereo_rectify_matrices,
+    StereoCalibrationFileReport, StereoCalibrationResult, StereoRectifyMatrices,
 };
-
-
-
-
-
-
-
-
-
 
 #[cfg(test)]
 
 mod tests {
     use super::*;
+    use cv_core::{CameraIntrinsics, Distortion, Pose};
     use cv_imgproc::{warp_perspective_ex, BorderMode, Interpolation};
     use image::{GrayImage, Luma};
-    use nalgebra::{Rotation3, Point2, Point3, Vector3, Matrix3, Matrix3x4};
-    use cv_core::{CameraIntrinsics, Pose, Distortion};
+    use nalgebra::{Matrix3, Matrix3x4, Point2, Point3, Rotation3, Vector3};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn project_point(k: &CameraIntrinsics, ext: &Pose, p: &Point3<f64>) -> Point2<f64> {
         let pc = ext.rotation * p.coords + ext.translation;
+        if pc[2].abs() < 1e-10 {
+            return Point2::new(f64::NAN, f64::NAN);
+        }
         let u = k.fx * (pc[0] / pc[2]) + k.cx;
         let v = k.fy * (pc[1] / pc[2]) + k.cy;
         Point2::new(u, v)
@@ -213,7 +209,14 @@ mod tests {
         let reproj_err = world
             .iter()
             .zip(pixels.iter())
-            .map(|(w, p)| (project_point(&k, &est, w) - p).norm())
+            .filter_map(|(w, p)| {
+                let proj = project_point(&k, &est, w);
+                if proj.x.is_nan() || p.x.is_nan() {
+                    None
+                } else {
+                    Some((proj - *p).norm())
+                }
+            })
             .sum::<f64>()
             / world.len() as f64;
         assert!(reproj_err < 1e-6);
@@ -281,7 +284,8 @@ mod tests {
             let z = 2.5 + ((i * 7 % 31) as f64) * 0.06;
             world.push(Point3::new(x, y, z));
         }
-        let mut pixels: Vec<Point2<f64>> = world.iter().map(|p| project_point(&k, &gt, p)).collect();
+        let mut pixels: Vec<Point2<f64>> =
+            world.iter().map(|p| project_point(&k, &gt, p)).collect();
         for i in (0..pixels.len()).step_by(8) {
             pixels[i].x += 35.0;
             pixels[i].y -= 28.0;
@@ -435,7 +439,10 @@ mod tests {
 
         let recovered = recover_pose_from_essential(&e, &pts1, &pts2, &k).unwrap();
         assert!(recovered.rotation.determinant() > 0.0);
-        let dir_dot = recovered.translation.normalize().dot(&gt.translation.normalize());
+        let dir_dot = recovered
+            .translation
+            .normalize()
+            .dot(&gt.translation.normalize());
         assert!(dir_dot > 0.9);
     }
 
@@ -649,7 +656,8 @@ mod tests {
             fix_k2: false,
             fix_k3: false,
         };
-        let calib = calibrate_camera_planar_with_options(&obj_sets, &img_sets, (640, 480), options).unwrap();
+        let calib = calibrate_camera_planar_with_options(&obj_sets, &img_sets, (640, 480), options)
+            .unwrap();
         assert!((calib.intrinsics.fx / calib.intrinsics.fy - target_ratio).abs() < 1e-9);
     }
 
@@ -701,7 +709,8 @@ mod tests {
             fix_k2: false,
             fix_k3: false,
         };
-        let calib = calibrate_camera_planar_with_options(&obj_sets, &img_sets, (640, 480), options).unwrap();
+        let calib = calibrate_camera_planar_with_options(&obj_sets, &img_sets, (640, 480), options)
+            .unwrap();
         assert!((calib.intrinsics.cx - 300.0).abs() < 1e-12);
         assert!((calib.intrinsics.cy - 250.0).abs() < 1e-12);
     }
@@ -749,8 +758,18 @@ mod tests {
         for ext_l in &board_poses {
             let ext_r = Pose::new(r_lr * ext_l.rotation, r_lr * ext_l.translation + t_lr);
             obj_sets.push(board.clone());
-            left_sets.push(board.iter().map(|p| project_point(&k_l, ext_l, p)).collect());
-            right_sets.push(board.iter().map(|p| project_point(&k_r, &ext_r, p)).collect());
+            left_sets.push(
+                board
+                    .iter()
+                    .map(|p| project_point(&k_l, ext_l, p))
+                    .collect(),
+            );
+            right_sets.push(
+                board
+                    .iter()
+                    .map(|p| project_point(&k_r, &ext_r, p))
+                    .collect(),
+            );
         }
 
         let out = stereo_calibrate_planar(&obj_sets, &left_sets, &right_sets, (640, 480)).unwrap();
@@ -769,9 +788,15 @@ mod tests {
 
         // Validate board-like coverage even if ordering and exact localization vary.
         let min_x = corners.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
-        let max_x = corners.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+        let max_x = corners
+            .iter()
+            .map(|p| p.x)
+            .fold(f64::NEG_INFINITY, f64::max);
         let min_y = corners.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
-        let max_y = corners.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+        let max_y = corners
+            .iter()
+            .map(|p| p.y)
+            .fold(f64::NEG_INFINITY, f64::max);
 
         let gt_min_x = gt.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
         let gt_max_x = gt.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
@@ -858,16 +883,26 @@ mod tests {
         let intrinsics = CameraIntrinsics::new(800.0, 800.0, 320.0, 240.0, 640, 480);
         let rotation = Rotation3::from_euler_angles(0.1, 0.2, 0.3).into_inner();
         let translation = Vector3::new(0.5, -0.3, 2.0);
-        let extrinsics = Pose { rotation, translation };
-        let distortion = Distortion { k1: -0.2, k2: 0.05, p1: 0.001, p2: -0.002, k3: 0.01 };
+        let extrinsics = Pose {
+            rotation,
+            translation,
+        };
+        let distortion = Distortion {
+            k1: -0.2,
+            k2: 0.05,
+            p1: 0.001,
+            p2: -0.002,
+            k3: 0.01,
+        };
 
-        let points = vec![
-            Point3::new(0.5, 0.3, 1.5),
-            Point3::new(-0.3, 0.4, 2.0),
-        ];
+        let points = vec![Point3::new(0.5, 0.3, 1.5), Point3::new(-0.3, 0.4, 2.0)];
 
-        let options = ProjectPointsOptions { compute_jacobians: true };
-        let result = project_points_with_jacobian(&points, &intrinsics, &extrinsics, &distortion, options).unwrap();
+        let options = ProjectPointsOptions {
+            compute_jacobians: true,
+        };
+        let result =
+            project_points_with_jacobian(&points, &intrinsics, &extrinsics, &distortion, options)
+                .unwrap();
 
         assert!(result.jacobian_rotation.is_some());
         assert!(result.jacobian_translation.is_some());
@@ -888,13 +923,20 @@ mod tests {
         let intrinsics = CameraIntrinsics::new(800.0, 800.0, 320.0, 240.0, 640, 480);
         let rotation = Rotation3::identity().into_inner();
         let translation = Vector3::new(0.0, 0.0, 2.0);
-        let extrinsics = Pose { rotation, translation };
+        let extrinsics = Pose {
+            rotation,
+            translation,
+        };
         let distortion = Distortion::default();
 
         let points = vec![Point3::new(0.5, 0.3, 1.5)];
 
-        let options = ProjectPointsOptions { compute_jacobians: false };
-        let result = project_points_with_jacobian(&points, &intrinsics, &extrinsics, &distortion, options).unwrap();
+        let options = ProjectPointsOptions {
+            compute_jacobians: false,
+        };
+        let result =
+            project_points_with_jacobian(&points, &intrinsics, &extrinsics, &distortion, options)
+                .unwrap();
 
         assert!(result.jacobian_rotation.is_none());
         assert!(result.jacobian_translation.is_none());
@@ -935,12 +977,21 @@ mod tests {
             fix_focal_length: true,
             ..Default::default()
         };
-        let result = calibrate_camera_planar_with_options(&object_points, &image_points, (640, 480), options).unwrap();
+        let result = calibrate_camera_planar_with_options(
+            &object_points,
+            &image_points,
+            (640, 480),
+            options,
+        )
+        .unwrap();
 
         // With fix_focal_length, focal lengths should be equal (or nearly equal due to averaging)
-        assert!((result.intrinsics.fx - result.intrinsics.fy).abs() < 1.0,
+        assert!(
+            (result.intrinsics.fx - result.intrinsics.fy).abs() < 1.0,
             "Focal lengths should be equal with fix_focal_length, got fx={}, fy={}",
-            result.intrinsics.fx, result.intrinsics.fy);
+            result.intrinsics.fx,
+            result.intrinsics.fy
+        );
     }
 
     #[test]
@@ -977,7 +1028,13 @@ mod tests {
             zero_tangent_dist: true,
             ..Default::default()
         };
-        let result = calibrate_camera_planar_with_options(&object_points, &image_points, (640, 480), options).unwrap();
+        let result = calibrate_camera_planar_with_options(
+            &object_points,
+            &image_points,
+            (640, 480),
+            options,
+        )
+        .unwrap();
 
         // Verify calibration completed successfully
         assert!(result.intrinsics.fx.is_finite());
@@ -1020,7 +1077,13 @@ mod tests {
             fix_aspect_ratio: Some(1.0),
             ..Default::default()
         };
-        let result = calibrate_camera_planar_with_options(&object_points, &image_points, (640, 480), options).unwrap();
+        let result = calibrate_camera_planar_with_options(
+            &object_points,
+            &image_points,
+            (640, 480),
+            options,
+        )
+        .unwrap();
 
         // Verify calibration completed with constraints applied
         assert!(result.intrinsics.fx.is_finite());
@@ -1059,7 +1122,10 @@ mod tests {
     }
 
     fn load_calibration_ground_truth() -> CalibrationGroundTruth {
-        let json_path = concat!(env!("CARGO_MANIFEST_DIR"), "/test_data/calibration/expected_results.json");
+        let json_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/test_data/calibration/expected_results.json"
+        );
         let json = std::fs::read_to_string(json_path).expect("Failed to read expected results");
         serde_json::from_str(&json).expect("Failed to parse expected results")
     }
@@ -1093,14 +1159,8 @@ mod tests {
 
         // Create a synthetic camera with parameters close to expected ground truth
         let expected = &ground_truth.expected_camera_matrix;
-        let synthetic_k = CameraIntrinsics::new(
-            expected.fx,
-            expected.fy,
-            expected.cx,
-            expected.cy,
-            640,
-            480,
-        );
+        let synthetic_k =
+            CameraIntrinsics::new(expected.fx, expected.fy, expected.cx, expected.cy, 640, 480);
 
         // Generate multiple synthetic views with this camera
         let views = [
@@ -1126,7 +1186,12 @@ mod tests {
         let mut image_points = Vec::new();
         for ext in &views {
             object_points.push(board.clone());
-            image_points.push(board.iter().map(|p| project_point(&synthetic_k, ext, p)).collect());
+            image_points.push(
+                board
+                    .iter()
+                    .map(|p| project_point(&synthetic_k, ext, p))
+                    .collect(),
+            );
         }
 
         // Calibrate from synthetic data
@@ -1139,20 +1204,37 @@ mod tests {
         let fx_error = (result.intrinsics.fx - expected.fx).abs() / expected.fx;
         let fy_error = (result.intrinsics.fy - expected.fy).abs() / expected.fy;
 
-        assert!(fx_error < tolerance,
+        assert!(
+            fx_error < tolerance,
             "fx mismatch: got {}, expected {} (error {:.2}%)",
-            result.intrinsics.fx, expected.fx, fx_error * 100.0);
+            result.intrinsics.fx,
+            expected.fx,
+            fx_error * 100.0
+        );
 
-        assert!(fy_error < tolerance,
+        assert!(
+            fy_error < tolerance,
             "fy mismatch: got {}, expected {} (error {:.2}%)",
-            result.intrinsics.fy, expected.fy, fy_error * 100.0);
+            result.intrinsics.fy,
+            expected.fy,
+            fy_error * 100.0
+        );
 
         // Check principal point (should be roughly in image center)
-        assert!((result.intrinsics.cx - 320.0).abs() < 50.0, "Principal point x out of range");
-        assert!((result.intrinsics.cy - 240.0).abs() < 50.0, "Principal point y out of range");
+        assert!(
+            (result.intrinsics.cx - 320.0).abs() < 50.0,
+            "Principal point x out of range"
+        );
+        assert!(
+            (result.intrinsics.cy - 240.0).abs() < 50.0,
+            "Principal point y out of range"
+        );
 
         // Check RMS reprojection error is reasonable
-        assert!(result.rms_reprojection_error < 1.0,
-            "RMS reprojection error too high: {}", result.rms_reprojection_error);
+        assert!(
+            result.rms_reprojection_error < 1.0,
+            "RMS reprojection error too high: {}",
+            result.rms_reprojection_error
+        );
     }
 }

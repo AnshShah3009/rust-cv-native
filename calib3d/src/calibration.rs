@@ -3,15 +3,15 @@
 //! Provides functionality for camera calibration using planar patterns (chessboards)
 //! and refinement of calibration results through iterative optimization.
 
-use crate::Result;
-use crate::CalibError;
 use crate::project_points_with_distortion;
 use crate::solve_pnp_refine;
-use cv_core::{Pose, CameraIntrinsics, Distortion};
+use crate::CalibError;
+use crate::Result;
+use cv_core::{CameraIntrinsics, Distortion, Pose};
 use image::GrayImage;
 use nalgebra::{DMatrix, Matrix3, Point2, Point3};
-use std::path::Path;
 use rayon::prelude::*;
+use std::path::Path;
 
 use crate::pattern::find_chessboard_corners;
 
@@ -326,16 +326,15 @@ pub fn calibrate_camera_from_chessboard_files_with_options<P: AsRef<Path>>(
         CalibError::InvalidParameters("no readable images in provided file list".to_string())
     })?;
 
-    let calib =
-        calibrate_camera_planar_with_options(&object_points, &image_points, dims, options).map_err(
-            |e| {
-        CalibError::InvalidParameters(format!(
-            "camera calibration failed for file subset (used {} / {} images): {}",
-            object_points.len(),
-            image_paths.len(),
-            e
-        ))
-    })?;
+    let calib = calibrate_camera_planar_with_options(&object_points, &image_points, dims, options)
+        .map_err(|e| {
+            CalibError::InvalidParameters(format!(
+                "camera calibration failed for file subset (used {} / {} images): {}",
+                object_points.len(),
+                image_paths.len(),
+                e
+            ))
+        })?;
     let report = CalibrationFileReport {
         total_images: image_paths.len(),
         used_images: object_points.len(),
@@ -353,7 +352,8 @@ pub fn refine_camera_calibration_iterative(
     image_points: &[Vec<Point2<f64>>],
     max_iters: usize,
 ) -> Result<CameraCalibrationResult> {
-    if object_points.len() != image_points.len() || object_points.len() != initial.extrinsics.len() {
+    if object_points.len() != image_points.len() || object_points.len() != initial.extrinsics.len()
+    {
         return Err(CalibError::InvalidParameters(
             "refine_camera_calibration_iterative: inconsistent input sizes".to_string(),
         ));
@@ -364,7 +364,12 @@ pub fn refine_camera_calibration_iterative(
 
     for iter in 0..max_iters {
         // 1. Refine intrinsics (closed-form fix)
-        result.intrinsics = estimate_intrinsics_from_extrinsics(&result.extrinsics, object_points, image_points, result.intrinsics)?;
+        result.intrinsics = estimate_intrinsics_from_extrinsics(
+            &result.extrinsics,
+            object_points,
+            image_points,
+            result.intrinsics,
+        )?;
 
         // 2. Refine extrinsics (for each view)
         for i in 0..result.extrinsics.len() {
@@ -374,8 +379,9 @@ pub fn refine_camera_calibration_iterative(
                 &image_points[i],
                 &result.intrinsics,
                 Some(&result.distortion),
-                5
-            ).unwrap_or(result.extrinsics[i]);
+                5,
+            )
+            .unwrap_or(result.extrinsics[i]);
         }
 
         // 3. Refine distortion (P1: Iterative LM for distortion)
@@ -386,11 +392,17 @@ pub fn refine_camera_calibration_iterative(
                 &result.distortion,
                 object_points,
                 image_points,
-                5
-            ).unwrap_or(result.distortion);
+                5,
+            )
+            .unwrap_or(result.distortion);
         }
 
-        let cur_rms = compute_rms_reprojection(&result.intrinsics, &result.extrinsics, object_points, image_points)?;
+        let cur_rms = compute_rms_reprojection(
+            &result.intrinsics,
+            &result.extrinsics,
+            object_points,
+            image_points,
+        )?;
         if (prev_rms - cur_rms).abs() < 1e-8 {
             prev_rms = cur_rms;
             break;
@@ -585,23 +597,25 @@ fn compute_rms_reprojection(
         .par_iter()
         .zip(object_points.par_iter())
         .zip(image_points.par_iter())
-        .map(|((ext, obj), img): ((&Pose, &Vec<Point3<f64>>), &Vec<Point2<f64>>)| {
-            let mut local_sq_sum = 0.0f64;
-            let mut local_count = 0usize;
-            for (p3, p2) in obj.iter().zip(img.iter()) {
-                let pc = ext.rotation * p3.coords + ext.translation;
-                if pc[2].abs() <= 1e-18 {
-                    continue;
+        .map(
+            |((ext, obj), img): ((&Pose, &Vec<Point3<f64>>), &Vec<Point2<f64>>)| {
+                let mut local_sq_sum = 0.0f64;
+                let mut local_count = 0usize;
+                for (p3, p2) in obj.iter().zip(img.iter()) {
+                    let pc = ext.rotation * p3.coords + ext.translation;
+                    if pc[2].abs() <= 1e-18 {
+                        continue;
+                    }
+                    let u = intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx;
+                    let v = intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy;
+                    let du = u - p2.x;
+                    let dv = v - p2.y;
+                    local_sq_sum += du * du + dv * dv;
+                    local_count += 1;
                 }
-                let u = intrinsics.fx * (pc[0] / pc[2]) + intrinsics.cx;
-                let v = intrinsics.fy * (pc[1] / pc[2]) + intrinsics.cy;
-                let du = u - p2.x;
-                let dv = v - p2.y;
-                local_sq_sum += du * du + dv * dv;
-                local_count += 1;
-            }
-            (local_sq_sum, local_count)
-        })
+                (local_sq_sum, local_count)
+            },
+        )
         .reduce(|| (0.0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
 
     if count == 0 {
@@ -626,7 +640,8 @@ fn is_valid_camera_calibration(result: &CameraCalibrationResult) -> bool {
     }
 
     result.extrinsics.iter().all(|ext| {
-        ext.rotation.iter().all(|v: &f64| v.is_finite()) && ext.translation.iter().all(|v: &f64| v.is_finite())
+        ext.rotation.iter().all(|v: &f64| v.is_finite())
+            && ext.translation.iter().all(|v: &f64| v.is_finite())
     })
 }
 
@@ -717,10 +732,18 @@ fn refine_distortion(
     max_iters: usize,
 ) -> Result<Distortion> {
     let mut distortion = *initial_distortion;
-    let mut params = [distortion.k1, distortion.k2, distortion.p1, distortion.p2, distortion.k3];
+    let mut params = [
+        distortion.k1,
+        distortion.k2,
+        distortion.p1,
+        distortion.p2,
+        distortion.k3,
+    ];
 
     let total_pts: usize = object_points.iter().map(|v| v.len()).sum();
-    if total_pts < 10 { return Ok(distortion); }
+    if total_pts < 10 {
+        return Ok(distortion);
+    }
 
     for _ in 0..max_iters {
         let mut j = DMatrix::<f64>::zeros(2 * total_pts, 5);
@@ -731,7 +754,9 @@ fn refine_distortion(
         for (i, ext) in extrinsics.iter().enumerate() {
             for (p3, p2) in object_points[i].iter().zip(image_points[i].iter()) {
                 let pc = ext.rotation * p3.coords + ext.translation;
-                if pc[2].abs() <= 1e-12 { continue; }
+                if pc[2].abs() <= 1e-12 {
+                    continue;
+                }
 
                 let pred = project_points_with_distortion(&[*p3], intrinsics, ext, &distortion)?[0];
                 r[(row_idx, 0)] = pred.x - p2.x;
@@ -749,7 +774,8 @@ fn refine_distortion(
                         4 => d_perturbed.k3 += eps,
                         _ => unreachable!(),
                     }
-                    let p_perturbed = project_points_with_distortion(&[*p3], intrinsics, ext, &d_perturbed)?[0];
+                    let p_perturbed =
+                        project_points_with_distortion(&[*p3], intrinsics, ext, &d_perturbed)?[0];
                     j[(row_idx, k)] = (p_perturbed.x - pred.x) / eps;
                     j[(row_idx + 1, k)] = (p_perturbed.y - pred.y) / eps;
                 }
@@ -775,7 +801,9 @@ fn refine_distortion(
         distortion.p2 = params[3];
         distortion.k3 = params[4];
 
-        if delta.norm() < 1e-9 { break; }
+        if delta.norm() < 1e-9 {
+            break;
+        }
     }
 
     Ok(distortion)
@@ -822,9 +850,15 @@ fn normalize_points_hartley(points: &[Point2<f64>]) -> Result<(Vec<Point2<f64>>,
         .collect();
 
     let t = Matrix3::new(
-        scale, 0.0, -mean_x * scale,
-        0.0, scale, -mean_y * scale,
-        0.0, 0.0, 1.0,
+        scale,
+        0.0,
+        -mean_x * scale,
+        0.0,
+        scale,
+        -mean_y * scale,
+        0.0,
+        0.0,
+        1.0,
     );
 
     Ok((normalized, t))
