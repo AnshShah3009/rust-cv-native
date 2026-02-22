@@ -1,4 +1,4 @@
-use nalgebra::{DMatrix, DVector, Isometry3, Vector3, Matrix6, Vector6};
+use nalgebra::{DMatrix, DVector, Isometry3, Matrix6, Vector3, Vector6};
 use std::collections::HashMap;
 
 pub struct PoseGraph {
@@ -27,7 +27,13 @@ impl PoseGraph {
         self.nodes.insert(id, pose);
     }
 
-    pub fn add_edge(&mut self, from: usize, to: usize, measurement: Isometry3<f64>, information: Matrix6<f64>) {
+    pub fn add_edge(
+        &mut self,
+        from: usize,
+        to: usize,
+        measurement: Isometry3<f64>,
+        information: Matrix6<f64>,
+    ) {
         self.edges.push(Edge {
             from,
             to,
@@ -42,13 +48,15 @@ impl PoseGraph {
 
     pub fn optimize(&mut self, iterations: usize) -> Result<f64, String> {
         let num_nodes = self.nodes.len();
-        if num_nodes == 0 { return Ok(0.0); }
+        if num_nodes == 0 {
+            return Ok(0.0);
+        }
 
         let mut node_indices: HashMap<usize, usize> = HashMap::new();
         let mut idx = 0;
         let mut sorted_keys: Vec<usize> = self.nodes.keys().cloned().collect();
         sorted_keys.sort();
-        
+
         for id in sorted_keys {
             if !self.fixed_nodes.contains(&id) {
                 node_indices.insert(id, idx);
@@ -56,7 +64,9 @@ impl PoseGraph {
             }
         }
         let system_size = idx * 6;
-        if system_size == 0 { return Ok(0.0); }
+        if system_size == 0 {
+            return Ok(0.0);
+        }
 
         let mut error_sum = 0.0;
 
@@ -74,7 +84,7 @@ impl PoseGraph {
                 // Error: e = log(Z^-1 * Xi^-1 * Xj)
                 let prediction = pose_i.inverse() * pose_j;
                 let error_se3 = pose_ij.inverse() * prediction;
-                
+
                 let error = Vector6::new(
                     error_se3.translation.vector.x,
                     error_se3.translation.vector.y,
@@ -89,7 +99,9 @@ impl PoseGraph {
                 let idx_i = node_indices.get(&edge.from);
                 let idx_j = node_indices.get(&edge.to);
 
-                if idx_i.is_none() && idx_j.is_none() { continue; }
+                if idx_i.is_none() && idx_j.is_none() {
+                    continue;
+                }
 
                 let jj: Matrix6<f64> = Matrix6::identity();
                 let rel_pose = pose_j.inverse() * pose_i;
@@ -110,7 +122,9 @@ impl PoseGraph {
                     if let Some(&j) = idx_j {
                         let c = j * 6;
                         h_mat.fixed_view_mut::<6, 6>(r, c).add_assign(h_ij);
-                        h_mat.fixed_view_mut::<6, 6>(c, r).add_assign(h_ij.transpose());
+                        h_mat
+                            .fixed_view_mut::<6, 6>(c, r)
+                            .add_assign(h_ij.transpose());
                         h_mat.fixed_view_mut::<6, 6>(c, c).add_assign(h_jj);
                         b_vec.fixed_rows_mut::<6>(c).sub_assign(b_j);
                     }
@@ -135,7 +149,7 @@ impl PoseGraph {
                 let update = dx.fixed_rows::<6>(idx * 6);
                 let translation = Vector3::new(update[0], update[1], update[2]);
                 let rotation = Vector3::new(update[3], update[4], update[5]);
-                
+
                 // Exponential map update
                 let delta = Isometry3::new(translation, rotation);
                 if let Some(pose) = self.nodes.get_mut(&id) {
@@ -147,7 +161,9 @@ impl PoseGraph {
                 }
             }
 
-            if error_sum < 1e-9 { break; }
+            if error_sum < 1e-9 {
+                break;
+            }
         }
 
         Ok(error_sum)
@@ -157,13 +173,9 @@ impl PoseGraph {
 fn adjoint(iso: &Isometry3<f64>) -> Matrix6<f64> {
     let r = iso.rotation.to_rotation_matrix().matrix().clone_owned();
     let t = iso.translation.vector;
-    let t_skew = nalgebra::Matrix3::new(
-        0.0, -t.z, t.y,
-        t.z, 0.0, -t.x,
-        -t.y, t.x, 0.0
-    );
+    let t_skew = nalgebra::Matrix3::new(0.0, -t.z, t.y, t.z, 0.0, -t.x, -t.y, t.x, 0.0);
     let tr = t_skew * r;
-    
+
     let mut ad = Matrix6::zeros();
     ad.fixed_view_mut::<3, 3>(0, 0).copy_from(&r);
     ad.fixed_view_mut::<3, 3>(0, 3).copy_from(&tr);

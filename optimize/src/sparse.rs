@@ -1,7 +1,7 @@
+use cv_core::Tensor;
+use cv_hal::compute::ComputeDevice;
 pub use faer::sparse::Triplet;
 use nalgebra::DVector;
-use cv_hal::compute::ComputeDevice;
-use cv_core::{Tensor};
 
 /// Sparse Matrix representation in CSR format for GPU optimization
 pub struct SparseMatrix {
@@ -13,7 +13,11 @@ pub struct SparseMatrix {
 }
 
 impl SparseMatrix {
-    pub fn from_triplets(rows: usize, cols: usize, triplets: &[Triplet<usize, usize, f64>]) -> Self {
+    pub fn from_triplets(
+        rows: usize,
+        cols: usize,
+        triplets: &[Triplet<usize, usize, f64>],
+    ) -> Self {
         // Convert COO (triplets) to CSR
         let mut row_counts = vec![0; rows];
         for t in triplets {
@@ -49,21 +53,41 @@ impl SparseMatrix {
         // Convert f64 to f32 for GPU SpMV
         let x_f32: Vec<f32> = x.iter().map(|&v| v as f32).collect();
         let values_f32: Vec<f32> = self.values.iter().map(|&v| v as f32).collect();
-        
-        let x_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(x_f32, cv_core::TensorShape::new(1, x.len(), 1)).expect("SpMV input tensor creation failed");
-        
+
+        let x_tensor: cv_core::CpuTensor<f32> =
+            Tensor::from_vec(x_f32, cv_core::TensorShape::new(1, x.len(), 1))
+                .expect("SpMV input tensor creation failed");
+
         // SpMV always returns a result tensor on the same device as input x
         match ctx {
             ComputeDevice::Gpu(gpu) => {
-                use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
+                use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
                 let x_gpu = x_tensor.to_gpu_ctx(gpu).expect("Upload to GPU failed");
-                let res_gpu = ctx.spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_gpu).expect("GPU SpMV failed");
+                let res_gpu = ctx
+                    .spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_gpu)
+                    .expect("GPU SpMV failed");
                 let res_cpu = res_gpu.to_cpu_ctx(gpu).expect("Download from GPU failed");
-                DVector::from_vec(res_cpu.as_slice().expect("Data not on CPU").iter().map(|&v| v as f64).collect())
-            },
+                DVector::from_vec(
+                    res_cpu
+                        .as_slice()
+                        .expect("Data not on CPU")
+                        .iter()
+                        .map(|&v| v as f64)
+                        .collect(),
+                )
+            }
             ComputeDevice::Cpu(_cpu) => {
-                let res_cpu = ctx.spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_tensor).expect("CPU SpMV failed");
-                DVector::from_vec(res_cpu.as_slice().expect("Data not on CPU").iter().map(|&v| v as f64).collect())
+                let res_cpu = ctx
+                    .spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_tensor)
+                    .expect("CPU SpMV failed");
+                DVector::from_vec(
+                    res_cpu
+                        .as_slice()
+                        .expect("Data not on CPU")
+                        .iter()
+                        .map(|&v| v as f64)
+                        .collect(),
+                )
             }
             ComputeDevice::Mlx(_) => {
                 todo!("MLX SpMV not implemented yet")
@@ -75,7 +99,7 @@ impl SparseMatrix {
         let mut res = DVector::zeros(self.cols);
         for r in 0..self.rows {
             let start = self.row_ptr[r] as usize;
-            let end = self.row_ptr[r+1] as usize;
+            let end = self.row_ptr[r + 1] as usize;
             for i in start..end {
                 let c = self.col_indices[i] as usize;
                 res[c] += self.values[i] * y[r];
@@ -86,7 +110,12 @@ impl SparseMatrix {
 }
 
 pub trait LinearSolver {
-    fn solve(&self, ctx: &ComputeDevice, a: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String>;
+    fn solve(
+        &self,
+        ctx: &ComputeDevice,
+        a: &SparseMatrix,
+        b: &DVector<f64>,
+    ) -> Result<DVector<f64>, String>;
 }
 
 /// Conjugate Gradient solver on GPU/CPU
@@ -96,7 +125,12 @@ pub struct CgSolver {
 }
 
 impl LinearSolver for CgSolver {
-    fn solve(&self, ctx: &ComputeDevice, a: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String> {
+    fn solve(
+        &self,
+        ctx: &ComputeDevice,
+        a: &SparseMatrix,
+        b: &DVector<f64>,
+    ) -> Result<DVector<f64>, String> {
         let mut x = DVector::zeros(a.cols);
         let mut r = b - a.spmv_ctx(ctx, &x);
         let mut p = r.clone();
@@ -107,7 +141,7 @@ impl LinearSolver for CgSolver {
             let alpha = rsold / p.dot(&ap);
             x += alpha * &p;
             r -= alpha * &ap;
-            
+
             let rsnew = r.dot(&r);
             if rsnew.sqrt() < self.tolerance {
                 break;

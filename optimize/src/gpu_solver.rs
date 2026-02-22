@@ -1,6 +1,6 @@
 use crate::sparse::{LinearSolver, SparseMatrix};
-use nalgebra::DVector;
 use cv_hal::compute::ComputeDevice;
+use nalgebra::DVector;
 
 /// Maximum iterations before declaring non-convergence.
 const MAX_ITERATIONS: usize = 1000;
@@ -91,7 +91,7 @@ fn spmv_cpu(a: &SparseMatrix, x: &DVector<f64>) -> DVector<f64> {
     let mut y = DVector::zeros(a.rows);
     for i in 0..a.rows {
         let row_start = a.row_ptr[i] as usize;
-        let row_end = a.row_ptr[i+1] as usize;
+        let row_end = a.row_ptr[i + 1] as usize;
         let mut sum = 0.0;
         for j in row_start..row_end {
             sum += a.values[j] * x[a.col_indices[j] as usize];
@@ -102,7 +102,12 @@ fn spmv_cpu(a: &SparseMatrix, x: &DVector<f64>) -> DVector<f64> {
 }
 
 impl LinearSolver for GpuCgSolver {
-    fn solve(&self, _ctx: &ComputeDevice, a: &SparseMatrix, b: &DVector<f64>) -> Result<DVector<f64>, String> {
+    fn solve(
+        &self,
+        _ctx: &ComputeDevice,
+        a: &SparseMatrix,
+        b: &DVector<f64>,
+    ) -> Result<DVector<f64>, String> {
         // For now, use CPU fallback
         // GPU implementation will use the SpMV and vector_ops WGSL shaders
         // TODO: Implement GPU dispatch when GpuContext is available

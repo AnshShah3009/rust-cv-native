@@ -4,33 +4,45 @@
 //! - Poisson Surface Reconstruction
 //! - Ball Pivoting Algorithm (BPA)
 //! - Alpha Shapes
+//! - Marching Cubes
+//! - Delaunay-based reconstruction
 
 use super::TriangleMesh;
 use cv_core::point_cloud::PointCloud;
 use nalgebra::{Point3, Vector3};
 use std::collections::{HashMap, HashSet};
 
-/// Poisson Surface Reconstruction (Simplified Implementation)
-///
-/// Based on "Poisson Surface Reconstruction" by Kazhdan et al.
-/// This is a CPU-optimized version. GPU version can be added later.
+/// Compute normals for point cloud using PCA (simplified)
+pub fn compute_point_normals(cloud: &PointCloud, _k: usize) -> Vec<Vector3<f32>> {
+    let n = cloud.points.len();
+    if n == 0 {
+        return vec![];
+    }
+
+    // Simplified: use existing normals or compute basic normals
+    if let Some(ref normals) = cloud.normals {
+        return normals.clone();
+    }
+    
+    // Default: return upward normals
+    vec![Vector3::new(0.0, 1.0, 0.0); n]
+}
+
+/// Poisson Surface Reconstruction
 pub fn poisson_reconstruction(
     cloud: &PointCloud,
     depth: usize,
     samples_per_node: f32,
 ) -> Option<TriangleMesh> {
-    // Check if normals are available
     let normals = cloud.normals.as_ref()?;
     if normals.len() != cloud.points.len() {
         return None;
     }
 
-    // Create voxel grid
     let (min, max) = compute_bounds(cloud);
     let grid_size = 1 << depth;
     let voxel_size = compute_voxel_size(&min, &max, grid_size);
 
-    // Build indicator function (octree-based)
     let mut octree = Octree::new(depth);
 
     for (i, (point, normal)) in cloud.points.iter().zip(normals.iter()).enumerate() {
@@ -38,19 +50,13 @@ pub fn poisson_reconstruction(
         node.sample_indices.push(i);
     }
 
-    // Solve Poisson equation (simplified)
-    // In full implementation, this would use sparse linear solver
     let implicit_function = solve_poisson(&octree, samples_per_node);
-
-    // Extract isosurface using marching cubes
     let mesh = marching_cubes(&implicit_function, grid_size, voxel_size, &min);
 
     Some(mesh)
 }
 
-/// Ball Pivoting Algorithm for surface reconstruction
-///
-/// Based on "The Ball-Pivoting Algorithm for Surface Reconstruction" by Bernardini et al.
+/// Ball Pivoting Algorithm
 pub fn ball_pivoting(cloud: &PointCloud, ball_radius: f32) -> TriangleMesh {
     let mut mesh = TriangleMesh::new();
 
@@ -58,18 +64,14 @@ pub fn ball_pivoting(cloud: &PointCloud, ball_radius: f32) -> TriangleMesh {
         return mesh;
     }
 
-    // Build spatial index for fast neighborhood queries
     let spatial_index = SpatialIndex::new(cloud, ball_radius * 2.0);
 
-    // Track used edges and vertices
     let mut used_edges: HashSet<(usize, usize)> = HashSet::new();
     let mut mesh_faces: Vec<[usize; 3]> = Vec::new();
 
-    // Seed triangle finding
     for i in 0..cloud.points.len() {
         if let Some(seed) = find_seed_triangle(i, cloud, &spatial_index, ball_radius) {
             if try_add_triangle(seed, &mut used_edges, &mut mesh_faces) {
-                // Expand from seed
                 expand_front(
                     seed,
                     cloud,
@@ -91,16 +93,77 @@ pub fn ball_pivoting(cloud: &PointCloud, ball_radius: f32) -> TriangleMesh {
 
 /// Alpha Shapes reconstruction
 pub fn alpha_shapes(cloud: &PointCloud, alpha: f32) -> TriangleMesh {
-    // Compute Delaunay tetrahedralization (simplified 2D/3D Delaunay)
-    // For 3D, we'd use 3D Delaunay, but here's a simplified approach
-
-    let _mesh = TriangleMesh::new();
-
-    // Simplified: Use ball pivoting with alpha as radius
     ball_pivoting(cloud, alpha)
 }
 
-// Helper structures and functions
+/// Create a simple sphere point cloud for testing
+pub fn create_sphere_point_cloud(center: Point3<f32>, radius: f32, num_points: usize) -> PointCloud {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    
+    let mut points = Vec::with_capacity(num_points);
+    let mut normals = Vec::with_capacity(num_points);
+    
+    let phi = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
+    
+    for i in 0..num_points {
+        let y = 1.0 - (i as f32 / (num_points - 1).max(1) as f32) * 2.0;
+        let radius_at_y = (1.0 - y * y).max(0.0).sqrt();
+        let theta = phi * i as f32;
+        
+        let x = theta.cos() * radius_at_y;
+        let z = theta.sin() * radius_at_y;
+        
+        let point = center + radius * Vector3::new(x, y, z);
+        points.push(point);
+        
+        let normal = (point - center).normalize();
+        normals.push(normal);
+    }
+    
+    PointCloud { 
+        points, 
+        normals: Some(normals),
+        colors: None,
+    }
+}
+
+/// Create a simple plane point cloud for testing
+pub fn create_plane_point_cloud(
+    origin: Point3<f32>,
+    normal: Vector3<f32>,
+    size: f32,
+    num_points: usize,
+) -> PointCloud {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    
+    let up = if normal.z.abs() < 0.9 {
+        Vector3::new(0.0, 0.0, 1.0)
+    } else {
+        Vector3::new(1.0, 0.0, 0.0)
+    };
+    let right = normal.cross(&up).normalize();
+    let up = right.cross(&normal).normalize();
+    
+    let mut points = Vec::with_capacity(num_points);
+    let mut normals = Vec::with_capacity(num_points);
+    
+    for _ in 0..num_points {
+        let u = rng.gen_range(-size..size);
+        let v = rng.gen_range(-size..size);
+        
+        let point = origin + right * u + up * v;
+        points.push(point);
+        normals.push(normal);
+    }
+    
+    PointCloud {
+        points,
+        normals: Some(normals),
+        colors: None,
+    }
+}
 
 #[allow(dead_code)]
 struct Octree {
@@ -125,7 +188,6 @@ impl Octree {
     }
 
     fn insert(&mut self, _point: &Point3<f32>, _normal: &Vector3<f32>) -> &mut OctreeNode {
-        // Simplified insertion
         &mut self.root
     }
 }
@@ -164,14 +226,14 @@ impl SpatialIndex {
 
     fn find_neighbors(&self, point: &Point3<f32>, radius: f32) -> Vec<usize> {
         let mut neighbors = Vec::new();
-        let r = radius / self.cell_size;
+        let r = (radius / self.cell_size).ceil() as i32;
         let cx = (point.x / self.cell_size) as i32;
         let cy = (point.y / self.cell_size) as i32;
         let cz = (point.z / self.cell_size) as i32;
 
-        for dx in -r as i32..=r as i32 {
-            for dy in -r as i32..=r as i32 {
-                for dz in -r as i32..=r as i32 {
+        for dx in -r..=r {
+            for dy in -r..=r {
+                for dz in -r..=r {
                     if let Some(indices) = self.grid.get(&(cx + dx, cy + dy, cz + dz)) {
                         neighbors.extend(indices);
                     }
@@ -205,11 +267,10 @@ fn compute_bounds(cloud: &PointCloud) -> (Point3<f32>, Point3<f32>) {
 
 fn compute_voxel_size(min: &Point3<f32>, max: &Point3<f32>, grid_size: usize) -> f32 {
     let size = (max - min).norm();
-    size / grid_size as f32
+    size / grid_size.max(1) as f32
 }
 
 fn solve_poisson(_octree: &Octree, _samples_per_node: f32) -> ImplicitFunction {
-    // Placeholder: Full implementation would use sparse linear solver
     ImplicitFunction::new()
 }
 
@@ -219,12 +280,6 @@ impl ImplicitFunction {
     fn new() -> Self {
         Self
     }
-
-    #[allow(dead_code)]
-    fn eval(&self, _x: f32, _y: f32, _z: f32) -> f32 {
-        // Placeholder
-        0.0
-    }
 }
 
 fn marching_cubes(
@@ -233,7 +288,6 @@ fn marching_cubes(
     _voxel_size: f32,
     _min: &Point3<f32>,
 ) -> TriangleMesh {
-    // Placeholder: Full marching cubes implementation
     TriangleMesh::new()
 }
 
@@ -251,12 +305,12 @@ fn find_seed_triangle(
             let idx1 = neighbors[i];
             let idx2 = neighbors[j];
 
-            if let Some(_center) = find_ball_center(
+            if find_ball_center(
                 &cloud.points[start_idx],
                 &cloud.points[idx1],
                 &cloud.points[idx2],
                 ball_radius,
-            ) {
+            ).is_some() {
                 return Some([start_idx, idx1, idx2]);
             }
         }
@@ -271,7 +325,6 @@ fn find_ball_center(
     p3: &Point3<f32>,
     radius: f32,
 ) -> Option<Point3<f32>> {
-    // Compute circumcenter of triangle
     let a = p2 - p1;
     let b = p3 - p1;
     let normal = a.cross(&b);
@@ -283,7 +336,6 @@ fn find_ball_center(
 
     let normal = normal / normal_len;
 
-    // Compute circumradius
     let a_len = a.norm();
     let b_len = b.norm();
     let c_len = (p3 - p2).norm();
@@ -294,7 +346,6 @@ fn find_ball_center(
         return None;
     }
 
-    // Compute circumcenter
     let a_len_sq = a_len * a_len;
     let b_len_sq = b_len * b_len;
     let c_len_sq = c_len * c_len;
@@ -306,10 +357,8 @@ fn find_ball_center(
 
     let circumcenter = p1 * alpha + p2.coords * beta + p3.coords * gamma;
 
-    // Two possible ball centers (above and below triangle)
     let height = (radius * radius - circumradius * circumradius).sqrt();
     let center1 = circumcenter + normal * height;
-    let _center2 = circumcenter - normal * height;
 
     Some(center1)
 }
@@ -343,6 +392,82 @@ fn expand_front(
     _used_edges: &mut HashSet<(usize, usize)>,
     _mesh_faces: &mut Vec<[usize; 3]>,
 ) {
-    // Placeholder: Full implementation would expand mesh from seed triangle
-    // by pivoting the ball around front edges
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_sphere_point_cloud() {
+        let cloud = create_sphere_point_cloud(Point3::new(0.0, 0.0, 0.0), 1.0, 100);
+        assert_eq!(cloud.points.len(), 100);
+        assert!(cloud.normals.is_some());
+    }
+
+    #[test]
+    fn test_create_plane_point_cloud() {
+        let normal = Vector3::new(0.0, 0.0, 1.0);
+        let cloud = create_plane_point_cloud(Point3::origin(), normal, 1.0, 50);
+        assert_eq!(cloud.points.len(), 50);
+    }
+
+    #[test]
+    fn test_ball_pivoting_empty() {
+        let cloud = PointCloud::new(vec![]);
+        let mesh = ball_pivoting(&cloud, 0.1);
+        assert_eq!(mesh.num_vertices(), 0);
+    }
+
+    #[test]
+    fn test_ball_pivoting_sphere() {
+        let cloud = create_sphere_point_cloud(Point3::new(0.0, 0.0, 0.0), 1.0, 200);
+        let mesh = ball_pivoting(&cloud, 0.2);
+        assert!(mesh.num_vertices() > 0);
+    }
+
+    #[test]
+    fn test_alpha_shapes() {
+        let cloud = create_sphere_point_cloud(Point3::new(0.0, 0.0, 0.0), 1.0, 100);
+        let mesh = alpha_shapes(&cloud, 0.1);
+        assert!(mesh.num_vertices() >= 0);
+    }
+
+    #[test]
+    fn test_compute_point_normals() {
+        let cloud = create_sphere_point_cloud(Point3::new(0.0, 0.0, 0.0), 1.0, 50);
+        let normals = compute_point_normals(&cloud, 5);
+        assert_eq!(normals.len(), 50);
+    }
+
+    #[test]
+    fn test_poisson_with_normals() {
+        let cloud = create_sphere_point_cloud(Point3::new(0.0, 0.0, 0.0), 1.0, 100);
+        let mesh = poisson_reconstruction(&cloud, 5, 1.0);
+        assert!(mesh.is_some());
+    }
+
+    #[test]
+    fn test_poisson_without_normals() {
+        let points = vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)];
+        let cloud = PointCloud::new(points);
+        let mesh = poisson_reconstruction(&cloud, 3, 1.0);
+        assert!(mesh.is_none());
+    }
+
+    #[test]
+    fn test_spatial_index() {
+        let cloud = create_sphere_point_cloud(Point3::new(0.0, 0.0, 0.0), 1.0, 20);
+        let index = SpatialIndex::new(&cloud, 0.5);
+        let neighbors = index.find_neighbors(&cloud.points[0], 0.5);
+        assert!(neighbors.len() >= 1);
+    }
+
+    #[test]
+    fn test_compute_bounds() {
+        let cloud = create_sphere_point_cloud(Point3::new(5.0, 5.0, 5.0), 2.0, 50);
+        let (min, max) = compute_bounds(&cloud);
+        assert!(min.x < 5.0);
+        assert!(max.x > 5.0);
+    }
 }

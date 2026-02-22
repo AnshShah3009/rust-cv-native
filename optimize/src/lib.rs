@@ -1,10 +1,11 @@
 pub mod gpu_solver;
-pub mod sparse;
+pub mod isam2;
 pub mod pose_graph;
+pub mod sparse;
 
-use nalgebra::DVector;
 use cv_hal::compute::ComputeDevice;
-use sparse::{SparseMatrix, LinearSolver, CgSolver, Triplet};
+use nalgebra::DVector;
+use sparse::{CgSolver, LinearSolver, SparseMatrix, Triplet};
 
 pub trait CostFunction {
     fn dimensions(&self) -> (usize, usize); // (residuals, parameters)
@@ -41,51 +42,62 @@ impl<'a> SparseLMSolver<'a> {
         }
     }
 
-    pub fn minimize(&self, cost_fn: &dyn CostFunction, initial_params: DVector<f64>) -> Result<DVector<f64>, String> {
+    pub fn minimize(
+        &self,
+        cost_fn: &dyn CostFunction,
+        initial_params: DVector<f64>,
+    ) -> Result<DVector<f64>, String> {
         let mut x = initial_params;
         let mut lambda = self.config.lambda;
-        
+
         let mut r = cost_fn.residuals(&x);
         let mut current_err = r.norm_squared();
 
         for _ in 0..self.config.max_iters {
             let j = cost_fn.jacobian(&x);
-            
+
             // J^T * J * delta = -J^T * r
-            // This part is tricky with SparseMatrix. 
+            // This part is tricky with SparseMatrix.
             // For now, let's assume we solve it via CG or a direct solver.
             // We need J^T * J.
-            
+
             // Simplified: solve J * delta = -r in least squares sense
             // delta = (J^T J + lambda*I)^-1 * (-J^T r)
-            
+
             // For now, let's keep the solve method signature and implement the logic there.
             let delta = self.solve_lm_step(&j, &r, lambda)?;
-            
+
             let next_x = &x + &delta;
             let next_r = cost_fn.residuals(&next_x);
             let next_err = next_r.norm_squared();
-            
+
             if next_err < current_err {
                 current_err = next_err;
                 x = next_x;
                 r = next_r;
                 lambda /= 10.0;
-                if delta.norm() < self.config.tolerance { break; }
+                if delta.norm() < self.config.tolerance {
+                    break;
+                }
             } else {
                 lambda *= 10.0;
             }
         }
-        
+
         Ok(x)
     }
 
-    fn solve_lm_step(&self, j: &SparseMatrix, r: &DVector<f64>, lambda: f64) -> Result<DVector<f64>, String> {
+    fn solve_lm_step(
+        &self,
+        j: &SparseMatrix,
+        r: &DVector<f64>,
+        lambda: f64,
+    ) -> Result<DVector<f64>, String> {
         // Solve (J^T J + lambda I) delta = -J^T r using CG
         let n = j.cols;
         let mut x = DVector::zeros(n);
         let rhs = -j.transpose_spmv_ctx(self.ctx, r);
-        
+
         let mut residual = rhs.clone(); // For initial x=0, residual = rhs - (J^T J + lambda I) * 0 = rhs
         let mut p = residual.clone();
         let mut rsold = residual.dot(&residual);
@@ -99,7 +111,7 @@ impl<'a> SparseLMSolver<'a> {
             let alpha = rsold / p.dot(&v);
             x += alpha * &p;
             residual -= alpha * &v;
-            
+
             let rsnew = residual.dot(&residual);
             if rsnew.sqrt() < self.config.tolerance {
                 break;
