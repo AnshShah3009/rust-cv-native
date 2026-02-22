@@ -1,4 +1,4 @@
-use cv_core::{KeyPoint, KeyPoints, Tensor, storage::Storage, Descriptors};
+use cv_core::{storage::Storage, Descriptors, KeyPoint, KeyPoints, Tensor};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::context::ComputeContext;
 use cv_hal::tensor_ext::TensorToCpu;
@@ -40,7 +40,7 @@ impl Sift {
 
         for octave in 0..self.n_octaves {
             let mut layers = Vec::with_capacity(self.n_layers + 3);
-            
+
             let mut sig = self.sigma;
             let base_layer = ctx.gaussian_blur(&current_base, sig, 7).unwrap();
             layers.push(base_layer);
@@ -51,7 +51,7 @@ impl Sift {
                 let sig_prev = sig;
                 sig *= k;
                 let sig_total = (sig * sig - sig_prev * sig_prev).sqrt();
-                
+
                 let blurred = ctx.gaussian_blur(prev, sig_total, 7).unwrap();
                 layers.push(blurred);
             }
@@ -77,10 +77,14 @@ impl Sift {
         for octave_layers in gaussian_pyramid {
             let mut dog_layers = Vec::with_capacity(octave_layers.len() - 1);
             for i in 0..(octave_layers.len() - 1) {
-                let a_f32 = convert_to_f32_cpu(ctx, &octave_layers[i + 1]);
-                let b_f32 = convert_to_f32_cpu(ctx, &octave_layers[i]);
-                
-                let diff = ctx.subtract(&a_f32, &b_f32).unwrap();
+                let a_f32 = convert_to_f32_cpu(ctx, &octave_layers[i + 1])
+                    .expect("Failed to convert octave layer to f32");
+                let b_f32 = convert_to_f32_cpu(ctx, &octave_layers[i])
+                    .expect("Failed to convert octave layer to f32");
+
+                let diff = ctx
+                    .subtract(&a_f32, &b_f32)
+                    .expect("Subtraction failed in DoG computation");
                 dog_layers.push(diff);
             }
             dog_pyramid.push(dog_layers);
@@ -96,25 +100,40 @@ impl Sift {
     ) -> (KeyPoints, Vec<Vec<Tensor<u8, S>>>) {
         let gaussian_pyramid = self.build_scale_space(ctx, image);
         let dog_pyramid = self.compute_dog(ctx, &gaussian_pyramid);
-        
+
         let mut all_kps = Vec::new();
 
         for octave in 0..self.n_octaves {
             let dog_layers = &dog_pyramid[octave];
             let (h, w) = dog_layers[0].shape.hw();
-            
+
             for s in 1..self.n_layers + 1 {
                 let prev = &dog_layers[s - 1];
                 let curr = &dog_layers[s];
                 let next = &dog_layers[s + 1];
 
-                let candidates = ctx.sift_extrema(prev, curr, next, self.contrast_threshold, self.edge_threshold).unwrap();
+                let candidates = ctx
+                    .sift_extrema(
+                        prev,
+                        curr,
+                        next,
+                        self.contrast_threshold,
+                        self.edge_threshold,
+                    )
+                    .unwrap();
                 let cand_slice = candidates.storage.as_slice().unwrap();
 
                 for y in 1..h - 1 {
                     for x in 1..w - 1 {
                         if cand_slice[y * w + x] > 0 {
-                            if let Some(refined) = refine_point(dog_layers, s, x, y, self.n_layers, self.contrast_threshold) {
+                            if let Some(refined) = refine_point(
+                                dog_layers,
+                                s,
+                                x,
+                                y,
+                                self.n_layers,
+                                self.contrast_threshold,
+                            ) {
                                 let scale = 2.0f64.powi(octave as i32);
                                 let kp = KeyPoint::new(refined.x * scale, refined.y * scale)
                                     .with_size(refined.size * scale)
@@ -138,12 +157,14 @@ impl Sift {
         image: &Tensor<u8, S>,
     ) -> (KeyPoints, Descriptors) {
         let (keypoints, gaussian_pyramid) = self.detect_and_refine(ctx, image);
-        
+
         let mut all_descriptors = Vec::new();
         let mut valid_keypoints = Vec::new();
 
         for octave in 0..self.n_octaves {
-            let octave_kps: Vec<KeyPoint> = keypoints.keypoints.iter()
+            let octave_kps: Vec<KeyPoint> = keypoints
+                .keypoints
+                .iter()
                 .filter(|kp| kp.octave == octave as i32)
                 .map(|kp| {
                     let scale = 1.0 / 2.0f64.powi(octave as i32);
@@ -151,14 +172,25 @@ impl Sift {
                         .with_size(kp.size * scale)
                         .with_octave(octave as i32)
                         .with_response(kp.response)
-                }).collect();
+                })
+                .collect();
 
-            if octave_kps.is_empty() { continue; }
+            if octave_kps.is_empty() {
+                continue;
+            }
 
             match ctx {
                 ComputeDevice::Cpu(cpu) => {
-                    let octave_img = convert_to_f32_cpu(ctx, &gaussian_pyramid[octave][0]);
-                    let descs = cpu.compute_sift_descriptors(&octave_img, &KeyPoints { keypoints: octave_kps }).unwrap();
+                    let octave_img = convert_to_f32_cpu(ctx, &gaussian_pyramid[octave][0])
+                        .expect("Failed to convert octave image to f32");
+                    let descs = cpu
+                        .compute_sift_descriptors(
+                            &octave_img,
+                            &KeyPoints {
+                                keypoints: octave_kps,
+                            },
+                        )
+                        .expect("SIFT descriptor computation failed");
                     for d in descs.descriptors {
                         let mut restored_kp = d.keypoint.clone();
                         let scale = 2.0f64.powi(octave as i32);
@@ -168,12 +200,22 @@ impl Sift {
                         all_descriptors.push(cv_core::Descriptor::new(d.data, restored_kp.clone()));
                         valid_keypoints.push(restored_kp);
                     }
-                },
+                }
                 ComputeDevice::Gpu(gpu) => {
                     use cv_hal::tensor_ext::TensorToGpu;
-                    let f32_cpu = convert_to_f32_cpu(ctx, &gaussian_pyramid[octave][0]);
-                    let octave_img_gpu = f32_cpu.to_gpu_ctx(gpu).unwrap();
-                    let descs = gpu.compute_sift_descriptors(&octave_img_gpu, &KeyPoints { keypoints: octave_kps }).unwrap();
+                    let f32_cpu = convert_to_f32_cpu(ctx, &gaussian_pyramid[octave][0])
+                        .expect("Failed to convert octave image to f32");
+                    let octave_img_gpu = f32_cpu
+                        .to_gpu_ctx(gpu)
+                        .expect("Failed to upload image to GPU");
+                    let descs = gpu
+                        .compute_sift_descriptors(
+                            &octave_img_gpu,
+                            &KeyPoints {
+                                keypoints: octave_kps,
+                            },
+                        )
+                        .unwrap();
                     for d in descs.descriptors {
                         let mut restored_kp = d.keypoint.clone();
                         let scale = 2.0f64.powi(octave as i32);
@@ -183,17 +225,26 @@ impl Sift {
                         all_descriptors.push(cv_core::Descriptor::new(d.data, restored_kp.clone()));
                         valid_keypoints.push(restored_kp);
                     }
-                },
+                }
                 ComputeDevice::Mlx(_) => todo!("SIFT descriptors not implemented for MLX"),
             }
         }
 
-        (KeyPoints { keypoints: valid_keypoints }, Descriptors { descriptors: all_descriptors })
+        (
+            KeyPoints {
+                keypoints: valid_keypoints,
+            },
+            Descriptors {
+                descriptors: all_descriptors,
+            },
+        )
     }
 
     /// Detect keypoints using the runtime scheduler
     pub fn detect<S: Storage<u8> + 'static>(&self, image: &Tensor<u8, S>) -> KeyPoints {
-        let runner = match cv_runtime::scheduler().and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)) {
+        let runner = match cv_runtime::scheduler()
+            .and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput))
+        {
             Ok(group) => cv_runtime::RuntimeRunner::Group(group),
             Err(_) => cv_runtime::default_runner(),
         };
@@ -203,8 +254,13 @@ impl Sift {
     }
 
     /// Detect and compute descriptors using the runtime scheduler
-    pub fn compute<S: Storage<u8> + 'static>(&self, image: &Tensor<u8, S>) -> (KeyPoints, Descriptors) {
-        let runner = match cv_runtime::scheduler().and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)) {
+    pub fn compute<S: Storage<u8> + 'static>(
+        &self,
+        image: &Tensor<u8, S>,
+    ) -> (KeyPoints, Descriptors) {
+        let runner = match cv_runtime::scheduler()
+            .and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput))
+        {
             Ok(group) => cv_runtime::RuntimeRunner::Group(group),
             Err(_) => cv_runtime::default_runner(),
         };
@@ -228,7 +284,7 @@ fn refine_point(
 
     for _ in 0..5 {
         let (h, w) = dog_layers[0].shape.hw();
-        
+
         let d_s = &dog_layers[curr_s].storage.as_slice().unwrap();
         let d_prev = &dog_layers[curr_s - 1].storage.as_slice().unwrap();
         let d_next = &dog_layers[curr_s + 1].storage.as_slice().unwrap();
@@ -242,19 +298,24 @@ fn refine_point(
         let dxx = d_s[curr_y * w + curr_x + 1] + d_s[curr_y * w + curr_x - 1] - 2.0 * v;
         let dyy = d_s[(curr_y + 1) * w + curr_x] + d_s[(curr_y - 1) * w + curr_x] - 2.0 * v;
         let dss = d_next[curr_y * w + curr_x] + d_prev[curr_y * w + curr_x] - 2.0 * v;
-        
-        let dxy = (d_s[(curr_y + 1) * w + curr_x + 1] - d_s[(curr_y + 1) * w + curr_x - 1] -
-                   d_s[(curr_y - 1) * w + curr_x + 1] + d_s[(curr_y - 1) * w + curr_x - 1]) / 4.0;
-        let dxs = (d_next[curr_y * w + curr_x + 1] - d_next[curr_y * w + curr_x - 1] -
-                   d_prev[curr_y * w + curr_x + 1] + d_prev[curr_y * w + curr_x - 1]) / 4.0;
-        let dys = (d_next[(curr_y + 1) * w + curr_x] - d_next[(curr_y - 1) * w + curr_x] -
-                   d_prev[(curr_y + 1) * w + curr_x] + d_prev[(curr_y - 1) * w + curr_x]) / 4.0;
 
-        let hessian = Matrix3::new(
-            dxx, dxy, dxs,
-            dxy, dyy, dys,
-            dxs, dys, dss
-        );
+        let dxy = (d_s[(curr_y + 1) * w + curr_x + 1]
+            - d_s[(curr_y + 1) * w + curr_x - 1]
+            - d_s[(curr_y - 1) * w + curr_x + 1]
+            + d_s[(curr_y - 1) * w + curr_x - 1])
+            / 4.0;
+        let dxs = (d_next[curr_y * w + curr_x + 1]
+            - d_next[curr_y * w + curr_x - 1]
+            - d_prev[curr_y * w + curr_x + 1]
+            + d_prev[curr_y * w + curr_x - 1])
+            / 4.0;
+        let dys = (d_next[(curr_y + 1) * w + curr_x]
+            - d_next[(curr_y - 1) * w + curr_x]
+            - d_prev[(curr_y + 1) * w + curr_x]
+            + d_prev[(curr_y - 1) * w + curr_x])
+            / 4.0;
+
+        let hessian = Matrix3::new(dxx, dxy, dxs, dxy, dyy, dys, dxs, dys, dss);
 
         if let Some(inv_h) = hessian.try_inverse() {
             offset = -inv_h * grad;
@@ -270,48 +331,83 @@ fn refine_point(
         curr_y = (curr_y as f32 + offset.y.round()) as usize;
         curr_s = (curr_s as f32 + offset.z.round()) as usize;
 
-        if curr_s < 1 || curr_s > n_layers || curr_x < 1 || curr_x >= w - 1 || curr_y < 1 || curr_y >= h - 1 {
+        if curr_s < 1
+            || curr_s > n_layers
+            || curr_x < 1
+            || curr_x >= w - 1
+            || curr_y < 1
+            || curr_y >= h - 1
+        {
             return None;
         }
     }
 
-    let d_final = dog_layers[curr_s].storage.as_slice().unwrap()[curr_y * dog_layers[0].shape.width + curr_x];
-    let contrast = d_final + 0.5 * offset.dot(&Vector3::new(0.0, 0.0, 0.0)); 
+    let d_final =
+        dog_layers[curr_s].storage.as_slice().unwrap()[curr_y * dog_layers[0].shape.width + curr_x];
+    let contrast = d_final + 0.5 * offset.dot(&Vector3::new(0.0, 0.0, 0.0));
     if contrast.abs() < contrast_threshold / n_layers as f32 {
         return None;
     }
 
-    Some(KeyPoint::new(curr_x as f64 + offset.x as f64, curr_y as f64 + offset.y as f64)
+    Some(
+        KeyPoint::new(
+            curr_x as f64 + offset.x as f64,
+            curr_y as f64 + offset.y as f64,
+        )
         .with_response(contrast.abs() as f64)
-        .with_size(1.6 * 2.0f64.powf((curr_s as f64 + offset.z as f64) / n_layers as f64)))
+        .with_size(1.6 * 2.0f64.powf((curr_s as f64 + offset.z as f64) / n_layers as f64)),
+    )
 }
 
 fn convert_to_f32_cpu<S: Storage<u8> + 'static>(
     ctx: &ComputeDevice,
     input: &Tensor<u8, S>,
-) -> Tensor<f32, cv_core::storage::CpuStorage<f32>> {
-    use std::any::TypeId;
+) -> crate::Result<Tensor<f32, cv_core::storage::CpuStorage<f32>>> {
     use cv_core::storage::CpuStorage;
     use cv_hal::storage::GpuStorage;
 
-    let cpu_u8 = if TypeId::of::<S>() == TypeId::of::<GpuStorage<u8>>() {
-        let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, GpuStorage<u8>>;
-        let input_gpu = unsafe { &*input_ptr };
+    let cpu_u8 = if let Some(gpu_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>()
+    {
+        let input_gpu = Tensor {
+            storage: gpu_storage.clone(),
+            shape: input.shape,
+            dtype: input.dtype,
+            _phantom: std::marker::PhantomData,
+        };
         let gpu_ctx = match ctx {
             ComputeDevice::Gpu(g) => g,
-            _ => panic!("Logic error: GpuStorage with non-GPU context"),
+            _ => {
+                return Err(crate::FeatureError::DetectionError(
+                    "GpuStorage requires GPU context".into(),
+                ))
+            }
         };
-        input_gpu.to_cpu_ctx(gpu_ctx).expect("Download from GPU failed")
-    } else {
-        let input_ptr = input as *const Tensor<u8, S> as *const Tensor<u8, CpuStorage<u8>>;
-        let input_cpu = unsafe { &*input_ptr };
+        input_gpu.to_cpu_ctx(gpu_ctx).map_err(|e| {
+            crate::FeatureError::DetectionError(format!("GPU download failed: {}", e))
+        })?
+    } else if let Some(cpu_storage) = input.storage.as_any().downcast_ref::<CpuStorage<u8>>() {
+        let input_cpu = Tensor {
+            storage: cpu_storage.clone(),
+            shape: input.shape,
+            dtype: input.dtype,
+            _phantom: std::marker::PhantomData,
+        };
         input_cpu.clone()
+    } else {
+        return Err(crate::FeatureError::DetectionError(
+            "Unsupported storage type".into(),
+        ));
     };
 
-    let slice_u8 = cpu_u8.storage.as_slice().expect("Failed to get u8 slice");
+    let slice_u8 = cpu_u8
+        .storage
+        .as_slice()
+        .ok_or_else(|| crate::FeatureError::DetectionError("Failed to get u8 slice".into()))?;
     let data_f32: Vec<f32> = slice_u8.iter().map(|&v| v as f32 / 255.0).collect();
-    
-    Tensor::from_vec(data_f32, input.shape).expect("Failed to create f32 tensor")
+
+    Tensor::from_vec(data_f32, input.shape).map_err(|e| {
+        crate::FeatureError::DetectionError(format!("Failed to create f32 tensor: {}", e))
+    })
 }
 
 pub fn sift_detect_ctx<S: Storage<u8> + 'static>(
@@ -326,15 +422,17 @@ pub fn sift_detect_ctx<S: Storage<u8> + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cv_core::{storage::CpuStorage, TensorShape};
     use cv_hal::cpu::CpuBackend;
-    use cv_core::{TensorShape, storage::CpuStorage};
 
     fn create_test_image() -> Tensor<u8, CpuStorage<u8>> {
         let size = 128usize;
         let mut data = vec![0u8; size * size];
         for y in 0..size {
             for x in 0..size {
-                if ((x / 16) + (y / 16)) % 2 == 0 { data[y * size + x] = 255; }
+                if ((x / 16) + (y / 16)) % 2 == 0 {
+                    data[y * size + x] = 255;
+                }
             }
         }
         Tensor::from_vec(data, TensorShape::new(1, size, size)).unwrap()
@@ -358,7 +456,11 @@ mod tests {
         let tensor = create_test_image();
         let sift = Sift::new();
         let (kps, descs) = sift.detect_and_compute(&device, &tensor);
-        println!("Extracted {} SIFT keypoints and {} descriptors", kps.len(), descs.len());
+        println!(
+            "Extracted {} SIFT keypoints and {} descriptors",
+            kps.len(),
+            descs.len()
+        );
         assert_eq!(kps.len(), descs.len());
         if !descs.descriptors.is_empty() {
             assert_eq!(descs.descriptors[0].data.len(), 128);

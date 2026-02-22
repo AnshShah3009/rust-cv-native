@@ -1,11 +1,12 @@
-use std::sync::{Arc, OnceLock, Mutex};
-use std::collections::HashMap;
-use crate::Result;
-use cv_hal::{DeviceId, BackendType};
 use crate::device_registry::{registry, DeviceRuntime};
-use crate::executor::Executor;
-use crate::distributed::{LoadCoordinator, FileCoordinator};
-use std::time::{Instant, Duration};
+use crate::distributed::{FileCoordinator, LoadCoordinator};
+use crate::executor::{Executor, ExecutorConfig};
+use crate::Result;
+use cv_hal::{BackendType, DeviceId};
+use parking_lot::Mutex;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Priority level for a resource group
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -76,17 +77,32 @@ pub struct ResourceGroup {
     pub policy: GroupPolicy,
     device_id: DeviceId,
     pub(crate) executor: Arc<Executor>,
+    core_ids: Option<Vec<usize>>,
 }
 
 impl ResourceGroup {
-    pub fn new(name: &str, device_id: DeviceId, num_threads: usize, _core_ids: Option<Vec<usize>>, policy: GroupPolicy) -> Result<Self> {
-        let executor = Arc::new(Executor::new(device_id, num_threads, name)?);
-        
+    pub fn new(
+        name: &str,
+        device_id: DeviceId,
+        num_threads: usize,
+        core_ids: Option<Vec<usize>>,
+        policy: GroupPolicy,
+    ) -> Result<Self> {
+        let config = ExecutorConfig {
+            num_threads,
+            name: name.to_string(),
+            work_stealing: policy.allow_work_stealing,
+            core_affinity: core_ids.clone(),
+        };
+
+        let executor = Arc::new(Executor::with_config(device_id, config)?);
+
         Ok(Self {
             name: name.to_string(),
             policy,
             device_id,
             executor,
+            core_ids,
         })
     }
 
@@ -112,16 +128,47 @@ impl ResourceGroup {
     pub fn load(&self) -> usize {
         self.executor.load()
     }
-    
+
+    pub fn num_threads(&self) -> usize {
+        self.executor.num_threads()
+    }
+
+    pub fn core_ids(&self) -> Option<&[usize]> {
+        self.core_ids.as_deref()
+    }
+
     pub fn device_runtime(&self) -> Result<Arc<DeviceRuntime>> {
-        registry()?.get_device(self.device_id)
-            .ok_or_else(|| crate::Error::RuntimeError(format!("Device {:?} not found", self.device_id)))
+        registry()?.get_device(self.device_id).ok_or_else(|| {
+            crate::Error::RuntimeError(format!("Device {:?} not found", self.device_id))
+        })
     }
 
     pub fn device(&self) -> cv_hal::compute::ComputeDevice<'static> {
-        cv_hal::compute::get_device_by_id(self.device_id).unwrap_or_else(|_| {
-            panic!("Critical failure: Could not find compute device {:?}", self.device_id);
+        self.try_device()
+            .unwrap_or_else(|e| panic!("Failed to get compute device {:?}: {}", self.device_id, e))
+    }
+
+    pub fn try_device(&self) -> Result<cv_hal::compute::ComputeDevice<'static>> {
+        cv_hal::compute::get_device_by_id(self.device_id).map_err(|e| {
+            crate::Error::RuntimeError(format!(
+                "Could not find compute device {:?}: {}",
+                self.device_id, e
+            ))
         })
+    }
+
+    pub fn resize(&self, new_num_threads: usize) -> Result<()> {
+        if !self.policy.allow_dynamic_scaling {
+            return Err(crate::Error::RuntimeError(format!(
+                "Resource group '{}' does not allow dynamic scaling",
+                self.name
+            )));
+        }
+        self.executor.resize(new_num_threads)
+    }
+
+    pub fn set_core_affinity(&self, cores: Vec<usize>) -> Result<()> {
+        self.executor.set_core_affinity(cores)
     }
 }
 
@@ -180,65 +227,95 @@ impl RuntimeRunner {
             RuntimeRunner::Sync(id) => *id,
         }
     }
-    
+
     pub fn device_runtime(&self) -> Result<Arc<DeviceRuntime>> {
-        registry()?.get_device(self.device_id())
-            .ok_or_else(|| crate::Error::RuntimeError(format!("Device {:?} not found", self.device_id())))
+        registry()?.get_device(self.device_id()).ok_or_else(|| {
+            crate::Error::RuntimeError(format!("Device {:?} not found", self.device_id()))
+        })
     }
 
     pub fn device(&self) -> cv_hal::compute::ComputeDevice<'static> {
-        cv_hal::compute::get_device_by_id(self.device_id()).unwrap_or_else(|_| {
-            panic!("Critical failure: Could not find compute device {:?}", self.device_id());
+        self.try_device().unwrap_or_else(|e| {
+            panic!("Failed to get compute device {:?}: {}", self.device_id(), e)
+        })
+    }
+
+    pub fn try_device(&self) -> Result<cv_hal::compute::ComputeDevice<'static>> {
+        cv_hal::compute::get_device_by_id(self.device_id()).map_err(|e| {
+            crate::Error::RuntimeError(format!(
+                "Could not find compute device {:?}: {}",
+                self.device_id(),
+                e
+            ))
         })
     }
 }
 
 pub fn best_runner() -> RuntimeRunner {
+    try_best_runner()
+        .unwrap_or_else(|e| panic!("Critical failure: Could not initialize runtime: {}", e))
+}
+
+pub fn try_best_runner() -> Result<RuntimeRunner> {
     if let Ok(s) = scheduler() {
         if let Ok(g) = s.best_gpu_or_cpu() {
-            return RuntimeRunner::Group(g);
+            return Ok(RuntimeRunner::Group(g));
         }
     }
-    
-    // Fallback to default CPU device
+
     if let Ok(reg) = registry() {
-        return RuntimeRunner::Sync(reg.default_cpu().id());
+        return Ok(RuntimeRunner::Sync(reg.default_cpu().id()));
     }
-    
-    panic!("Critical failure: Could not initialize even basic device registry");
+
+    Err(crate::Error::RuntimeError(
+        "Could not initialize even basic device registry".into(),
+    ))
 }
 
 pub fn default_runner() -> RuntimeRunner {
+    try_default_runner()
+        .unwrap_or_else(|e| panic!("Critical failure: Could not initialize runtime: {}", e))
+}
+
+pub fn try_default_runner() -> Result<RuntimeRunner> {
     if let Ok(s) = scheduler() {
         if let Ok(g) = s.get_default_group() {
-            return RuntimeRunner::Group(g);
+            return Ok(RuntimeRunner::Group(g));
         }
     }
-    
+
     if let Ok(reg) = registry() {
-        return RuntimeRunner::Sync(reg.default_cpu().id());
+        return Ok(RuntimeRunner::Sync(reg.default_cpu().id()));
     }
-    
-    panic!("Critical failure: Could not initialize even basic device registry");
+
+    Err(crate::Error::RuntimeError(
+        "Could not initialize even basic device registry".into(),
+    ))
 }
 
 impl TaskScheduler {
     pub fn new() -> Self {
-        let (mode, coordinator): (OrchestratorMode, Option<Box<dyn LoadCoordinator>>) = if let Ok(path) = std::env::var("CV_RUNTIME_COORDINATOR") {
-            let path_buf = std::path::PathBuf::from(path);
-            (
-                OrchestratorMode::Distributed { coordinator_path: path_buf.clone() },
-                Some(Box::new(FileCoordinator::new(path_buf)))
-            )
-        } else {
-            (OrchestratorMode::Local, None)
-        };
+        let (mode, coordinator): (OrchestratorMode, Option<Box<dyn LoadCoordinator>>) =
+            if let Ok(path) = std::env::var("CV_RUNTIME_COORDINATOR") {
+                let path_buf = std::path::PathBuf::from(path);
+                (
+                    OrchestratorMode::Distributed {
+                        coordinator_path: path_buf.clone(),
+                    },
+                    Some(Box::new(FileCoordinator::new(path_buf))),
+                )
+            } else {
+                (OrchestratorMode::Local, None)
+            };
 
         Self {
             groups: Mutex::new(HashMap::new()),
             mode,
             coordinator,
-            global_load_cache: Mutex::new((HashMap::new(), Instant::now() - Duration::from_secs(3600))),
+            global_load_cache: Mutex::new((
+                HashMap::new(),
+                Instant::now() - Duration::from_secs(3600),
+            )),
             failed_devices: Mutex::new(std::collections::HashSet::new()),
         }
     }
@@ -248,40 +325,66 @@ impl TaskScheduler {
     }
 
     pub fn report_failure(&self, device_id: DeviceId) {
-        let mut failed = self.failed_devices.lock().unwrap();
+        let mut failed = self.failed_devices.lock();
         failed.insert(device_id);
     }
 
     pub fn is_device_healthy(&self, device_id: DeviceId) -> bool {
-        let failed = self.failed_devices.lock().unwrap();
+        let failed = self.failed_devices.lock();
         !failed.contains(&device_id)
     }
 
-    pub fn create_group(&self, name: &str, num_threads: usize, cores: Option<Vec<usize>>, policy: GroupPolicy) -> Result<Arc<ResourceGroup>> {
+    pub fn create_group(
+        &self,
+        name: &str,
+        num_threads: usize,
+        cores: Option<Vec<usize>>,
+        policy: GroupPolicy,
+    ) -> Result<Arc<ResourceGroup>> {
         let cpu_id = registry()?.default_cpu().id();
         self.create_group_with_device(name, num_threads, cores, policy, cpu_id)
     }
 
-    pub fn create_group_with_device(&self, name: &str, num_threads: usize, cores: Option<Vec<usize>>, policy: GroupPolicy, device_id: DeviceId) -> Result<Arc<ResourceGroup>> {
-        let mut groups = self.groups.lock().unwrap();
-            
+    pub fn create_group_with_device(
+        &self,
+        name: &str,
+        num_threads: usize,
+        cores: Option<Vec<usize>>,
+        policy: GroupPolicy,
+        device_id: DeviceId,
+    ) -> Result<Arc<ResourceGroup>> {
+        let mut groups = self.groups.lock();
+
         if groups.contains_key(name) {
-            return Err(crate::Error::RuntimeError(format!("Resource group '{}' already exists", name)));
+            return Err(crate::Error::RuntimeError(format!(
+                "Resource group '{}' already exists",
+                name
+            )));
         }
 
-        let group = Arc::new(ResourceGroup::new(name, device_id, num_threads, cores, policy)?);
+        let group = Arc::new(ResourceGroup::new(
+            name,
+            device_id,
+            num_threads,
+            cores,
+            policy,
+        )?);
         groups.insert(name.to_string(), group.clone());
-        
+
         // Also register with the device runtime
         if let Some(runtime) = registry()?.get_device(device_id) {
-            runtime.executors().lock().unwrap().add_executor(group.executor.clone());
+            runtime
+                .executors()
+                .lock()
+                .unwrap()
+                .add_executor(group.executor.clone());
         }
-        
+
         Ok(group)
     }
 
     pub fn remove_group(&self, name: &str) -> Result<Option<Arc<ResourceGroup>>> {
-        let mut groups = self.groups.lock().unwrap();
+        let mut groups = self.groups.lock();
         if let Some(group) = groups.remove(name) {
             Ok(Some(group))
         } else {
@@ -290,18 +393,18 @@ impl TaskScheduler {
     }
 
     pub fn get_group(&self, name: &str) -> Result<Option<Arc<ResourceGroup>>> {
-        let groups = self.groups.lock().unwrap();
+        let groups = self.groups.lock();
         Ok(groups.get(name).cloned())
     }
 
     fn get_global_load(&self) -> HashMap<DeviceId, usize> {
-        let mut cache = self.global_load_cache.lock().unwrap();
+        let mut cache = self.global_load_cache.lock();
         if cache.1.elapsed() > Duration::from_millis(200) {
             if let Some(ref coord) = self.coordinator {
                 // Periodically update our own load too
                 let local_load = self.get_local_load();
                 let _ = coord.update_load(&local_load);
-                
+
                 if let Ok(global) = coord.get_global_load() {
                     cache.0 = global;
                 }
@@ -312,7 +415,7 @@ impl TaskScheduler {
     }
 
     fn get_local_load(&self) -> HashMap<DeviceId, usize> {
-        let groups = self.groups.lock().unwrap();
+        let groups = self.groups.lock();
         let mut load = HashMap::new();
         for group in groups.values() {
             let entry = load.entry(group.device_id()).or_insert(0);
@@ -323,10 +426,14 @@ impl TaskScheduler {
 
     /// Finds the best available resource group for a given device type.
     /// Prefers groups with higher priority, then those with the least active tasks.
-    pub fn get_best_group(&self, backend_type: BackendType, hint: WorkloadHint) -> Result<Option<Arc<ResourceGroup>>> {
+    pub fn get_best_group(
+        &self,
+        backend_type: BackendType,
+        hint: WorkloadHint,
+    ) -> Result<Option<Arc<ResourceGroup>>> {
         let global_load = self.get_global_load();
-        let groups = self.groups.lock().unwrap();
-        
+        let groups = self.groups.lock();
+
         let mut best_group: Option<Arc<ResourceGroup>> = None;
         let mut max_priority = TaskPriority::Background;
         let mut min_load = usize::MAX;
@@ -347,21 +454,26 @@ impl TaskScheduler {
 
             if matches {
                 let priority = group.policy.priority;
-                
+
                 // Adjust selection logic based on hint
                 if hint == WorkloadHint::Latency && priority < TaskPriority::Normal {
                     continue; // Skip low priority for latency sensitive
                 }
 
                 // Load calculation: Local group load + remote load for this device
-                let local_device_load: usize = groups.values()
+                let local_device_load: usize = groups
+                    .values()
                     .filter(|g| g.device_id() == device_id)
                     .map(|g| g.load())
                     .sum();
-                
-                let remote_load = global_load.get(&device_id).copied().unwrap_or(0).saturating_sub(local_device_load);
+
+                let remote_load = global_load
+                    .get(&device_id)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_sub(local_device_load);
                 let total_device_load = group.load() + remote_load;
-                
+
                 if priority > max_priority {
                     max_priority = priority;
                     min_load = total_device_load;
@@ -379,8 +491,9 @@ impl TaskScheduler {
     }
 
     pub fn get_default_group(&self) -> Result<Arc<ResourceGroup>> {
-        self.get_group("default")?
-            .ok_or_else(|| crate::Error::RuntimeError("Default resource group not found".to_string()))
+        self.get_group("default")?.ok_or_else(|| {
+            crate::Error::RuntimeError("Default resource group not found".to_string())
+        })
     }
 
     pub fn best_gpu_or_cpu(&self) -> Result<Arc<ResourceGroup>> {
@@ -406,7 +519,10 @@ impl TaskScheduler {
             group.spawn(f);
             Ok(())
         } else {
-            Err(crate::Error::RuntimeError(format!("Resource group '{}' not found", group_name)))
+            Err(crate::Error::RuntimeError(format!(
+                "Resource group '{}' not found",
+                group_name
+            )))
         }
     }
 }
@@ -414,11 +530,14 @@ impl TaskScheduler {
 static GLOBAL_SCHEDULER: OnceLock<Result<TaskScheduler>> = OnceLock::new();
 
 pub fn scheduler() -> Result<&'static TaskScheduler> {
-    GLOBAL_SCHEDULER.get_or_init(|| {
-        let s = TaskScheduler::new();
-        s.create_group("default", num_cpus::get(), None, GroupPolicy::default())?;
-        Ok(s)
-    }).as_ref().map_err(|e| crate::Error::RuntimeError(e.to_string()))
+    GLOBAL_SCHEDULER
+        .get_or_init(|| {
+            let s = TaskScheduler::new();
+            s.create_group("default", num_cpus::get(), None, GroupPolicy::default())?;
+            Ok(s)
+        })
+        .as_ref()
+        .map_err(|e| crate::Error::RuntimeError(e.to_string()))
 }
 
 #[cfg(test)]
@@ -430,10 +549,10 @@ mod tests {
     fn test_unified_concurrency() {
         let s = TaskScheduler::new();
         let policy = GroupPolicy::default();
-        
+
         let g1 = s.create_group("g1", 4, None, policy).unwrap();
         let g2 = s.create_group("g2", 2, None, policy).unwrap();
-        
+
         assert_eq!(g1.executor.load(), 0);
         assert_eq!(g2.executor.load(), 0);
     }
@@ -442,10 +561,10 @@ mod tests {
     fn test_duplicate_group_error() {
         let s = TaskScheduler::new();
         let policy = GroupPolicy::default();
-        
+
         s.create_group("same", 2, None, policy).unwrap();
         let res = s.create_group("same", 2, None, policy);
-        
+
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("already exists"));
     }
@@ -453,13 +572,15 @@ mod tests {
     #[test]
     fn test_submit_logic() {
         let s = TaskScheduler::new();
-        s.create_group("worker", 2, None, GroupPolicy::default()).unwrap();
-        
+        s.create_group("worker", 2, None, GroupPolicy::default())
+            .unwrap();
+
         let (tx, rx) = std::sync::mpsc::channel();
         s.submit("worker", move || {
             tx.send(42).unwrap();
-        }).unwrap();
-        
+        })
+        .unwrap();
+
         assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), 42);
     }
 
@@ -467,14 +588,18 @@ mod tests {
     fn test_load_aware_steering() {
         let s = TaskScheduler::new();
         let policy = GroupPolicy::default();
-        
+
         let cpu_id = registry().unwrap().default_cpu().id();
-        let g1 = s.create_group_with_device("g1", 2, None, policy, cpu_id).unwrap();
-        let g2 = s.create_group_with_device("g2", 2, None, policy, cpu_id).unwrap();
-        
+        let g1 = s
+            .create_group_with_device("g1", 2, None, policy, cpu_id)
+            .unwrap();
+        let g2 = s
+            .create_group_with_device("g2", 2, None, policy, cpu_id)
+            .unwrap();
+
         assert_eq!(g1.load(), 0);
         assert_eq!(g2.load(), 0);
-        
+
         let (tx, rx) = std::sync::mpsc::channel();
         let g1_cloned = g1.clone();
         std::thread::spawn(move || {
@@ -483,13 +608,16 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(200));
             });
         });
-        
+
         rx.recv().unwrap();
         // Wait a bit for load to update
         std::thread::sleep(Duration::from_millis(50));
         assert!(g1.load() >= 1);
-        
-        let best = s.get_best_group(BackendType::Cpu, WorkloadHint::Default).unwrap().unwrap();
+
+        let best = s
+            .get_best_group(BackendType::Cpu, WorkloadHint::Default)
+            .unwrap()
+            .unwrap();
         assert_eq!(best.name, "g2");
     }
 }

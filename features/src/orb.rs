@@ -5,7 +5,7 @@
 
 use crate::descriptor::{Descriptor, DescriptorExtractor, Descriptors};
 use crate::fast::fast_detect;
-use cv_core::{KeyPoint, KeyPoints, Tensor, storage::Storage};
+use cv_core::{storage::Storage, KeyPoint, KeyPoints, Tensor};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::tensor_ext::TensorToCpu;
 use image::GrayImage;
@@ -100,14 +100,24 @@ impl Orb {
             scale *= self.scale_factor;
         }
 
-        all_keypoints.sort_by(|a, b| b.response.partial_cmp(&a.response).unwrap_or(std::cmp::Ordering::Equal));
+        all_keypoints.sort_by(|a, b| {
+            b.response
+                .partial_cmp(&a.response)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         all_keypoints.truncate(self.n_features);
 
-        KeyPoints { keypoints: all_keypoints }
+        KeyPoints {
+            keypoints: all_keypoints,
+        }
     }
 
     /// Detect keypoints using FAST at multiple scales with acceleration
-    pub fn detect_ctx<S: Storage<u8> + 'static>(&self, ctx: &ComputeDevice, image: &Tensor<u8, S>) -> KeyPoints {
+    pub fn detect_ctx<S: Storage<u8> + 'static>(
+        &self,
+        ctx: &ComputeDevice,
+        image: &Tensor<u8, S>,
+    ) -> KeyPoints {
         let mut all_keypoints = Vec::new();
         let mut scale = 1.0f32;
 
@@ -121,7 +131,8 @@ impl Orb {
             };
 
             let score_map = ctx.fast_detect(&scaled, self.fast_threshold, true).unwrap();
-            let kps = extract_keypoints_from_score_map(ctx, &score_map, self.n_features * 2);
+            let kps = extract_keypoints_from_score_map(ctx, &score_map, self.n_features * 2)
+                .expect("Failed to extract keypoints from score map");
 
             for kp in kps.keypoints {
                 let scaled_kp = KeyPoint::new(kp.x * scale as f64, kp.y * scale as f64)
@@ -135,10 +146,16 @@ impl Orb {
             scale *= self.scale_factor;
         }
 
-        all_keypoints.sort_by(|a, b| b.response.partial_cmp(&a.response).unwrap_or(std::cmp::Ordering::Equal));
+        all_keypoints.sort_by(|a, b| {
+            b.response
+                .partial_cmp(&a.response)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         all_keypoints.truncate(self.n_features);
 
-        KeyPoints { keypoints: all_keypoints }
+        KeyPoints {
+            keypoints: all_keypoints,
+        }
     }
 
     /// Compute orientations for keypoints using intensity centroid (Parallelized)
@@ -158,7 +175,8 @@ impl Orb {
                     let px = x + dx;
                     let py = y + dy;
 
-                    if px >= 0 && px < image.width() as i32 && py >= 0 && py < image.height() as i32 {
+                    if px >= 0 && px < image.width() as i32 && py >= 0 && py < image.height() as i32
+                    {
                         let intensity = image.get_pixel(px as u32, py as u32)[0] as f64;
                         m01 += intensity * dy as f64;
                         m10 += intensity * dx as f64;
@@ -172,16 +190,27 @@ impl Orb {
     }
 
     /// Compute orientations using a specific resource group
-    pub fn compute_orientations_ctx(&self, image: &GrayImage, keypoints: &mut KeyPoints, group: &cv_runtime::orchestrator::ResourceGroup) {
+    pub fn compute_orientations_ctx(
+        &self,
+        image: &GrayImage,
+        keypoints: &mut KeyPoints,
+        group: &cv_runtime::orchestrator::ResourceGroup,
+    ) {
         group.run(|| self.compute_orientations(image, keypoints));
     }
 }
 
-fn extract_keypoints_from_score_map<S: Storage<u8> + 'static>(ctx: &ComputeDevice, score_map: &Tensor<u8, S>, max_kps: usize) -> KeyPoints {
+fn extract_keypoints_from_score_map<S: Storage<u8> + 'static>(
+    ctx: &ComputeDevice,
+    score_map: &Tensor<u8, S>,
+    max_kps: usize,
+) -> crate::Result<KeyPoints> {
     use cv_core::storage::CpuStorage;
     use cv_hal::storage::GpuStorage;
 
-    let cpu_tensor = if let Some(gpu_storage) = score_map.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
+    let cpu_tensor = if let Some(gpu_storage) =
+        score_map.storage.as_any().downcast_ref::<GpuStorage<u8>>()
+    {
         let input_gpu = Tensor {
             storage: gpu_storage.clone(),
             shape: score_map.shape,
@@ -190,9 +219,15 @@ fn extract_keypoints_from_score_map<S: Storage<u8> + 'static>(ctx: &ComputeDevic
         };
         let gpu_ctx = match ctx {
             ComputeDevice::Gpu(g) => g,
-            _ => panic!("Logic error: GpuStorage with CpuBackend"),
+            _ => {
+                return Err(crate::FeatureError::DetectionError(
+                    "GpuStorage requires GPU context".into(),
+                ))
+            }
         };
-        input_gpu.to_cpu_ctx(gpu_ctx).unwrap()
+        input_gpu.to_cpu_ctx(gpu_ctx).map_err(|e| {
+            crate::FeatureError::DetectionError(format!("GPU download failed: {}", e))
+        })?
     } else if let Some(cpu_storage) = score_map.storage.as_any().downcast_ref::<CpuStorage<u8>>() {
         let input_cpu = Tensor {
             storage: cpu_storage.clone(),
@@ -202,12 +237,17 @@ fn extract_keypoints_from_score_map<S: Storage<u8> + 'static>(ctx: &ComputeDevic
         };
         input_cpu.clone()
     } else {
-        panic!("Unsupported storage type");
+        return Err(crate::FeatureError::DetectionError(
+            "Unsupported storage type".into(),
+        ));
     };
 
-    let slice = cpu_tensor.storage.as_slice().unwrap();
+    let slice = cpu_tensor
+        .storage
+        .as_slice()
+        .ok_or_else(|| crate::FeatureError::DetectionError("Failed to get CPU slice".into()))?;
     let (h, w) = cpu_tensor.shape.hw();
-    
+
     let mut kps = Vec::new();
     for y in 0..h {
         for x in 0..w {
@@ -217,13 +257,17 @@ fn extract_keypoints_from_score_map<S: Storage<u8> + 'static>(ctx: &ComputeDevic
             }
         }
     }
-    
+
     if kps.len() > max_kps {
-        kps.sort_by(|a, b| b.response.partial_cmp(&a.response).unwrap_or(std::cmp::Ordering::Equal));
+        kps.sort_by(|a, b| {
+            b.response
+                .partial_cmp(&a.response)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         kps.truncate(max_kps);
     }
-    
-    KeyPoints { keypoints: kps }
+
+    Ok(KeyPoints { keypoints: kps })
 }
 
 pub fn detect_and_compute_ctx<S: Storage<u8> + 'static>(
@@ -234,70 +278,84 @@ pub fn detect_and_compute_ctx<S: Storage<u8> + 'static>(
 ) -> (KeyPoints, Descriptors) {
     if let ComputeDevice::Gpu(gpu) = ctx {
         // GPU Path
-        use cv_hal::gpu_kernels::{pyramid, fast, orientation, brief};
+        use cv_hal::gpu_kernels::{brief, fast, orientation, pyramid};
         use cv_hal::storage::GpuStorage;
 
         // Ensure input is on GPU
         let temp_input;
-        let input_gpu = if let Some(gpu_storage) = image.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            temp_input = Tensor {
-                storage: gpu_storage.clone(),
-                shape: image.shape,
-                dtype: image.dtype,
-                _phantom: std::marker::PhantomData,
+        let input_gpu =
+            if let Some(gpu_storage) = image.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
+                temp_input = Tensor {
+                    storage: gpu_storage.clone(),
+                    shape: image.shape,
+                    dtype: image.dtype,
+                    _phantom: std::marker::PhantomData,
+                };
+                &temp_input
+            } else {
+                // This case should be rare, but we handle it
+                unimplemented!("Auto-migration to GPU in orb.rs not yet optimized");
             };
-            &temp_input
-        } else {
-            // This case should be rare, but we handle it
-            unimplemented!("Auto-migration to GPU in orb.rs not yet optimized");
-        };
 
         // 1. Build Pyramid
-        let pyramid = pyramid::build_pyramid(gpu, input_gpu, orb.n_levels, orb.scale_factor).unwrap();
-        
+        let pyramid =
+            pyramid::build_pyramid(gpu, input_gpu, orb.n_levels, orb.scale_factor).unwrap();
+
         let mut all_keypoints = Vec::new();
         let mut all_descriptors = Vec::new();
-        
+
         let brief_pattern = generate_gpu_brief_pattern(orb.patch_size);
 
         for (level, scaled_img) in pyramid.levels.iter().enumerate() {
             let scale = pyramid.scales[level];
-            
+
             // 2. FAST Detect
             let score_map = fast::fast_detect(gpu, scaled_img, orb.fast_threshold, true).unwrap();
-            
+
             // 3. Extract Keypoints
             let mut kps_f32 = fast::extract_keypoints(gpu, &score_map).unwrap();
-            if kps_f32.is_empty() { continue; }
-            
+            if kps_f32.is_empty() {
+                continue;
+            }
+
             // 4. Compute Orientations
-            let angles = orientation::compute_orientation(gpu, scaled_img, &kps_f32, orb.patch_size / 2).unwrap();
+            let angles =
+                orientation::compute_orientation(gpu, scaled_img, &kps_f32, orb.patch_size / 2)
+                    .unwrap();
             for (i, &angle) in angles.iter().enumerate() {
                 kps_f32[i].angle = angle;
                 kps_f32[i].octave = level as i32;
             }
-            
+
             // 5. Compute BRIEF
-            let descriptors_u8 = brief::compute_brief(gpu, scaled_img, &kps_f32, &brief_pattern).unwrap();
-            
+            let descriptors_u8 =
+                brief::compute_brief(gpu, scaled_img, &kps_f32, &brief_pattern).unwrap();
+
             // Collect
             for (i, kp_f32) in kps_f32.into_iter().enumerate() {
                 // Rescale to original image coordinates
-                let kp = KeyPoint::new(kp_f32.x as f64 * scale as f64, kp_f32.y as f64 * scale as f64)
-                    .with_size(orb.patch_size as f64 * scale as f64)
-                    .with_angle(kp_f32.angle as f64)
-                    .with_response(kp_f32.response as f64)
-                    .with_octave(level as i32);
-                
-                let desc_data = descriptors_u8[i*32..(i+1)*32].to_vec();
-                
+                let kp = KeyPoint::new(
+                    kp_f32.x as f64 * scale as f64,
+                    kp_f32.y as f64 * scale as f64,
+                )
+                .with_size(orb.patch_size as f64 * scale as f64)
+                .with_angle(kp_f32.angle as f64)
+                .with_response(kp_f32.response as f64)
+                .with_octave(level as i32);
+
+                let desc_data = descriptors_u8[i * 32..(i + 1) * 32].to_vec();
+
                 all_keypoints.push(kp.clone());
                 all_descriptors.push(Descriptor::new(desc_data, kp));
             }
         }
 
         // Sort and truncate
-        all_keypoints.sort_by(|a, b| b.response.partial_cmp(&a.response).unwrap_or(std::cmp::Ordering::Equal));
+        all_keypoints.sort_by(|a, b| {
+            b.response
+                .partial_cmp(&a.response)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         // We need to keep descriptors synced with sorted keypoints
         // For simplicity, we filter them together
         if all_keypoints.len() > orb.n_features {
@@ -307,14 +365,26 @@ pub fn detect_and_compute_ctx<S: Storage<u8> + 'static>(
             all_descriptors.truncate(orb.n_features);
         }
 
-        (KeyPoints { keypoints: all_keypoints }, Descriptors { descriptors: all_descriptors })
+        (
+            KeyPoints {
+                keypoints: all_keypoints,
+            },
+            Descriptors {
+                descriptors: all_descriptors,
+            },
+        )
     } else {
         // Fallback to CPU
         let mut keypoints = orb.detect_ctx(ctx, image);
         let cpu_img_tensor = convert_to_cpu_image(ctx, image);
         let (h, w) = cpu_img_tensor.shape.hw();
-        let gray = image::GrayImage::from_raw(w as u32, h as u32, cpu_img_tensor.storage.as_slice().unwrap().to_vec()).unwrap();
-        
+        let gray = image::GrayImage::from_raw(
+            w as u32,
+            h as u32,
+            cpu_img_tensor.storage.as_slice().unwrap().to_vec(),
+        )
+        .unwrap();
+
         orb.compute_orientations(&gray, &mut keypoints);
         let descriptors = orb.extract(&gray, &keypoints);
         (keypoints, descriptors)
@@ -324,10 +394,16 @@ pub fn detect_and_compute_ctx<S: Storage<u8> + 'static>(
 fn generate_gpu_brief_pattern(patch_size: i32) -> Vec<cv_hal::gpu_kernels::brief::BRIEFPoint> {
     use cv_hal::gpu_kernels::brief::BRIEFPoint;
     let raw_pattern = generate_steered_brief_pattern(patch_size);
-    raw_pattern.into_iter().map(|(x1, y1, x2, y2)| BRIEFPoint { x1, y1, x2, y2 }).collect()
+    raw_pattern
+        .into_iter()
+        .map(|(x1, y1, x2, y2)| BRIEFPoint { x1, y1, x2, y2 })
+        .collect()
 }
 
-fn convert_to_cpu_image<S: Storage<u8> + 'static>(ctx: &ComputeDevice, tensor: &Tensor<u8, S>) -> Tensor<u8, cv_core::storage::CpuStorage<u8>> {
+fn convert_to_cpu_image<S: Storage<u8> + 'static>(
+    ctx: &ComputeDevice,
+    tensor: &Tensor<u8, S>,
+) -> Tensor<u8, cv_core::storage::CpuStorage<u8>> {
     use cv_core::storage::CpuStorage;
     use cv_hal::storage::GpuStorage;
     use cv_hal::tensor_ext::TensorToCpu;
@@ -429,7 +505,15 @@ fn compute_orb_descriptor(
         let px2 = (cx as f32 + rx2) as i32;
         let py2 = (cy as f32 + ry2) as i32;
 
-        if px1 < 0 || px1 >= width || py1 < 0 || py1 >= height || px2 < 0 || px2 >= width || py2 < 0 || py2 >= height {
+        if px1 < 0
+            || px1 >= width
+            || py1 < 0
+            || py1 >= height
+            || px2 < 0
+            || px2 >= width
+            || py2 < 0
+            || py2 >= height
+        {
             continue;
         }
 
@@ -489,5 +573,4 @@ mod tests {
 
         img
     }
-
 }

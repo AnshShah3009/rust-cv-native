@@ -6,10 +6,14 @@ pub mod memory_manager;
 pub mod distributed;
 pub mod pipeline;
 
-pub use orchestrator::{TaskScheduler, ResourceGroup, GroupPolicy, scheduler, RuntimeRunner, best_runner, default_runner, WorkloadHint, TaskPriority};
+pub use orchestrator::{TaskScheduler, ResourceGroup, GroupPolicy, scheduler, RuntimeRunner, best_runner, default_runner, try_best_runner, try_default_runner, WorkloadHint, TaskPriority};
 pub use memory::UnifiedBuffer;
 pub use device_registry::{SubmissionIndex, DeviceRuntime, DeviceRegistry, registry};
-pub use pipeline::{Pipeline, PipelineNode, PipelineBuilder, BufferId};
+pub use pipeline::{Pipeline, PipelineNode, BufferId};
+pub use pipeline::{ExecutionGraph, NodeId, NodeDependency};
+pub use pipeline::{TransientBufferPool, BufferAlloc};
+pub use pipeline::{AsyncPipelineHandle, PipelineResult, ExecutionEvent};
+pub use pipeline::{KernelFuser, FusionPattern, FusedKernel};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

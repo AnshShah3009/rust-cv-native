@@ -1,7 +1,10 @@
-use image::GrayImage;
-use cv_imgproc::{adaptive_threshold, AdaptiveMethod, ThresholdType, find_external_contours, approx_poly_dp, contour_area};
+use crate::{CalibError, Result};
 use cv_core::Point2;
-use crate::{Result, CalibError};
+use cv_imgproc::{
+    adaptive_threshold, approx_poly_dp, contour_area, find_external_contours, AdaptiveMethod,
+    ThresholdType,
+};
+use image::GrayImage;
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -19,17 +22,27 @@ pub fn find_chessboard_corners_robust(
 
     // 1. Adaptive Thresholding at multiple scales
     for block_size in [11, 21, 51] {
-        let binary = adaptive_threshold(image, 255, AdaptiveMethod::MeanC, ThresholdType::BinaryInv, block_size, 2.0);
-        
+        let binary = adaptive_threshold(
+            image,
+            255,
+            AdaptiveMethod::MeanC,
+            ThresholdType::BinaryInv,
+            block_size,
+            2.0,
+        );
+
         // 2. Find Contours
         let contours = find_external_contours(&binary);
-        
+
         // 3. Filter Quads
-        let mut quads: Vec<Quad> = contours.par_iter()
+        let mut quads: Vec<Quad> = contours
+            .par_iter()
             .filter_map(|c| {
                 let area = contour_area(c);
-                if area < 25.0 { return None; } // Too small
-                
+                if area < 25.0 {
+                    return None;
+                } // Too small
+
                 let approx = approx_poly_dp(c, 0.03 * cv_imgproc::contour_perimeter(c), true);
                 if approx.points.len() == 4 {
                     // Check convexity (simplified)
@@ -55,5 +68,8 @@ pub fn find_chessboard_corners_robust(
         }
     }
 
-    Err(CalibError::InvalidParameters("Robust chessboard detection not fully implemented yet, use basic".to_string()))
+    Err(CalibError::InvalidParameters(
+        "Robust chessboard detection not yet implemented. Use find_chessboard_corners() instead."
+            .to_string(),
+    ))
 }

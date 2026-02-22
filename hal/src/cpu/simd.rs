@@ -4,7 +4,7 @@ use wide::f32x8;
 /// Weights: R: 0.299, G: 0.587, B: 0.114
 pub fn rgb_to_gray_simd(rgb: &[u8], gray: &mut [u8]) {
     assert_eq!(rgb.len(), gray.len() * 3);
-    
+
     // Process 8 pixels at a time (24 bytes of RGB)
     let chunk_size = 8;
     let n = gray.len();
@@ -15,16 +15,16 @@ pub fn rgb_to_gray_simd(rgb: &[u8], gray: &mut [u8]) {
     let w_b = f32x8::splat(0.114);
 
     for i in (0..n_simd).step_by(chunk_size) {
-        let rgb_chunk = &rgb[i*3..(i+8)*3];
-        
+        let rgb_chunk = &rgb[i * 3..(i + 8) * 3];
+
         let mut r_arr = [0.0f32; 8];
         let mut g_arr = [0.0f32; 8];
         let mut b_arr = [0.0f32; 8];
 
         for k in 0..8 {
-            r_arr[k] = rgb_chunk[k*3] as f32;
-            g_arr[k] = rgb_chunk[k*3+1] as f32;
-            b_arr[k] = rgb_chunk[k*3+2] as f32;
+            r_arr[k] = rgb_chunk[k * 3] as f32;
+            g_arr[k] = rgb_chunk[k * 3 + 1] as f32;
+            b_arr[k] = rgb_chunk[k * 3 + 2] as f32;
         }
 
         let r_vec = f32x8::from(r_arr);
@@ -41,15 +41,15 @@ pub fn rgb_to_gray_simd(rgb: &[u8], gray: &mut [u8]) {
 
     // Handle remainder
     for i in n_simd..n {
-        let r = rgb[i*3] as f32;
-        let g = rgb[i*3+1] as f32;
-        let b = rgb[i*3+2] as f32;
+        let r = rgb[i * 3] as f32;
+        let g = rgb[i * 3 + 1] as f32;
+        let b = rgb[i * 3 + 2] as f32;
         gray[i] = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
     }
 }
 
 /// Compute 1D convolution on a row of pixels using SIMD
-/// 
+///
 /// * `src`: Source row data (must be padded or handled by caller for boundaries)
 /// * `dst`: Destination row data
 /// * `kernel`: Convolution kernel
@@ -61,7 +61,11 @@ pub fn convolve_row_1d(src: &[f32], dst: &mut [f32], kernel: &[f32], radius: usi
 
     // Process 8 pixels at a time
     let chunk_size = 8;
-    let width_simd = if width >= chunk_size { width - chunk_size + 1 } else { 0 };
+    let width_simd = if width >= chunk_size {
+        width - chunk_size + 1
+    } else {
+        0
+    };
 
     for x in (0..width_simd).step_by(chunk_size) {
         let mut sum_v = f32x8::ZERO;
@@ -72,13 +76,13 @@ pub fn convolve_row_1d(src: &[f32], dst: &mut [f32], kernel: &[f32], radius: usi
             let offset = x + k;
             if offset + 8 <= src.len() {
                 let mut chunk = [0.0f32; 8];
-                chunk.copy_from_slice(&src[offset..offset+8]);
+                chunk.copy_from_slice(&src[offset..offset + 8]);
                 sum_v += f32x8::from(chunk) * w;
             }
         }
-        
+
         let res: [f32; 8] = sum_v.into();
-        dst[x..x+8].copy_from_slice(&res);
+        dst[x..x + 8].copy_from_slice(&res);
     }
 }
 
@@ -89,14 +93,13 @@ mod tests {
     #[test]
     fn test_rgb_to_gray_simd_parity() {
         let rgb = vec![
-            255, 0, 0,   // Red
-            0, 255, 0,   // Green
-            0, 0, 255,   // Blue
+            255, 0, 0, // Red
+            0, 255, 0, // Green
+            0, 0, 255, // Blue
             255, 255, 255, // White
-            0, 0, 0,     // Black
+            0, 0, 0, // Black
             128, 128, 128, // Gray
-            10, 20, 30,
-            100, 150, 200,
+            10, 20, 30, 100, 150, 200,
         ];
         let mut gray_simd = vec![0u8; 8];
         let mut gray_scalar = vec![0u8; 8];
@@ -115,10 +118,12 @@ mod tests {
 
     #[test]
     fn test_convolve_row_1d_simd_parity() {
-        let src = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+        let src = vec![
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ];
         let kernel = vec![0.25, 0.5, 0.25];
         let radius = 1;
-        
+
         let mut dst_simd = vec![0.0f32; 8];
         let mut dst_scalar = vec![0.0f32; 8];
 

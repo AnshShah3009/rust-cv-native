@@ -1,7 +1,7 @@
+use crate::storage::{CpuStorage, Storage};
 use std::default::Default;
 use std::fmt;
 use std::marker::PhantomData;
-use crate::storage::{Storage, CpuStorage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataType {
@@ -69,7 +69,7 @@ impl TensorShape {
 ///
 /// **Layout Convention:**
 /// `rust-cv-native` strictly uses the **CHW (Channel-Height-Width)** layout (also known as channel-first).
-/// Data is stored contiguously in memory with Width as the fastest-varying dimension, 
+/// Data is stored contiguously in memory with Width as the fastest-varying dimension,
 /// followed by Height, and then Channels.
 ///
 /// For a 3D tensor with dimensions (C, H, W), the element at (c, h, w) is located at:
@@ -95,21 +95,27 @@ impl<T: Clone + Copy + fmt::Debug + 'static> CpuTensor<T> {
         h_range: std::ops::Range<usize>,
         w_range: std::ops::Range<usize>,
     ) -> crate::Result<Self> {
-        if c_range.end > self.shape.channels || h_range.end > self.shape.height || w_range.end > self.shape.width {
-            return Err(crate::Error::InvalidInput("Slice range out of bounds".into()));
+        if c_range.end > self.shape.channels
+            || h_range.end > self.shape.height
+            || w_range.end > self.shape.width
+        {
+            return Err(crate::Error::InvalidInput(
+                "Slice range out of bounds".into(),
+            ));
         }
 
         let new_channels = c_range.len();
         let new_height = h_range.len();
         let new_width = w_range.len();
         let new_shape = TensorShape::new(new_channels, new_height, new_width);
-        
+
         let mut new_data = Vec::with_capacity(new_shape.len());
         let src_data = self.as_slice()?;
 
         for c in c_range {
             for h in h_range.clone() {
-                let start_idx = c * self.shape.height * self.shape.width + h * self.shape.width + w_range.start;
+                let start_idx =
+                    c * self.shape.height * self.shape.width + h * self.shape.width + w_range.start;
                 let end_idx = start_idx + new_width;
                 new_data.extend_from_slice(&src_data[start_idx..end_idx]);
             }
@@ -119,12 +125,14 @@ impl<T: Clone + Copy + fmt::Debug + 'static> CpuTensor<T> {
     }
 
     /// Concatenate multiple tensors along a specified dimension.
-    /// 
+    ///
     /// * `tensors`: List of tensors to concatenate.
     /// * `dim`: Dimension to join along (0=C, 1=H, 2=W).
     pub fn concat(tensors: &[&Self], dim: usize) -> crate::Result<Self> {
         if tensors.is_empty() {
-            return Err(crate::Error::InvalidInput("Cannot concat empty tensor list".into()));
+            return Err(crate::Error::InvalidInput(
+                "Cannot concat empty tensor list".into(),
+            ));
         }
 
         let first_shape = tensors[0].shape;
@@ -133,25 +141,45 @@ impl<T: Clone + Copy + fmt::Debug + 'static> CpuTensor<T> {
         // Verify other dimensions match
         for (i, t) in tensors.iter().enumerate().skip(1) {
             match dim {
-                0 => { // Concat along Channels
+                0 => {
+                    // Concat along Channels
                     if t.shape.height != first_shape.height || t.shape.width != first_shape.width {
-                        return Err(crate::Error::DimensionMismatch(format!("Shape mismatch at index {}: {:?} vs {:?}", i, t.shape, first_shape)));
+                        return Err(crate::Error::DimensionMismatch(format!(
+                            "Shape mismatch at index {}: {:?} vs {:?}",
+                            i, t.shape, first_shape
+                        )));
                     }
                     new_shape.channels += t.shape.channels;
                 }
-                1 => { // Concat along Height
-                    if t.shape.channels != first_shape.channels || t.shape.width != first_shape.width {
-                        return Err(crate::Error::DimensionMismatch(format!("Shape mismatch at index {}: {:?} vs {:?}", i, t.shape, first_shape)));
+                1 => {
+                    // Concat along Height
+                    if t.shape.channels != first_shape.channels
+                        || t.shape.width != first_shape.width
+                    {
+                        return Err(crate::Error::DimensionMismatch(format!(
+                            "Shape mismatch at index {}: {:?} vs {:?}",
+                            i, t.shape, first_shape
+                        )));
                     }
                     new_shape.height += t.shape.height;
                 }
-                2 => { // Concat along Width
-                    if t.shape.channels != first_shape.channels || t.shape.height != first_shape.height {
-                        return Err(crate::Error::DimensionMismatch(format!("Shape mismatch at index {}: {:?} vs {:?}", i, t.shape, first_shape)));
+                2 => {
+                    // Concat along Width
+                    if t.shape.channels != first_shape.channels
+                        || t.shape.height != first_shape.height
+                    {
+                        return Err(crate::Error::DimensionMismatch(format!(
+                            "Shape mismatch at index {}: {:?} vs {:?}",
+                            i, t.shape, first_shape
+                        )));
                     }
                     new_shape.width += t.shape.width;
                 }
-                _ => return Err(crate::Error::InvalidInput("Invalid dimension for concat (must be 0, 1, or 2)".into())),
+                _ => {
+                    return Err(crate::Error::InvalidInput(
+                        "Invalid dimension for concat (must be 0, 1, or 2)".into(),
+                    ))
+                }
             }
         }
 
@@ -195,7 +223,11 @@ impl<T: Clone + Copy + fmt::Debug + 'static> CpuTensor<T> {
 impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> Tensor<T, S> {
     pub fn from_vec(data: Vec<T>, shape: TensorShape) -> crate::Result<Self> {
         if data.len() != shape.len() {
-            return Err(crate::Error::DimensionMismatch(format!("Data size mismatch: got {}, expected {}", data.len(), shape.len())));
+            return Err(crate::Error::DimensionMismatch(format!(
+                "Data size mismatch: got {}, expected {}",
+                data.len(),
+                shape.len()
+            )));
         }
         let dtype = match std::any::type_name::<T>() {
             "u8" => DataType::U8,
@@ -216,7 +248,7 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> Tensor<T, S> {
 
     pub fn reshape(&self, new_shape: TensorShape) -> crate::Result<Self> {
         let len = self.storage.len();
-        
+
         if len != new_shape.len() {
             return Err(crate::Error::DimensionMismatch(format!(
                 "Cannot reshape: size mismatch ({} != {})",
@@ -233,11 +265,15 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> Tensor<T, S> {
     }
 
     pub fn as_slice(&self) -> crate::Result<&[T]> {
-        self.storage.as_slice().ok_or_else(|| crate::Error::RuntimeError("Data not on CPU".into()))
+        self.storage
+            .as_slice()
+            .ok_or_else(|| crate::Error::RuntimeError("Data not on CPU".into()))
     }
 
     pub fn as_mut_slice(&mut self) -> crate::Result<&mut [T]> {
-        self.storage.as_mut_slice().ok_or_else(|| crate::Error::RuntimeError("Data not on CPU".into()))
+        self.storage
+            .as_mut_slice()
+            .ok_or_else(|| crate::Error::RuntimeError("Data not on CPU".into()))
     }
 
     pub fn index(&self, c: usize, h: usize, w: usize) -> crate::Result<T> {
@@ -246,7 +282,9 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> Tensor<T, S> {
         }
         // Enforce packed CHW layout: length must match shape
         if self.storage.len() != self.shape.len() {
-            return Err(crate::Error::RuntimeError("Tensor storage size mismatch".into()));
+            return Err(crate::Error::RuntimeError(
+                "Tensor storage size mismatch".into(),
+            ));
         }
         let idx = c * self.shape.height * self.shape.width + h * self.shape.width + w;
         Ok(self.as_slice()?[idx])
@@ -281,7 +319,10 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> Tensor<T, S> {
     }
 
     /// Attempt to map the storage of this tensor to another type using a closure.
-    pub fn try_map_storage<S2: Storage<T>, E, F>(self, f: F) -> std::result::Result<Tensor<T, S2>, E>
+    pub fn try_map_storage<S2: Storage<T>, E, F>(
+        self,
+        f: F,
+    ) -> std::result::Result<Tensor<T, S2>, E>
     where
         F: FnOnce(S) -> std::result::Result<S2, E>,
     {
@@ -307,7 +348,8 @@ impl<T: Clone + Copy + Default + fmt::Debug + 'static> Tensor<T> {
         };
 
         Ok(Self {
-            storage: CpuStorage::new(shape.len(), T::default()).map_err(crate::Error::RuntimeError)?,
+            storage: CpuStorage::new(shape.len(), T::default())
+                .map_err(crate::Error::RuntimeError)?,
             shape,
             dtype,
             _phantom: PhantomData,
@@ -318,26 +360,52 @@ impl<T: Clone + Copy + Default + fmt::Debug + 'static> Tensor<T> {
         Self::new(shape)
     }
 
-    pub fn ones(shape: TensorShape) -> crate::Result<Self> {
+    pub fn ones(shape: TensorShape) -> crate::Result<Self>
+    where
+        T: One,
+    {
         let mut t = Self::new(shape)?;
         if let Some(s) = t.storage.as_mut_slice() {
-            // We use a specialized approach for types that support 1.0-like values.
-            // For now, we assume float/int and use a custom value if possible, 
-            // or default to a manual fill for known types.
-            let one: T = match std::any::type_name::<T>() {
-                "f32" => unsafe { *(&1.0f32 as *const f32 as *const T) },
-                "f64" => unsafe { *(&1.0f64 as *const f64 as *const T) },
-                "u8" => unsafe { *(&1u8 as *const u8 as *const T) },
-                "u16" => unsafe { *(&1u16 as *const u16 as *const T) },
-                "u32" => unsafe { *(&1u32 as *const u32 as *const T) },
-                "i32" => unsafe { *(&1i32 as *const i32 as *const T) },
-                _ => T::default(),
-            };
             for v in s.iter_mut() {
-                *v = one;
+                *v = T::one();
             }
         }
         Ok(t)
+    }
+}
+
+pub trait One {
+    fn one() -> Self;
+}
+
+impl One for f32 {
+    fn one() -> Self {
+        1.0
+    }
+}
+impl One for f64 {
+    fn one() -> Self {
+        1.0
+    }
+}
+impl One for u8 {
+    fn one() -> Self {
+        1
+    }
+}
+impl One for u16 {
+    fn one() -> Self {
+        1
+    }
+}
+impl One for u32 {
+    fn one() -> Self {
+        1
+    }
+}
+impl One for i32 {
+    fn one() -> Self {
+        1
     }
 }
 
@@ -350,7 +418,7 @@ impl Tensor<f32, CpuStorage<f32>> {
         let a = self.as_slice()?;
         let b = other.as_slice()?;
         let mut res = vec![0.0f32; a.len()];
-        
+
         {
             let mut a_chunks = a.chunks_exact(8);
             let mut b_chunks = b.chunks_exact(8);
@@ -383,7 +451,7 @@ impl Tensor<f32, CpuStorage<f32>> {
         let a = self.as_slice()?;
         let b = other.as_slice()?;
         let mut res = vec![0.0f32; a.len()];
-        
+
         {
             let mut a_chunks = a.chunks_exact(8);
             let mut b_chunks = b.chunks_exact(8);
@@ -416,7 +484,7 @@ impl Tensor<f32, CpuStorage<f32>> {
         let a = self.as_slice()?;
         let b = other.as_slice()?;
         let mut res = vec![0.0f32; a.len()];
-        
+
         {
             let mut a_chunks = a.chunks_exact(8);
             let mut b_chunks = b.chunks_exact(8);
@@ -463,9 +531,12 @@ impl Tensor<f32> {
 
     pub fn to_image_gray(&self) -> crate::Result<Vec<u8>> {
         if !self.shape.is_2d() {
-            return Err(crate::Error::RuntimeError("Tensor must be 2D for gray image".into()));
+            return Err(crate::Error::RuntimeError(
+                "Tensor must be 2D for gray image".into(),
+            ));
         }
-        Ok(self.as_slice()?
+        Ok(self
+            .as_slice()?
             .iter()
             .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
             .collect())
@@ -477,7 +548,10 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> fmt::Display for Ten
         write!(
             f,
             "Tensor({}, {}, {}, {:?})",
-            self.shape.channels, self.shape.height, self.shape.width, self.storage.device()
+            self.shape.channels,
+            self.shape.height,
+            self.shape.width,
+            self.storage.device()
         )
     }
 }
@@ -485,7 +559,10 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: Storage<T>> fmt::Display for Ten
 pub type Tensor3f = Tensor<f32>;
 pub type Tensor4f = Tensor<f64>;
 
-pub fn create_tensor_2d<T: Clone + Copy + Default + fmt::Debug + 'static>(height: usize, width: usize) -> crate::Result<Tensor<T>> {
+pub fn create_tensor_2d<T: Clone + Copy + Default + fmt::Debug + 'static>(
+    height: usize,
+    width: usize,
+) -> crate::Result<Tensor<T>> {
     Tensor::new(TensorShape::new(1, height, width))
 }
 

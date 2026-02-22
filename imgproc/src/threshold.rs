@@ -1,11 +1,11 @@
 use crate::{gaussian_blur_with_border, BorderMode};
+use cv_core::storage::Storage;
+use cv_hal::compute::ComputeDevice;
+use cv_hal::context::ThresholdType as HalThresholdType;
+use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
+use cv_runtime::orchestrator::RuntimeRunner;
 use image::GrayImage;
 use wide::*;
-use cv_core::storage::Storage;
-use cv_hal::compute::{ComputeDevice};
-use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
-use cv_hal::context::ThresholdType as HalThresholdType;
-use cv_runtime::orchestrator::RuntimeRunner;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThresholdType {
@@ -27,15 +27,21 @@ pub fn threshold(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType)
     threshold_ctx(src, thresh, max_value, typ, &runner)
 }
 
-pub fn threshold_ctx(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdType, group: &RuntimeRunner) -> GrayImage {
+pub fn threshold_ctx(
+    src: &GrayImage,
+    thresh: u8,
+    max_value: u8,
+    typ: ThresholdType,
+    group: &RuntimeRunner,
+) -> GrayImage {
     let device = group.device();
-    
+
     if let ComputeDevice::Gpu(gpu) = device {
         if let Ok(result) = threshold_gpu(gpu, src, thresh, max_value, typ) {
             return result;
         }
     }
-    
+
     group.run(|| threshold_cpu(src, thresh, max_value, typ))
 }
 
@@ -47,11 +53,14 @@ fn threshold_gpu(
     typ: ThresholdType,
 ) -> cv_hal::Result<GrayImage> {
     use cv_hal::context::ComputeContext;
-    
-    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize))
-        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+
+    let input_tensor = cv_core::CpuTensor::from_vec(
+        src.as_raw().to_vec(),
+        cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize),
+    )
+    .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
-    
+
     let hal_typ = match typ {
         ThresholdType::Binary => HalThresholdType::Binary,
         ThresholdType::BinaryInv => HalThresholdType::BinaryInv,
@@ -59,10 +68,10 @@ fn threshold_gpu(
         ThresholdType::ToZero => HalThresholdType::ToZero,
         ThresholdType::ToZeroInv => HalThresholdType::ToZeroInv,
     };
-    
+
     let output_gpu = gpu.threshold(&input_gpu, thresh, max_value, hal_typ)?;
     let output_cpu = output_gpu.to_cpu_ctx(gpu)?;
-    
+
     let data = output_cpu.storage.as_slice().unwrap().to_vec();
     GrayImage::from_raw(src.width(), src.height(), data)
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
@@ -75,44 +84,47 @@ pub fn threshold_cpu(src: &GrayImage, thresh: u8, max_value: u8, typ: ThresholdT
     let src_raw = src.as_raw();
     let dst_raw = dst.as_mut();
 
-    dst_raw.par_chunks_mut(width).enumerate().for_each(|(y, row_dst)| {
-        let row_src = &src_raw[y * width..(y + 1) * width];
-        
-        let thresh_v = f32x8::splat(thresh as f32);
-        let max_v = f32x8::splat(max_value as f32);
-        let zero_v = f32x8::ZERO;
+    dst_raw
+        .par_chunks_mut(width)
+        .enumerate()
+        .for_each(|(y, row_dst)| {
+            let row_src = &src_raw[y * width..(y + 1) * width];
 
-        let len = row_src.len();
-        for i in (0..len).step_by(8) {
-            if i + 8 <= len {
-                let s_v = f32x8::from([
-                    row_src[i] as f32,
-                    row_src[i + 1] as f32,
-                    row_src[i + 2] as f32,
-                    row_src[i + 3] as f32,
-                    row_src[i + 4] as f32,
-                    row_src[i + 5] as f32,
-                    row_src[i + 6] as f32,
-                    row_src[i + 7] as f32,
-                ]);
-                let res = match typ {
-                    ThresholdType::Binary => s_v.cmp_gt(thresh_v).blend(max_v, zero_v),
-                    ThresholdType::BinaryInv => s_v.cmp_gt(thresh_v).blend(zero_v, max_v),
-                    ThresholdType::Trunc => s_v.min(thresh_v),
-                    ThresholdType::ToZero => s_v.cmp_gt(thresh_v).blend(s_v, zero_v),
-                    ThresholdType::ToZeroInv => s_v.cmp_gt(thresh_v).blend(zero_v, s_v),
-                };
-                let res_arr: [f32; 8] = res.into();
-                for j in 0..8 {
-                    row_dst[i + j] = res_arr[j] as u8;
-                }
-            } else {
-                for idx in i..len {
-                    row_dst[idx] = apply_threshold(row_src[idx], thresh, max_value, typ);
+            let thresh_v = f32x8::splat(thresh as f32);
+            let max_v = f32x8::splat(max_value as f32);
+            let zero_v = f32x8::ZERO;
+
+            let len = row_src.len();
+            for i in (0..len).step_by(8) {
+                if i + 8 <= len {
+                    let s_v = f32x8::from([
+                        row_src[i] as f32,
+                        row_src[i + 1] as f32,
+                        row_src[i + 2] as f32,
+                        row_src[i + 3] as f32,
+                        row_src[i + 4] as f32,
+                        row_src[i + 5] as f32,
+                        row_src[i + 6] as f32,
+                        row_src[i + 7] as f32,
+                    ]);
+                    let res = match typ {
+                        ThresholdType::Binary => s_v.cmp_gt(thresh_v).blend(max_v, zero_v),
+                        ThresholdType::BinaryInv => s_v.cmp_gt(thresh_v).blend(zero_v, max_v),
+                        ThresholdType::Trunc => s_v.min(thresh_v),
+                        ThresholdType::ToZero => s_v.cmp_gt(thresh_v).blend(s_v, zero_v),
+                        ThresholdType::ToZeroInv => s_v.cmp_gt(thresh_v).blend(zero_v, s_v),
+                    };
+                    let res_arr: [f32; 8] = res.into();
+                    for j in 0..8 {
+                        row_dst[i + j] = res_arr[j] as u8;
+                    }
+                } else {
+                    for idx in i..len {
+                        row_dst[idx] = apply_threshold(row_src[idx], thresh, max_value, typ);
+                    }
                 }
             }
-        }
-    });
+        });
 
     dst
 }
@@ -293,15 +305,8 @@ fn local_mean_image(src: &GrayImage, block_size: u32) -> GrayImage {
     let radius = (block_size / 2) as i32;
     let stride = width + 1;
 
-    let pool = cv_core::BufferPool::global();
-    let mut integral_vec = pool.get((width + 1) * (height + 1) * 4);
-    let integral: &mut [u32] = unsafe {
-        std::slice::from_raw_parts_mut(
-            integral_vec.as_mut_ptr() as *mut u32,
-            (width + 1) * (height + 1),
-        )
-    };
-    integral.fill(0);
+    let integral_size = (width + 1) * (height + 1);
+    let mut integral: Vec<u32> = vec![0u32; integral_size];
 
     for y in 0..height {
         let mut row_sum = 0u32;
@@ -328,7 +333,6 @@ fn local_mean_image(src: &GrayImage, block_size: u32) -> GrayImage {
         }
     }
 
-    pool.return_buffer(integral_vec);
     out
 }
 

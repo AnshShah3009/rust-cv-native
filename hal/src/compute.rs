@@ -1,9 +1,11 @@
-use crate::gpu::GpuContext;
+use crate::context::{
+    BorderMode, ColorConversion, ComputeContext, MorphologyType, ThresholdType, WarpType,
+};
 use crate::cpu::CpuBackend;
+use crate::gpu::GpuContext;
 use crate::mlx::MlxContext;
-use crate::context::{ComputeContext, BorderMode, ThresholdType, MorphologyType, WarpType, ColorConversion};
 use crate::Result;
-use cv_core::{Tensor, storage::Storage};
+use cv_core::{storage::Storage, Tensor};
 use std::sync::OnceLock;
 
 static CPU_CONTEXT: OnceLock<CpuBackend> = OnceLock::new();
@@ -186,9 +188,30 @@ impl<'a> ComputeDevice<'a> {
         truncation: f32,
     ) -> Result<()> {
         match self {
-            ComputeDevice::Cpu(cpu) => cpu.tsdf_integrate(depth_image, camera_pose, intrinsics, voxel_volume, voxel_size, truncation),
-            ComputeDevice::Gpu(gpu) => gpu.tsdf_integrate(depth_image, camera_pose, intrinsics, voxel_volume, voxel_size, truncation),
-            ComputeDevice::Mlx(mlx) => mlx.tsdf_integrate(depth_image, camera_pose, intrinsics, voxel_volume, voxel_size, truncation),
+            ComputeDevice::Cpu(cpu) => cpu.tsdf_integrate(
+                depth_image,
+                camera_pose,
+                intrinsics,
+                voxel_volume,
+                voxel_size,
+                truncation,
+            ),
+            ComputeDevice::Gpu(gpu) => gpu.tsdf_integrate(
+                depth_image,
+                camera_pose,
+                intrinsics,
+                voxel_volume,
+                voxel_size,
+                truncation,
+            ),
+            ComputeDevice::Mlx(mlx) => mlx.tsdf_integrate(
+                depth_image,
+                camera_pose,
+                intrinsics,
+                voxel_volume,
+                voxel_size,
+                truncation,
+            ),
         }
     }
 
@@ -203,9 +226,33 @@ impl<'a> ComputeDevice<'a> {
         truncation: f32,
     ) -> Result<Tensor<f32, S>> {
         match self {
-            ComputeDevice::Cpu(cpu) => cpu.tsdf_raycast(tsdf_volume, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation),
-            ComputeDevice::Gpu(gpu) => gpu.tsdf_raycast(tsdf_volume, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation),
-            ComputeDevice::Mlx(mlx) => mlx.tsdf_raycast(tsdf_volume, camera_pose, intrinsics, image_size, depth_range, voxel_size, truncation),
+            ComputeDevice::Cpu(cpu) => cpu.tsdf_raycast(
+                tsdf_volume,
+                camera_pose,
+                intrinsics,
+                image_size,
+                depth_range,
+                voxel_size,
+                truncation,
+            ),
+            ComputeDevice::Gpu(gpu) => gpu.tsdf_raycast(
+                tsdf_volume,
+                camera_pose,
+                intrinsics,
+                image_size,
+                depth_range,
+                voxel_size,
+                truncation,
+            ),
+            ComputeDevice::Mlx(mlx) => mlx.tsdf_raycast(
+                tsdf_volume,
+                camera_pose,
+                intrinsics,
+                image_size,
+                depth_range,
+                voxel_size,
+                truncation,
+            ),
         }
     }
 
@@ -217,9 +264,15 @@ impl<'a> ComputeDevice<'a> {
         max_triangles: u32,
     ) -> Result<Vec<crate::gpu_kernels::marching_cubes::Vertex>> {
         match self {
-            ComputeDevice::Cpu(cpu) => cpu.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles),
-            ComputeDevice::Gpu(gpu) => gpu.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles),
-            ComputeDevice::Mlx(mlx) => mlx.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles),
+            ComputeDevice::Cpu(cpu) => {
+                cpu.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles)
+            }
+            ComputeDevice::Gpu(gpu) => {
+                gpu.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles)
+            }
+            ComputeDevice::Mlx(mlx) => {
+                mlx.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles)
+            }
         }
     }
 
@@ -232,9 +285,15 @@ impl<'a> ComputeDevice<'a> {
         max_iters: u32,
     ) -> Result<Vec<[f32; 2]>> {
         match self {
-            ComputeDevice::Cpu(cpu) => cpu.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters),
-            ComputeDevice::Gpu(gpu) => gpu.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters),
-            ComputeDevice::Mlx(mlx) => mlx.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters),
+            ComputeDevice::Cpu(cpu) => {
+                cpu.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters)
+            }
+            ComputeDevice::Gpu(gpu) => {
+                gpu.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters)
+            }
+            ComputeDevice::Mlx(mlx) => {
+                mlx.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters)
+            }
         }
     }
 
@@ -336,9 +395,15 @@ impl<'a> ComputeDevice<'a> {
         edge_threshold: f32,
     ) -> Result<Tensor<u8, cv_core::storage::CpuStorage<u8>>> {
         match self {
-            ComputeDevice::Cpu(cpu) => cpu.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold),
-            ComputeDevice::Gpu(gpu) => gpu.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold),
-            ComputeDevice::Mlx(mlx) => mlx.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold),
+            ComputeDevice::Cpu(cpu) => {
+                cpu.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold)
+            }
+            ComputeDevice::Gpu(gpu) => {
+                gpu.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold)
+            }
+            ComputeDevice::Mlx(mlx) => {
+                mlx.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold)
+            }
         }
     }
 
@@ -376,9 +441,15 @@ impl<'a> ComputeDevice<'a> {
         transform: &nalgebra::Matrix4<f32>,
     ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
         match self {
-            ComputeDevice::Cpu(cpu) => cpu.icp_accumulate(source, target, target_normals, correspondences, transform),
-            ComputeDevice::Gpu(gpu) => gpu.icp_accumulate(source, target, target_normals, correspondences, transform),
-            ComputeDevice::Mlx(mlx) => mlx.icp_accumulate(source, target, target_normals, correspondences, transform),
+            ComputeDevice::Cpu(cpu) => {
+                cpu.icp_accumulate(source, target, target_normals, correspondences, transform)
+            }
+            ComputeDevice::Gpu(gpu) => {
+                gpu.icp_accumulate(source, target, target_normals, correspondences, transform)
+            }
+            ComputeDevice::Mlx(mlx) => {
+                mlx.icp_accumulate(source, target, target_normals, correspondences, transform)
+            }
         }
     }
 
@@ -392,9 +463,30 @@ impl<'a> ComputeDevice<'a> {
         max_angle: f32,
     ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
         match self {
-            ComputeDevice::Cpu(cpu) => cpu.dense_icp_step(source_depth, target_data, intrinsics, initial_guess, max_dist, max_angle),
-            ComputeDevice::Gpu(gpu) => gpu.dense_icp_step(source_depth, target_data, intrinsics, initial_guess, max_dist, max_angle),
-            ComputeDevice::Mlx(mlx) => mlx.dense_icp_step(source_depth, target_data, intrinsics, initial_guess, max_dist, max_angle),
+            ComputeDevice::Cpu(cpu) => cpu.dense_icp_step(
+                source_depth,
+                target_data,
+                intrinsics,
+                initial_guess,
+                max_dist,
+                max_angle,
+            ),
+            ComputeDevice::Gpu(gpu) => gpu.dense_icp_step(
+                source_depth,
+                target_data,
+                intrinsics,
+                initial_guess,
+                max_dist,
+                max_angle,
+            ),
+            ComputeDevice::Mlx(mlx) => mlx.dense_icp_step(
+                source_depth,
+                target_data,
+                intrinsics,
+                initial_guess,
+                max_dist,
+                max_angle,
+            ),
         }
     }
 
@@ -465,7 +557,9 @@ impl<'a> ComputeDevice<'a> {
     pub fn get_buffer(&self, size: u64, usage: wgpu::BufferUsages) -> Result<wgpu::Buffer> {
         match self {
             ComputeDevice::Gpu(gpu) => Ok(gpu.get_buffer(size, usage)),
-            ComputeDevice::Cpu(_) | ComputeDevice::Mlx(_) => Err(crate::Error::NotSupported("GPU buffer pooling not available".into())),
+            ComputeDevice::Cpu(_) | ComputeDevice::Mlx(_) => Err(crate::Error::NotSupported(
+                "GPU buffer pooling not available".into(),
+            )),
         }
     }
 
@@ -476,7 +570,9 @@ impl<'a> ComputeDevice<'a> {
                 gpu.return_buffer(buffer, usage);
                 Ok(())
             }
-            ComputeDevice::Cpu(_) | ComputeDevice::Mlx(_) => Err(crate::Error::NotSupported("GPU buffer pooling not available".into())),
+            ComputeDevice::Cpu(_) | ComputeDevice::Mlx(_) => Err(crate::Error::NotSupported(
+                "GPU buffer pooling not available".into(),
+            )),
         }
     }
 }
@@ -495,22 +591,25 @@ pub fn get_device_by_id(id: crate::DeviceId) -> Result<ComputeDevice<'static>> {
             return Ok(ComputeDevice::Cpu(cpu));
         }
     }
-    
+
     // Check GPU
     if let Ok(gpu) = GpuContext::global() {
         if gpu.device_id() == id {
             return Ok(ComputeDevice::Gpu(gpu));
         }
     }
-    
+
     // Check MLX
     if let Some(mlx) = MLX_CONTEXT.get() {
         if mlx.device_id() == id {
             return Ok(ComputeDevice::Mlx(mlx));
         }
     }
-    
-    Err(crate::Error::DeviceError(format!("Device {:?} not found in global contexts", id)))
+
+    Err(crate::Error::DeviceError(format!(
+        "Device {:?} not found in global contexts",
+        id
+    )))
 }
 
 /// Get the best available compute device.
@@ -518,16 +617,14 @@ pub fn get_device() -> Result<ComputeDevice<'static>> {
     if let Some(mlx) = MlxContext::new() {
         return Ok(ComputeDevice::Mlx(MLX_CONTEXT.get_or_init(|| mlx)));
     }
-    
+
     match GpuContext::global() {
         Ok(gpu) => Ok(ComputeDevice::Gpu(gpu)),
         Err(_) => {
-            // Safe manual initialization since OnceLock doesn't have get_or_try_init yet
-            if CPU_CONTEXT.get().is_none() {
-                let cpu = CpuBackend::new().ok_or_else(|| crate::Error::InitError("Failed to initialize CPU backend".into()))?;
-                let _ = CPU_CONTEXT.set(cpu);
-            }
-            Ok(ComputeDevice::Cpu(CPU_CONTEXT.get().expect("CPU_CONTEXT must be initialized after set")))
+            let cpu = CPU_CONTEXT.get_or_init(|| {
+                CpuBackend::new().expect("CPU backend must be available as fallback")
+            });
+            Ok(ComputeDevice::Cpu(cpu))
         }
     }
 }
