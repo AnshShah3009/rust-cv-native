@@ -23,6 +23,7 @@ cv-stereo = { path = "../stereo" }
 cv-hal = { path = "../hal" }
 cv-videoio = { path = "../videoio" }
 cv-dnn = { path = "../dnn" }
+cv-optimize = { path = "../optimize" }
 nalgebra = { workspace = true }
 image = { workspace = true }
 thiserror = { workspace = true }

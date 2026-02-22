@@ -7,8 +7,7 @@ use cv_optimize::isam2::Isam2;
 use cv_runtime::orchestrator::{scheduler, RuntimeRunner, WorkloadHint};
 use cv_slam::Slam as RustSlam;
 use cv_videoio::{open_video, VideoCapture};
-use nalgebra::{Point2, Point3, Vector3};
-use numpy::{PyArray3, PyReadonlyArray2, PyUntypedArrayMethods};
+use nalgebra::{Point3, Vector3};
 use pyo3::prelude::*;
 use std::sync::Arc;
 
@@ -83,16 +82,11 @@ impl PyDnnNet {
         Ok(Self { inner, runner })
     }
 
-    pub fn forward(&self, image: PyReadonlyArray2<u8>) -> PyResult<Vec<Vec<f32>>> {
-        let shape = image.shape();
-        let gray = image::GrayImage::from_raw(
-            shape[1] as u32,
-            shape[0] as u32,
-            image.as_slice()?.to_vec(),
-        )
-        .ok_or_else(|| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid image dimensions")
-        })?;
+    pub fn forward(&self, image: Vec<u8>, width: usize, height: usize) -> PyResult<Vec<Vec<f32>>> {
+        let gray =
+            image::GrayImage::from_raw(width as u32, height as u32, image).ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid image dimensions")
+            })?;
 
         let dyn_img = image::DynamicImage::ImageLuma8(gray);
 
@@ -144,14 +138,12 @@ impl PySlam {
 
     pub fn process_frame(
         &mut self,
-        image: PyReadonlyArray2<u8>,
+        image: Vec<u8>,
+        width: usize,
+        height: usize,
     ) -> PyResult<(Vec<f32>, Vec<usize>)> {
-        let shape = image.shape();
-        let rows = shape[0];
-        let cols = shape[1];
-
-        let mut gray = image::GrayImage::new(cols as u32, rows as u32);
-        gray.copy_from_slice(image.as_slice()?);
+        let mut gray = image::GrayImage::from_raw(width as u32, height as u32, image)
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid image"))?;
 
         let (pose, tracked) = self
             .inner
@@ -196,16 +188,16 @@ pub struct PyFeatureDetector;
 #[pymethods]
 impl PyFeatureDetector {
     #[staticmethod]
-    pub fn fast_detect(image: PyReadonlyArray2<u8>, threshold: i32) -> PyResult<PyKeyPoints> {
-        let shape = image.shape();
-        let gray = image::GrayImage::from_raw(
-            shape[1] as u32,
-            shape[0] as u32,
-            image.as_slice()?.to_vec(),
-        )
-        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid image"))?;
+    pub fn fast_detect(
+        image: Vec<u8>,
+        width: usize,
+        height: usize,
+        threshold: u8,
+    ) -> PyResult<PyKeyPoints> {
+        let gray = image::GrayImage::from_raw(width as u32, height as u32, image)
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid image"))?;
 
-        let kps = fast::fast_detect(&gray, threshold);
+        let kps = fast::fast_detect(&gray, threshold, 1000);
         Ok(PyKeyPoints {
             keypoints: kps.keypoints,
         })
@@ -213,17 +205,14 @@ impl PyFeatureDetector {
 
     #[staticmethod]
     pub fn harris_detect(
-        image: PyReadonlyArray2<u8>,
+        image: Vec<u8>,
+        width: usize,
+        height: usize,
         k: f64,
         threshold: f64,
     ) -> PyResult<PyKeyPoints> {
-        let shape = image.shape();
-        let gray = image::GrayImage::from_raw(
-            shape[1] as u32,
-            shape[0] as u32,
-            image.as_slice()?.to_vec(),
-        )
-        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid image"))?;
+        let gray = image::GrayImage::from_raw(width as u32, height as u32, image)
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid image"))?;
 
         let kps = harris::harris_detect(&gray, 3, 3, k, threshold);
         Ok(PyKeyPoints {
@@ -233,18 +222,15 @@ impl PyFeatureDetector {
 
     #[staticmethod]
     pub fn gftt_detect(
-        image: PyReadonlyArray2<u8>,
+        image: Vec<u8>,
+        width: usize,
+        height: usize,
         max_corners: usize,
         quality_level: f64,
         min_distance: f64,
     ) -> PyResult<PyKeyPoints> {
-        let shape = image.shape();
-        let gray = image::GrayImage::from_raw(
-            shape[1] as u32,
-            shape[0] as u32,
-            image.as_slice()?.to_vec(),
-        )
-        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid image"))?;
+        let gray = image::GrayImage::from_raw(width as u32, height as u32, image)
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid image"))?;
 
         let kps = gftt::gftt_detect(&gray, max_corners, quality_level, min_distance);
         Ok(PyKeyPoints {
@@ -254,17 +240,14 @@ impl PyFeatureDetector {
 
     #[staticmethod]
     pub fn shi_tomasi_detect(
-        image: PyReadonlyArray2<u8>,
+        image: Vec<u8>,
+        width: usize,
+        height: usize,
         max_corners: usize,
         quality_level: f64,
     ) -> PyResult<PyKeyPoints> {
-        let shape = image.shape();
-        let gray = image::GrayImage::from_raw(
-            shape[1] as u32,
-            shape[0] as u32,
-            image.as_slice()?.to_vec(),
-        )
-        .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid image"))?;
+        let gray = image::GrayImage::from_raw(width as u32, height as u32, image)
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid image"))?;
 
         let kps = harris::shi_tomasi_detect(&gray, max_corners, quality_level, 1.0);
         Ok(PyKeyPoints {
@@ -361,22 +344,15 @@ impl PyPointCloud {
         }
     }
 
-    pub fn from_numpy(points: PyReadonlyArray2<f32>) -> PyResult<Self> {
-        let shape = points.shape();
-        if shape.len() != 2 || shape[1] != 3 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Expected Nx3 array",
-            ));
-        }
-        let data = points.as_slice()?;
-        let points: Vec<Point3<f32>> = data
-            .chunks(3)
-            .map(|c| Point3::new(c[0], c[1], c[2]))
-            .collect();
-        Ok(Self {
-            points,
+    #[staticmethod]
+    pub fn from_list(points: Vec<(f32, f32, f32)>) -> Self {
+        Self {
+            points: points
+                .iter()
+                .map(|(x, y, z)| Point3::new(*x, *y, *z))
+                .collect(),
             normals: None,
-        })
+        }
     }
 
     pub fn to_numpy(&self) -> Vec<f32> {
@@ -393,20 +369,13 @@ impl PyPointCloud {
         self.points.len()
     }
 
-    pub fn set_normals(&mut self, normals: PyReadonlyArray2<f32>) -> PyResult<()> {
-        let shape = normals.shape();
-        if shape.len() != 2 || shape[1] != 3 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Expected Nx3 array",
-            ));
-        }
-        let data = normals.as_slice()?;
+    pub fn set_normals(&mut self, normals: Vec<(f32, f32, f32)>) {
         self.normals = Some(
-            data.chunks(3)
-                .map(|c| Vector3::new(c[0], c[1], c[2]))
+            normals
+                .iter()
+                .map(|(x, y, z)| Vector3::new(*x, *y, *z))
                 .collect(),
         );
-        Ok(())
     }
 }
 
@@ -554,6 +523,7 @@ impl PyTensor {
         }
     }
 
+    #[staticmethod]
     pub fn zeros(shape: (usize, usize, usize)) -> Self {
         let size = shape.0 * shape.1 * shape.2;
         Self {
@@ -562,26 +532,13 @@ impl PyTensor {
         }
     }
 
+    #[staticmethod]
     pub fn ones(shape: (usize, usize, usize)) -> Self {
         let size = shape.0 * shape.1 * shape.2;
         Self {
             data: vec![1.0; size],
             shape,
         }
-    }
-
-    pub fn from_numpy(data: PyReadonlyArray2<f32>) -> PyResult<Self> {
-        let shape = data.shape();
-        if shape.len() != 3 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Expected 3D array",
-            ));
-        }
-        let data = data.as_slice()?.to_vec();
-        Ok(Self {
-            data,
-            shape: (shape[0], shape[1], shape[2]),
-        })
     }
 
     pub fn to_numpy(&self) -> Vec<f32> {

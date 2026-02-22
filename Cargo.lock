@@ -1462,6 +1462,7 @@ dependencies = [
  "cv-features",
  "cv-hal",
  "cv-imgproc",
+ "cv-optimize",
  "cv-registration",
  "cv-runtime",
  "cv-scientific",
