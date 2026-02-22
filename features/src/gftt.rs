@@ -1,5 +1,5 @@
-use image::GrayImage;
 use cv_core::{KeyPoint, KeyPoints};
+use image::GrayImage;
 
 pub fn gftt_detect(
     image: &GrayImage,
@@ -51,7 +51,8 @@ pub fn gftt_detect(
 
     // Filter by quality level
     let threshold = max_score * quality_level;
-    let mut candidates: Vec<_> = scores.into_iter()
+    let mut candidates: Vec<_> = scores
+        .into_iter()
         .filter(|&(_, _, s)| s >= threshold)
         .collect();
 
@@ -62,7 +63,9 @@ pub fn gftt_detect(
     let min_dist_sq = min_distance * min_distance;
 
     for (x, y, score) in candidates {
-        if corners.len() >= max_corners { break; }
+        if corners.len() >= max_corners {
+            break;
+        }
 
         let mut too_close = false;
         for kp in corners.keypoints.iter() {
@@ -80,4 +83,90 @@ pub fn gftt_detect(
     }
 
     corners
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::Luma;
+
+    fn create_test_image_with_corners() -> GrayImage {
+        let mut img = GrayImage::new(30, 30);
+        for y in 0..30 {
+            for x in 0..30 {
+                let val = if (x < 10 && y < 10)
+                    || (x > 19 && y < 10)
+                    || (x < 10 && y > 19)
+                    || (x > 19 && y > 19)
+                {
+                    255
+                } else {
+                    0
+                };
+                img.put_pixel(x, y, Luma([val]));
+            }
+        }
+        img
+    }
+
+    fn create_uniform_image() -> GrayImage {
+        GrayImage::from_pixel(30, 30, Luma([128]))
+    }
+
+    #[test]
+    fn test_gftt_detect_finds_corners() {
+        let img = create_test_image_with_corners();
+        let kps = gftt_detect(&img, 100, 0.01, 5.0);
+        assert!(!kps.keypoints.is_empty(), "Should detect corners");
+    }
+
+    #[test]
+    fn test_gftt_detect_uniform_image() {
+        let img = create_uniform_image();
+        let kps = gftt_detect(&img, 100, 0.01, 5.0);
+        assert!(
+            kps.keypoints.is_empty(),
+            "Uniform image should have no corners"
+        );
+    }
+
+    #[test]
+    fn test_gftt_detect_max_corners_limit() {
+        let img = create_test_image_with_corners();
+        let kps = gftt_detect(&img, 2, 0.01, 5.0);
+        assert!(kps.keypoints.len() <= 2);
+    }
+
+    #[test]
+    fn test_gftt_detect_min_distance() {
+        let img = create_test_image_with_corners();
+        let kps = gftt_detect(&img, 100, 0.01, 10.0);
+
+        for i in 0..kps.keypoints.len() {
+            for j in (i + 1)..kps.keypoints.len() {
+                let dx = kps.keypoints[i].x - kps.keypoints[j].x;
+                let dy = kps.keypoints[i].y - kps.keypoints[j].y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                assert!(dist >= 10.0 || dist < 0.1);
+            }
+        }
+    }
+
+    #[test]
+    fn test_gftt_detect_quality_level() {
+        let img = create_test_image_with_corners();
+        let kps_low = gftt_detect(&img, 100, 0.001, 5.0);
+        let kps_high = gftt_detect(&img, 100, 0.5, 5.0);
+        assert!(kps_low.keypoints.len() >= kps_high.keypoints.len());
+    }
+
+    #[test]
+    fn test_gftt_keypoint_response() {
+        let img = create_test_image_with_corners();
+        let kps = gftt_detect(&img, 100, 0.01, 5.0);
+
+        for kp in &kps.keypoints {
+            assert!(kp.response > 0.0);
+        }
+    }
 }

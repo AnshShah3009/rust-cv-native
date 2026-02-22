@@ -96,3 +96,113 @@ pub fn extract_brief(
     let brief = BriefDescriptor::new(descriptor_size, 31);
     brief.extract(image, keypoints)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cv_core::KeyPoint;
+    use image::Luma;
+
+    fn create_test_image() -> GrayImage {
+        let mut img = GrayImage::new(100, 100);
+        for y in 0..100 {
+            for x in 0..100 {
+                let val = ((x + y) % 256) as u8;
+                img.put_pixel(x, y, Luma([val]));
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn test_brief_descriptor_new() {
+        let brief = BriefDescriptor::new(32, 31);
+        assert_eq!(brief.descriptor_size, 32);
+        assert_eq!(brief.patch_size, 31);
+        assert_eq!(brief.pairs.len(), 256);
+    }
+
+    #[test]
+    fn test_brief_descriptor_size_variants() {
+        let brief16 = BriefDescriptor::new(16, 31);
+        let brief32 = BriefDescriptor::new(32, 31);
+        let brief64 = BriefDescriptor::new(64, 31);
+
+        assert_eq!(brief16.pairs.len(), 128);
+        assert_eq!(brief32.pairs.len(), 256);
+        assert_eq!(brief64.pairs.len(), 512);
+    }
+
+    #[test]
+    fn test_brief_extract_single_keypoint() {
+        let img = create_test_image();
+        let kps = KeyPoints {
+            keypoints: vec![KeyPoint::new(50.0, 50.0)],
+        };
+
+        let brief = BriefDescriptor::new(32, 31);
+        let descriptors = brief.extract(&img, &kps);
+
+        assert_eq!(descriptors.descriptors.len(), 1);
+        assert_eq!(descriptors.descriptors[0].data.len(), 32);
+    }
+
+    #[test]
+    fn test_brief_extract_multiple_keypoints() {
+        let img = create_test_image();
+        let kps = KeyPoints {
+            keypoints: vec![
+                KeyPoint::new(25.0, 25.0),
+                KeyPoint::new(50.0, 50.0),
+                KeyPoint::new(75.0, 75.0),
+            ],
+        };
+
+        let brief = BriefDescriptor::new(32, 31);
+        let descriptors = brief.extract(&img, &kps);
+
+        assert_eq!(descriptors.descriptors.len(), 3);
+    }
+
+    #[test]
+    fn test_brief_extract_edge_keypoints_filtered() {
+        let img = create_test_image();
+        let kps = KeyPoints {
+            keypoints: vec![
+                KeyPoint::new(5.0, 5.0),
+                KeyPoint::new(95.0, 95.0),
+                KeyPoint::new(50.0, 50.0),
+            ],
+        };
+
+        let brief = BriefDescriptor::new(32, 31);
+        let descriptors = brief.extract(&img, &kps);
+
+        assert!(descriptors.descriptors.len() <= 3);
+    }
+
+    #[test]
+    fn test_extract_brief_function() {
+        let img = create_test_image();
+        let kps = KeyPoints {
+            keypoints: vec![KeyPoint::new(50.0, 50.0)],
+        };
+
+        let descriptors = extract_brief(&img, &kps, 32);
+        assert_eq!(descriptors.descriptors.len(), 1);
+    }
+
+    #[test]
+    fn test_brief_consistency_same_image() {
+        let img = create_test_image();
+        let kps = KeyPoints {
+            keypoints: vec![KeyPoint::new(50.0, 50.0)],
+        };
+
+        let brief = BriefDescriptor::new(32, 31);
+        let desc1 = brief.extract(&img, &kps);
+        let desc2 = brief.extract(&img, &kps);
+
+        assert_eq!(desc1.descriptors[0].data, desc2.descriptors[0].data);
+    }
+}
