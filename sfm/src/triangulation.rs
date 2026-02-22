@@ -1,6 +1,6 @@
+use cv_runtime::orchestrator::ResourceGroup;
 use nalgebra::{Matrix3x4, Point2, Point3};
 use rayon::prelude::*;
-use cv_runtime::orchestrator::ResourceGroup;
 
 /// Error type for SfM operations
 #[derive(Debug, thiserror::Error)]
@@ -72,8 +72,11 @@ pub fn triangulate_points(
     proj1: &Matrix3x4<f64>,
     proj2: &Matrix3x4<f64>,
 ) -> Result<Vec<Point3<f64>>> {
-    let s = cv_runtime::orchestrator::scheduler().map_err(|e| SfmError::TriangulationFailed(e.to_string()))?;
-    let group = s.get_default_group().map_err(|e| SfmError::TriangulationFailed(e.to_string()))?;
+    let s = cv_runtime::orchestrator::scheduler()
+        .map_err(|e| SfmError::TriangulationFailed(e.to_string()))?;
+    let group = s
+        .get_default_group()
+        .map_err(|e| SfmError::TriangulationFailed(e.to_string()))?;
     triangulate_points_ctx(points1, points2, proj1, proj2, &group)
 }
 
@@ -92,7 +95,8 @@ pub fn triangulate_points_ctx(
     }
 
     group.run(|| {
-        points1.par_iter()
+        points1
+            .par_iter()
             .zip(points2.par_iter())
             .map(|(p1, p2)| triangulate_point_dlt(p1, p2, proj1, proj2))
             .collect()
@@ -106,32 +110,88 @@ mod tests {
 
     #[test]
     fn test_triangulation_simple() {
-        // Camera 1 at origin, looking along Z axis
-        let k = Matrix3::<f64>::identity(); // Normalized coordinates
-        let r1 = Rotation3::<f64>::identity();
-        let t1 = Vector3::<f64>::zeros();
-        let mut p1 = Matrix3x4::<f64>::identity();
-
-        // Camera 2 at (1, 0, 0), looking along Z axis
-        let r2 = Rotation3::<f64>::identity();
-        let t2 = Vector3::new(-1.0, 0.0, 0.0); // T is -R*C
+        let p1 = Matrix3x4::<f64>::identity();
         let p2 = Matrix3x4::<f64>::new(1.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
 
-        // A 3D point at (0, 0, 5)
-        let world_pt = Point3::new(0.0, 0.0, 5.0);
-
-        // Project to view 1
-        // x1 = [1 0 0 0; 0 1 0 0; 0 0 1 0] * [0 0 5 1]^T = [0 0 5]^T -> (0, 0)
         let pt1 = Point2::new(0.0, 0.0);
-
-        // Project to view 2
-        // x2 = [1 0 0 -1; 0 1 0 0; 0 0 1 0] * [0 0 5 1]^T = [-1 0 5]^T -> (-0.2, 0)
         let pt2 = Point2::new(-0.2, 0.0);
 
         let triangulated = triangulate_point_dlt(&pt1, &pt2, &p1, &p2).unwrap();
 
-        assert!((triangulated.x - world_pt.x).abs() < 1e-6);
-        assert!((triangulated.y - world_pt.y).abs() < 1e-6);
-        assert!((triangulated.z - world_pt.z).abs() < 1e-6);
+        assert!((triangulated.x - 0.0).abs() < 1e-6);
+        assert!((triangulated.y - 0.0).abs() < 1e-6);
+        assert!((triangulated.z - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_triangulation_point_at_different_depth() {
+        let p1 = Matrix3x4::<f64>::identity();
+        let p2 = Matrix3x4::<f64>::new(1.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+
+        let pt1 = Point2::new(0.0, 0.0);
+        let pt2 = Point2::new(-0.1, 0.0);
+
+        let triangulated = triangulate_point_dlt(&pt1, &pt2, &p1, &p2).unwrap();
+
+        assert!(triangulated.z > 0.0);
+    }
+
+    #[test]
+    fn test_triangulation_identical_cameras() {
+        let p1 = Matrix3x4::<f64>::identity();
+        let p2 = Matrix3x4::<f64>::identity();
+
+        let pt1 = Point2::new(0.1, 0.2);
+        let pt2 = Point2::new(0.1, 0.2);
+
+        let result = triangulate_point_dlt(&pt1, &pt2, &p1, &p2);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_triangulation_error_display() {
+        let err = SfmError::TriangulationFailed("test error".to_string());
+        assert!(err.to_string().contains("test error"));
+    }
+
+    #[test]
+    fn test_triangulation_off_axis_point() {
+        let p1 = Matrix3x4::<f64>::identity();
+        let p2 = Matrix3x4::<f64>::new(1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+
+        let pt1 = Point2::new(0.2, 0.3);
+        let pt2 = Point2::new(-0.05, 0.3);
+
+        let result = triangulate_point_dlt(&pt1, &pt2, &p1, &p2);
+        assert!(result.is_ok());
+
+        let triangulated = result.unwrap();
+        assert!(triangulated.z > 0.0);
+    }
+
+    #[test]
+    fn test_triangulation_large_baseline() {
+        let p1 = Matrix3x4::<f64>::identity();
+        let p2 =
+            Matrix3x4::<f64>::new(1.0, 0.0, 0.0, -10.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+
+        let pt1 = Point2::new(0.0, 0.0);
+        let pt2 = Point2::new(-0.1, 0.0);
+
+        let result = triangulate_point_dlt(&pt1, &pt2, &p1, &p2);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_triangulation_symmetric_setup() {
+        let p1 = Matrix3x4::<f64>::new(1.0, 0.0, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+        let p2 = Matrix3x4::<f64>::new(1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+
+        let pt1 = Point2::new(0.1, 0.2);
+        let pt2 = Point2::new(-0.1, 0.2);
+
+        let result = triangulate_point_dlt(&pt1, &pt2, &p1, &p2);
+        assert!(result.is_ok());
     }
 }
