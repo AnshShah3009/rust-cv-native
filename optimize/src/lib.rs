@@ -96,19 +96,22 @@ impl<'a> SparseLMSolver<'a> {
         // Solve (J^T J + lambda I) delta = -J^T r using CG
         let n = j.cols;
         let mut x = DVector::zeros(n);
-        let rhs = -j.transpose_spmv_ctx(self.ctx, r);
+        let rhs = -j.transpose_spmv_ctx(self.ctx, r)?;
 
-        let mut residual = rhs.clone(); // For initial x=0, residual = rhs - (J^T J + lambda I) * 0 = rhs
+        let mut residual = rhs.clone();
         let mut p = residual.clone();
         let mut rsold = residual.dot(&residual);
 
         for _ in 0..100 {
-            // Compute v = (J^T J + lambda I) * p
-            let jp = j.spmv_ctx(self.ctx, &p);
-            let j_tj_p = j.transpose_spmv_ctx(self.ctx, &jp);
+            let jp = j.spmv_ctx(self.ctx, &p)?;
+            let j_tj_p = j.transpose_spmv_ctx(self.ctx, &jp)?;
             let v = j_tj_p + lambda * &p;
 
-            let alpha = rsold / p.dot(&v);
+            let pap = p.dot(&v);
+            if pap.abs() < 1e-10 {
+                break;
+            }
+            let alpha = rsold / pap;
             x += alpha * &p;
             residual -= alpha * &v;
 

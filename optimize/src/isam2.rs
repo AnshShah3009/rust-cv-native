@@ -105,6 +105,14 @@ impl Isam2 {
             return Ok(());
         }
 
+        // Create mapping from node IDs to contiguous indices
+        let node_ids: Vec<usize> = nodes.keys().cloned().collect();
+        let node_to_idx: std::collections::HashMap<usize, usize> = node_ids
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (id, i))
+            .collect();
+
         // Build linear system (Gauss-Newton)
         let n = nodes.len();
         let mut hessian = DMatrix::zeros(3 * n, 3 * n);
@@ -115,8 +123,9 @@ impl Isam2 {
             if let (Some(from_node), Some(to_node)) =
                 (nodes.get(&factor.from), nodes.get(&factor.to))
             {
-                let from_idx = factor.from * 3;
-                let to_idx = factor.to * 3;
+                // Use mapped indices instead of direct node IDs
+                let from_idx = node_to_idx.get(&factor.from).copied().unwrap_or(0) * 3;
+                let to_idx = node_to_idx.get(&factor.to).copied().unwrap_or(0) * 3;
 
                 let residual = &to_node.estimate - &from_node.estimate - &factor.measurement;
 
@@ -144,9 +153,11 @@ impl Isam2 {
         drop(nodes);
         let mut nodes = self.nodes.write().unwrap();
         for (id, node) in nodes.iter_mut() {
-            let idx = id * 3;
+            let idx = node_to_idx.get(id).copied().unwrap_or(0) * 3;
             for i in 0..3 {
-                node.estimate[i] += delta[idx + i];
+                if idx + i < delta.len() {
+                    node.estimate[i] += delta[idx + i];
+                }
             }
             match &mut node.kind {
                 NodeKind::Pose(p) => {

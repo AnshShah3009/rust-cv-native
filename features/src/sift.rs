@@ -226,7 +226,10 @@ impl Sift {
                         valid_keypoints.push(restored_kp);
                     }
                 }
-                ComputeDevice::Mlx(_) => todo!("SIFT descriptors not implemented for MLX"),
+                ComputeDevice::Mlx(_) => {
+                    eprintln!("Warning: MLX backend not supported for SIFT descriptors, skipping descriptor computation");
+                    break;
+                }
             }
         }
 
@@ -277,6 +280,12 @@ fn refine_point(
     n_layers: usize,
     contrast_threshold: f32,
 ) -> Option<KeyPoint> {
+    // Validate input bounds before accessing arrays
+    let (h, w) = dog_layers[0].shape.hw();
+    if x < 1 || x >= w - 1 || y < 1 || y >= h - 1 || s < 1 || s >= n_layers {
+        return None;
+    }
+
     let mut curr_s = s;
     let mut curr_x = x;
     let mut curr_y = y;

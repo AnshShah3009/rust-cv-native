@@ -49,63 +49,76 @@ impl SparseMatrix {
         }
     }
 
-    pub fn spmv_ctx(&self, ctx: &ComputeDevice, x: &DVector<f64>) -> DVector<f64> {
+    pub fn spmv_ctx(&self, ctx: &ComputeDevice, x: &DVector<f64>) -> Result<DVector<f64>, String> {
         // Convert f64 to f32 for GPU SpMV
         let x_f32: Vec<f32> = x.iter().map(|&v| v as f32).collect();
         let values_f32: Vec<f32> = self.values.iter().map(|&v| v as f32).collect();
 
         let x_tensor: cv_core::CpuTensor<f32> =
             Tensor::from_vec(x_f32, cv_core::TensorShape::new(1, x.len(), 1))
-                .expect("SpMV input tensor creation failed");
+                .map_err(|e| format!("SpMV input tensor creation failed: {}", e))?;
 
         // SpMV always returns a result tensor on the same device as input x
         match ctx {
             ComputeDevice::Gpu(gpu) => {
                 use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
-                let x_gpu = x_tensor.to_gpu_ctx(gpu).expect("Upload to GPU failed");
+                let x_gpu = x_tensor
+                    .to_gpu_ctx(gpu)
+                    .map_err(|e| format!("Upload to GPU failed: {}", e))?;
                 let res_gpu = ctx
                     .spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_gpu)
-                    .expect("GPU SpMV failed");
-                let res_cpu = res_gpu.to_cpu_ctx(gpu).expect("Download from GPU failed");
-                DVector::from_vec(
+                    .map_err(|e| format!("GPU SpMV failed: {}", e))?;
+                let res_cpu = res_gpu
+                    .to_cpu_ctx(gpu)
+                    .map_err(|e| format!("Download from GPU failed: {}", e))?;
+                Ok(DVector::from_vec(
                     res_cpu
                         .as_slice()
-                        .expect("Data not on CPU")
+                        .map_err(|e| format!("Data not on CPU: {}", e))?
                         .iter()
                         .map(|&v| v as f64)
                         .collect(),
-                )
+                ))
             }
             ComputeDevice::Cpu(_cpu) => {
                 let res_cpu = ctx
                     .spmv(&self.row_ptr, &self.col_indices, &values_f32, &x_tensor)
-                    .expect("CPU SpMV failed");
-                DVector::from_vec(
+                    .map_err(|e| format!("CPU SpMV failed: {}", e))?;
+                Ok(DVector::from_vec(
                     res_cpu
                         .as_slice()
-                        .expect("Data not on CPU")
+                        .map_err(|e| format!("Data not on CPU: {}", e))?
                         .iter()
                         .map(|&v| v as f64)
                         .collect(),
-                )
+                ))
             }
-            ComputeDevice::Mlx(_) => {
-                todo!("MLX SpMV not implemented yet")
-            }
+            ComputeDevice::Mlx(_) => Err("MLX SpMV not implemented yet. Use CPU backend.".into()),
         }
     }
 
-    pub fn transpose_spmv_ctx(&self, _ctx: &ComputeDevice, y: &DVector<f64>) -> DVector<f64> {
-        let mut res = DVector::zeros(self.cols);
-        for r in 0..self.rows {
-            let start = self.row_ptr[r] as usize;
-            let end = self.row_ptr[r + 1] as usize;
-            for i in start..end {
-                let c = self.col_indices[i] as usize;
-                res[c] += self.values[i] * y[r];
+    pub fn transpose_spmv_ctx(
+        &self,
+        ctx: &ComputeDevice,
+        y: &DVector<f64>,
+    ) -> Result<DVector<f64>, String> {
+        match ctx {
+            ComputeDevice::Cpu(_) | ComputeDevice::Gpu(_) => {
+                let mut res = DVector::zeros(self.cols);
+                for r in 0..self.rows {
+                    let start = self.row_ptr[r] as usize;
+                    let end = self.row_ptr[r + 1] as usize;
+                    for i in start..end {
+                        let c = self.col_indices[i] as usize;
+                        res[c] += self.values[i] * y[r];
+                    }
+                }
+                Ok(res)
+            }
+            ComputeDevice::Mlx(_) => {
+                Err("MLX transpose SpMV not implemented yet. Use CPU backend.".into())
             }
         }
-        res
     }
 }
 
@@ -132,21 +145,25 @@ impl LinearSolver for CgSolver {
         b: &DVector<f64>,
     ) -> Result<DVector<f64>, String> {
         let mut x = DVector::zeros(a.cols);
-        let mut r = b - a.spmv_ctx(ctx, &x);
-        let mut p = r.clone();
-        let mut rsold = r.dot(&r);
+        let mut residual = b - a.spmv_ctx(ctx, &x)?;
+        let mut p = residual.clone();
+        let mut rsold = residual.dot(&residual);
 
         for _ in 0..self.max_iters {
-            let ap = a.spmv_ctx(ctx, &p);
-            let alpha = rsold / p.dot(&ap);
+            let ap = a.spmv_ctx(ctx, &p)?;
+            let pap = p.dot(&ap);
+            if pap.abs() < 1e-10 {
+                break;
+            }
+            let alpha = rsold / pap;
             x += alpha * &p;
-            r -= alpha * &ap;
+            residual = residual - alpha * &ap;
 
-            let rsnew = r.dot(&r);
+            let rsnew = residual.dot(&residual);
             if rsnew.sqrt() < self.tolerance {
                 break;
             }
-            p = &r + (rsnew / rsold) * &p;
+            p = &residual + (rsnew / rsold) * &p;
             rsold = rsnew;
         }
 

@@ -54,8 +54,13 @@ pub struct FPFHFeature {
 use crate::registration::RegistrationError;
 
 /// Compute FPFH features for point cloud
-pub fn compute_fpfh_features(_cloud: &PointCloud, _radius: f32) -> Result<Vec<FPFHFeature>, RegistrationError> {
-    Err(RegistrationError::NotImplemented("FPFH features are currently stubbed".to_string()))
+pub fn compute_fpfh_features(
+    _cloud: &PointCloud,
+    _radius: f32,
+) -> Result<Vec<FPFHFeature>, RegistrationError> {
+    Err(RegistrationError::NotImplemented(
+        "FPFH features are currently stubbed".to_string(),
+    ))
 }
 
 /// Compute Simple Point Feature Histogram
@@ -146,7 +151,7 @@ fn weight_spfh(
     fpfh
 }
 
-use cv_core::{RobustModel, RobustConfig, Ransac};
+use cv_core::{Ransac, RobustConfig, RobustModel};
 
 pub struct GlobalRegistrationEstimator<'a> {
     source: &'a PointCloud,
@@ -155,7 +160,9 @@ pub struct GlobalRegistrationEstimator<'a> {
 
 impl<'a> RobustModel<(usize, usize, f32)> for GlobalRegistrationEstimator<'a> {
     type Model = Matrix4<f32>;
-    fn min_sample_size(&self) -> usize { 3 }
+    fn min_sample_size(&self) -> usize {
+        3
+    }
     fn estimate(&self, data: &[&(usize, usize, f32)]) -> Option<Self::Model> {
         let correspondences: Vec<(usize, usize, f32)> = data.iter().map(|&&c| c).collect();
         compute_transformation_from_correspondences(self.source, self.target, &correspondences)
@@ -184,8 +191,13 @@ pub fn registration_ransac_based_on_feature_matching(
         let mut min_dist = f32::MAX;
         let mut min_idx = 0;
         for (j, target_feature) in target_features.iter().enumerate() {
-            let dist = source_feature.histogram.iter().zip(target_feature.histogram.iter())
-                .map(|(a, b)| (a - b).powi(2)).sum::<f32>().sqrt();
+            let dist = source_feature
+                .histogram
+                .iter()
+                .zip(target_feature.histogram.iter())
+                .map(|(a, b)| (a - b).powi(2))
+                .sum::<f32>()
+                .sqrt();
             if dist < min_dist {
                 min_dist = dist;
                 min_idx = j;
@@ -199,8 +211,10 @@ pub fn registration_ransac_based_on_feature_matching(
     correspondences.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
     let top_correspondences: Vec<_> = correspondences.into_iter().take(1000).collect();
 
-    if top_correspondences.len() < ransac_n { 
-        return Err(RegistrationError::OptimizationFailed("Insufficient correspondences".to_string())); 
+    if top_correspondences.len() < ransac_n {
+        return Err(RegistrationError::OptimizationFailed(
+            "Insufficient correspondences".to_string(),
+        ));
     }
 
     let config = RobustConfig {
@@ -214,7 +228,9 @@ pub fn registration_ransac_based_on_feature_matching(
     let ransac = Ransac::new(config);
     let res = ransac.run(&estimator, &top_correspondences);
 
-    let final_transformation = res.model.ok_or_else(|| RegistrationError::OptimizationFailed("RANSAC failed to find model".to_string()))?;
+    let final_transformation = res.model.ok_or_else(|| {
+        RegistrationError::OptimizationFailed("RANSAC failed to find model".to_string())
+    })?;
 
     // Compute fitness and RMSE
     let (fitness, rmse) = evaluate_registration(
@@ -224,7 +240,9 @@ pub fn registration_ransac_based_on_feature_matching(
         max_correspondence_distance,
     );
 
-    let inlier_correspondences = top_correspondences.iter().zip(res.inliers.iter())
+    let inlier_correspondences = top_correspondences
+        .iter()
+        .zip(res.inliers.iter())
         .filter(|(_, &inlier)| inlier)
         .map(|(c, _)| (c.0, c.1))
         .collect();

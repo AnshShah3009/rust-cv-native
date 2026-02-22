@@ -176,8 +176,8 @@ pub fn registration_icp_point_to_plane_ctx(
     max_iterations: usize,
     ctx: &cv_hal::compute::ComputeDevice,
 ) -> Option<ICPResult> {
-    use cv_hal::tensor_ext::TensorToGpu;
     use cv_core::Tensor;
+    use cv_hal::tensor_ext::TensorToGpu;
 
     let mut transformation = *init_transformation;
     let mut best_fitness = 0.0;
@@ -186,42 +186,72 @@ pub fn registration_icp_point_to_plane_ctx(
 
     // Convert point clouds to tensors for GPU processing
     let source_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(
-        source.points.iter().flat_map(|p| [p.x, p.y, p.z, 1.0]).collect(),
-        cv_core::TensorShape::new(1, source.points.len(), 4)
-    ).expect("Failed to create source tensor");
+        source
+            .points
+            .iter()
+            .flat_map(|p| [p.x, p.y, p.z, 1.0])
+            .collect(),
+        cv_core::TensorShape::new(1, source.points.len(), 4),
+    )
+    .expect("Failed to create source tensor");
     let target_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(
-        target.points.iter().flat_map(|p| [p.x, p.y, p.z, 1.0]).collect(),
-        cv_core::TensorShape::new(1, target.points.len(), 4)
-    ).expect("Failed to create target tensor");
+        target
+            .points
+            .iter()
+            .flat_map(|p| [p.x, p.y, p.z, 1.0])
+            .collect(),
+        cv_core::TensorShape::new(1, target.points.len(), 4),
+    )
+    .expect("Failed to create target tensor");
     let target_normals_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(
-        target.normals.as_ref().unwrap().iter().flat_map(|n| [n.x, n.y, n.z, 0.0]).collect(),
-        cv_core::TensorShape::new(1, target.points.len(), 4)
-    ).expect("Failed to create target normals tensor");
+        target
+            .normals
+            .as_ref()
+            .unwrap()
+            .iter()
+            .flat_map(|n| [n.x, n.y, n.z, 0.0])
+            .collect(),
+        cv_core::TensorShape::new(1, target.points.len(), 4),
+    )
+    .expect("Failed to create target normals tensor");
 
     // If using GPU, upload once
     let (s_gpu, t_gpu, n_gpu) = if let cv_hal::compute::ComputeDevice::Gpu(gpu) = ctx {
         (
             source_tensor.to_gpu_ctx(gpu).ok()?,
             target_tensor.to_gpu_ctx(gpu).ok()?,
-            target_normals_tensor.to_gpu_ctx(gpu).ok()?
+            target_normals_tensor.to_gpu_ctx(gpu).ok()?,
         )
     } else {
         // CPU fallback: we'll use the tensors directly but it's less efficient than specialized CPU code
-        return registration_icp_point_to_plane(source, target, max_correspondence_distance, init_transformation, max_iterations);
+        return registration_icp_point_to_plane(
+            source,
+            target,
+            max_correspondence_distance,
+            init_transformation,
+            max_iterations,
+        );
     };
 
     for iter in 0..max_iterations {
         // Find correspondences on device
-        let correspondences_raw = ctx.icp_correspondences(&s_gpu, &t_gpu, max_correspondence_distance).ok()?;
-        
+        let correspondences_raw = ctx
+            .icp_correspondences(&s_gpu, &t_gpu, max_correspondence_distance)
+            .ok()?;
+
         if correspondences_raw.len() < 3 {
             break;
         }
 
-        let correspondences: Vec<(u32, u32)> = correspondences_raw.iter().map(|&(s, t, _)| (s as u32, t as u32)).collect();
+        let correspondences: Vec<(u32, u32)> = correspondences_raw
+            .iter()
+            .map(|&(s, t, _)| (s as u32, t as u32))
+            .collect();
 
         // Accumulate Normal Equations on device
-        let (ata, atb): (nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>) = ctx.icp_accumulate(&s_gpu, &t_gpu, &n_gpu, &correspondences, &transformation).ok()?;
+        let (ata, atb): (nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>) = ctx
+            .icp_accumulate(&s_gpu, &t_gpu, &n_gpu, &correspondences, &transformation)
+            .ok()?;
 
         // Solve for update on CPU (Matrix6 is small)
         if let Some(ata_inv) = ata.try_inverse() {
@@ -231,7 +261,8 @@ pub fn registration_icp_point_to_plane_ctx(
         }
 
         // Evaluation (could be optimized on GPU too)
-        let (fitness, rmse) = evaluate_registration(source, target, &transformation, max_correspondence_distance);
+        let (fitness, rmse) =
+            evaluate_registration(source, target, &transformation, max_correspondence_distance);
 
         if fitness > best_fitness {
             best_fitness = fitness;
@@ -296,7 +327,18 @@ fn exponential_map_se3(delta: &nalgebra::Vector6<f32>) -> Matrix4<f32> {
             + k_cross * k_cross * (1.0 - theta.cos())
     };
 
-    let translation = v;
+    // Proper SE(3) exponential map using left Jacobian
+    let translation = if theta < 1e-6 {
+        v
+    } else {
+        let k = omega / theta;
+        let k_cross = nalgebra::Matrix3::new(0.0, -k.z, k.y, k.z, 0.0, -k.x, -k.y, k.x, 0.0);
+        let k_cross_sq = k_cross * k_cross;
+        let left_jacobian = nalgebra::Matrix3::identity()
+            + k_cross * ((1.0 - theta.cos()) / theta)
+            + k_cross_sq * ((theta - theta.sin()) / (theta * theta));
+        left_jacobian * v
+    };
 
     let mut transform = Matrix4::identity();
     transform.fixed_view_mut::<3, 3>(0, 0).copy_from(&rotation);
