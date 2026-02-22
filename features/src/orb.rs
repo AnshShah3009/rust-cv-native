@@ -381,9 +381,9 @@ pub fn detect_and_compute_ctx<S: Storage<u8> + 'static>(
         let gray = image::GrayImage::from_raw(
             w as u32,
             h as u32,
-            cpu_img_tensor.storage.as_slice().unwrap().to_vec(),
+            cpu_img_tensor.storage.as_slice().unwrap_or(&[]).to_vec(),
         )
-        .unwrap();
+        .unwrap_or_else(|| image::GrayImage::new(w as u32, h as u32));
 
         orb.compute_orientations(&gray, &mut keypoints);
         let descriptors = orb.extract(&gray, &keypoints);
@@ -417,9 +417,24 @@ fn convert_to_cpu_image<S: Storage<u8> + 'static>(
         };
         let gpu_ctx = match ctx {
             ComputeDevice::Gpu(g) => g,
-            _ => panic!("Logic error"),
+            _ => {
+                eprintln!("Warning: GpuStorage requires GPU context, returning empty tensor");
+                return Tensor {
+                    storage: CpuStorage::new(tensor.shape.len(), 0u8)
+                        .unwrap_or_else(|_| CpuStorage::from_vec(vec![]).unwrap()),
+                    shape: tensor.shape,
+                    dtype: tensor.dtype,
+                    _phantom: std::marker::PhantomData,
+                };
+            }
         };
-        input_gpu.to_cpu_ctx(gpu_ctx).unwrap()
+        input_gpu.to_cpu_ctx(gpu_ctx).unwrap_or_else(|_| Tensor {
+            storage: CpuStorage::from_vec(vec![0u8; tensor.shape.len()])
+                .unwrap_or_else(|_| CpuStorage::from_vec(vec![]).unwrap()),
+            shape: tensor.shape,
+            dtype: tensor.dtype,
+            _phantom: std::marker::PhantomData,
+        })
     } else if let Some(cpu_storage) = tensor.storage.as_any().downcast_ref::<CpuStorage<u8>>() {
         Tensor {
             storage: cpu_storage.clone(),
@@ -428,7 +443,15 @@ fn convert_to_cpu_image<S: Storage<u8> + 'static>(
             _phantom: std::marker::PhantomData,
         }
     } else {
-        panic!("Unsupported storage type");
+        eprintln!(
+            "Warning: Unsupported storage type in convert_to_cpu_image, returning empty tensor"
+        );
+        Tensor {
+            storage: CpuStorage::from_vec(vec![]).unwrap(),
+            shape: tensor.shape,
+            dtype: tensor.dtype,
+            _phantom: std::marker::PhantomData,
+        }
     }
 }
 

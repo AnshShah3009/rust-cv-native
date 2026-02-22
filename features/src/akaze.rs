@@ -3,11 +3,11 @@
 //! AKAZE is a fast multi-scale feature detector and descriptor that uses
 //! non-linear diffusion scale-space.
 
-use cv_core::{KeyPoint, KeyPoints, Tensor, storage::Storage, CpuTensor};
+use crate::descriptor::{Descriptor, Descriptors};
+use cv_core::{storage::Storage, CpuTensor, KeyPoint, KeyPoints, Tensor};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::context::ComputeContext;
-use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu, TensorCast};
-use crate::descriptor::{Descriptor, Descriptors};
+use cv_hal::tensor_ext::{TensorCast, TensorToCpu, TensorToGpu};
 use rayon::prelude::*;
 
 /// AKAZE parameters
@@ -47,16 +47,26 @@ impl Akaze {
         Self { params }
     }
 
-    pub fn detect_ctx<S: Storage<u8> + 'static>(&self, ctx: &ComputeDevice, image: &Tensor<u8, S>) -> KeyPoints 
-    where Tensor<u8, S>: TensorToGpu<u8> + TensorToCpu<u8>
+    pub fn detect_ctx<S: Storage<u8> + 'static>(
+        &self,
+        ctx: &ComputeDevice,
+        image: &Tensor<u8, S>,
+    ) -> KeyPoints
+    where
+        Tensor<u8, S>: TensorToGpu<u8> + TensorToCpu<u8>,
     {
         let evolution = self.create_scale_space(ctx, image);
         let keypoints = self.find_extrema(&evolution);
         KeyPoints { keypoints }
     }
 
-    pub fn detect_and_compute_ctx<S: Storage<u8> + 'static>(&self, ctx: &ComputeDevice, image: &Tensor<u8, S>) -> (KeyPoints, Descriptors) 
-    where Tensor<u8, S>: TensorToGpu<u8> + TensorToCpu<u8>
+    pub fn detect_and_compute_ctx<S: Storage<u8> + 'static>(
+        &self,
+        ctx: &ComputeDevice,
+        image: &Tensor<u8, S>,
+    ) -> (KeyPoints, Descriptors)
+    where
+        Tensor<u8, S>: TensorToGpu<u8> + TensorToCpu<u8>,
     {
         let evolution = self.create_scale_space(ctx, image);
         let keypoints = self.find_extrema(&evolution);
@@ -64,8 +74,13 @@ impl Akaze {
         (KeyPoints { keypoints }, descriptors)
     }
 
-    fn create_scale_space<S: Storage<u8> + 'static>(&self, ctx: &ComputeDevice, image: &Tensor<u8, S>) -> Vec<EvolutionLevel> 
-    where Tensor<u8, S>: TensorToGpu<u8> + TensorToCpu<u8>
+    fn create_scale_space<S: Storage<u8> + 'static>(
+        &self,
+        ctx: &ComputeDevice,
+        image: &Tensor<u8, S>,
+    ) -> Vec<EvolutionLevel>
+    where
+        Tensor<u8, S>: TensorToGpu<u8> + TensorToCpu<u8>,
     {
         let mut evolution = Vec::new();
         let mut t = 0.0f32;
@@ -73,27 +88,31 @@ impl Akaze {
         match ctx {
             ComputeDevice::Gpu(gpu) => {
                 let current_u8 = ctx.gaussian_blur(image, 1.0, 5).unwrap();
-                let gpu_u8 = <Tensor<u8, S> as TensorToGpu<u8>>::to_gpu_ctx(&current_u8, gpu).unwrap();
-                let mut current_f32 = <Tensor<u8, _> as TensorCast>::to_f32_ctx(&gpu_u8, gpu).unwrap();
+                let gpu_u8 =
+                    <Tensor<u8, S> as TensorToGpu<u8>>::to_gpu_ctx(&current_u8, gpu).unwrap();
+                let mut current_f32 =
+                    <Tensor<u8, _> as TensorCast>::to_f32_ctx(&gpu_u8, gpu).unwrap();
                 let k = ctx.akaze_contrast_k(&current_f32).unwrap_or(0.03);
 
                 for o in 0..self.params.n_octaves {
                     for s in 0..self.params.n_sublevels {
-                        let sigma = (2.0f32).powf((o as f32) + (s as f32) / (self.params.n_sublevels as f32));
+                        let sigma = (2.0f32)
+                            .powf((o as f32) + (s as f32) / (self.params.n_sublevels as f32));
                         let esigma = sigma * sigma / 2.0;
                         let dt = esigma - t;
-                        
+
                         if dt > 0.0 {
                             let n_steps = self.get_fed_steps(dt);
                             let step_tau = dt / (n_steps as f32);
                             for _ in 0..n_steps {
-                                current_f32 = gpu.akaze_diffusion(&current_f32, k, step_tau).unwrap();
+                                current_f32 =
+                                    gpu.akaze_diffusion(&current_f32, k, step_tau).unwrap();
                             }
                             t = esigma;
                         }
-                        
+
                         let (lx, ly, ldet) = gpu.akaze_derivatives(&current_f32).unwrap();
-                        
+
                         evolution.push(EvolutionLevel {
                             image: current_f32.to_cpu_ctx(gpu).unwrap(),
                             lx: lx.to_cpu_ctx(gpu).unwrap(),
@@ -104,32 +123,45 @@ impl Akaze {
                         });
                     }
                 }
-            },
+            }
             ComputeDevice::Cpu(cpu) => {
                 let cpu_u8 = image.to_cpu().expect("Failed to download image to CPU");
-                let current_u8 = cpu.gaussian_blur(&cpu_u8, 1.0, 5).expect("Gaussian blur failed");
-                let data: Vec<f32> = current_u8.as_slice().expect("Failed to get slice").iter().map(|&v| v as f32 / 255.0).collect();
-                let mut current_f32 = CpuTensor::from_vec(data, current_u8.shape).expect("Failed to create tensor");
-                
+                let current_u8 = cpu
+                    .gaussian_blur(&cpu_u8, 1.0, 5)
+                    .expect("Gaussian blur failed");
+                let data: Vec<f32> = current_u8
+                    .as_slice()
+                    .expect("Failed to get slice")
+                    .iter()
+                    .map(|&v| v as f32 / 255.0)
+                    .collect();
+                let mut current_f32 =
+                    CpuTensor::from_vec(data, current_u8.shape).expect("Failed to create tensor");
+
                 let k = cpu.akaze_contrast_k(&current_f32).unwrap_or(0.03);
 
                 for o in 0..self.params.n_octaves {
                     for s in 0..self.params.n_sublevels {
-                        let sigma = (2.0f32).powf((o as f32) + (s as f32) / (self.params.n_sublevels as f32));
+                        let sigma = (2.0f32)
+                            .powf((o as f32) + (s as f32) / (self.params.n_sublevels as f32));
                         let esigma = sigma * sigma / 2.0;
                         let dt = esigma - t;
-                        
+
                         if dt > 0.0 {
                             let n_steps = self.get_fed_steps(dt);
                             let step_tau = dt / (n_steps as f32);
                             for _ in 0..n_steps {
-                                current_f32 = cpu.akaze_diffusion(&current_f32, k, step_tau).expect("Diffusion failed");
+                                current_f32 = cpu
+                                    .akaze_diffusion(&current_f32, k, step_tau)
+                                    .expect("Diffusion failed");
                             }
                             t = esigma;
                         }
-                        
-                        let (lx, ly, ldet) = cpu.akaze_derivatives(&current_f32).expect("Derivatives failed");
-                        
+
+                        let (lx, ly, ldet) = cpu
+                            .akaze_derivatives(&current_f32)
+                            .expect("Derivatives failed");
+
                         evolution.push(EvolutionLevel {
                             image: current_f32.clone(),
                             lx,
@@ -140,10 +172,10 @@ impl Akaze {
                         });
                     }
                 }
-            },
+            }
             ComputeDevice::Mlx(_) => todo!("AKAZE evolution not implemented for MLX"),
         }
-        
+
         evolution
     }
 
@@ -160,33 +192,45 @@ impl Akaze {
             let (h, w) = curr.ldet.shape.hw();
             let det_slice = curr.ldet.as_slice().expect("Failed to get det slice");
 
-            let mut level_kps: Vec<KeyPoint> = (1..h-1).into_par_iter().flat_map(|y| {
-                let mut row_kps = Vec::new();
-                for x in 1..w-1 {
-                    let val = det_slice[y * w + x];
-                    if val > threshold {
-                        let mut is_max = true;
-                        for dy in -1..=1 {
-                            for dx in -1..=1 {
-                                if dx == 0 && dy == 0 { continue; }
-                                if det_slice[(y as i32 + dy) as usize * w + (x as i32 + dx) as usize] >= val {
-                                    is_max = false;
+            let mut level_kps: Vec<KeyPoint> = (1..h - 1)
+                .into_par_iter()
+                .flat_map(|y| {
+                    let mut row_kps = Vec::new();
+                    for x in 1..w - 1 {
+                        let val = det_slice[y * w + x];
+                        if val > threshold {
+                            let mut is_max = true;
+                            for dy in -1..=1 {
+                                for dx in -1..=1 {
+                                    if dx == 0 && dy == 0 {
+                                        continue;
+                                    }
+                                    if det_slice
+                                        [(y as i32 + dy) as usize * w + (x as i32 + dx) as usize]
+                                        >= val
+                                    {
+                                        is_max = false;
+                                        break;
+                                    }
+                                }
+                                if !is_max {
                                     break;
                                 }
                             }
-                            if !is_max { break; }
-                        }
 
-                        if is_max {
-                            row_kps.push(KeyPoint::new(x as f64, y as f64)
-                                .with_size(curr.sigma as f64 * 2.0)
-                                .with_response(val as f64)
-                                .with_octave(curr.octave as i32));
+                            if is_max {
+                                row_kps.push(
+                                    KeyPoint::new(x as f64, y as f64)
+                                        .with_size(curr.sigma as f64 * 2.0)
+                                        .with_response(val as f64)
+                                        .with_octave(curr.octave as i32),
+                                );
+                            }
                         }
                     }
-                }
-                row_kps
-            }).collect();
+                    row_kps
+                })
+                .collect();
 
             keypoints.append(&mut level_kps);
         }
@@ -194,13 +238,18 @@ impl Akaze {
         keypoints
     }
 
-    fn compute_descriptors(&self, evolution: &[EvolutionLevel], keypoints: &[KeyPoint]) -> Descriptors {
+    fn compute_descriptors(
+        &self,
+        evolution: &[EvolutionLevel],
+        keypoints: &[KeyPoint],
+    ) -> Descriptors {
         let mut descriptors = Vec::with_capacity(keypoints.len());
 
         for kp in keypoints {
-            let level_idx = kp.octave as usize * self.params.n_sublevels + (kp.size.log2() as usize % self.params.n_sublevels);
+            let level_idx = kp.octave as usize * self.params.n_sublevels
+                + (kp.size.log2() as usize % self.params.n_sublevels);
             let level = &evolution[level_idx.min(evolution.len() - 1)];
-            
+
             if let Some(desc) = self.compute_msurf_descriptor(level, kp) {
                 descriptors.push(desc);
             }
@@ -209,14 +258,18 @@ impl Akaze {
         Descriptors { descriptors }
     }
 
-    fn compute_msurf_descriptor(&self, level: &EvolutionLevel, kp: &KeyPoint) -> Option<Descriptor> {
+    fn compute_msurf_descriptor(
+        &self,
+        level: &EvolutionLevel,
+        kp: &KeyPoint,
+    ) -> Option<Descriptor> {
         let (h, w) = level.image.shape.hw();
         let lx_slice = level.lx.as_slice().expect("Failed to get lx slice");
         let ly_slice = level.ly.as_slice().expect("Failed to get ly slice");
 
         let mut desc = vec![0u8; 64];
         let mut float_desc = [0.0f32; 64];
-        
+
         let x_center = kp.x as f32;
         let y_center = kp.y as f32;
         let s = kp.size as f32;
@@ -254,7 +307,9 @@ impl Akaze {
         }
 
         let mut norm_sq = 0.0;
-        for &v in &float_desc { norm_sq += v * v; }
+        for &v in &float_desc {
+            norm_sq += v * v;
+        }
         let norm = norm_sq.sqrt() + 1e-7;
         for i in 0..64 {
             desc[i] = ((float_desc[i] / norm) * 128.0 + 128.0).clamp(0.0, 255.0) as u8;
@@ -273,34 +328,58 @@ struct EvolutionLevel {
     pub octave: usize,
 }
 
-fn to_cpu_f32<S: Storage<f32> + 'static>(ctx: &ComputeDevice, tensor: &Tensor<f32, S>) -> CpuTensor<f32> {
-    use std::any::TypeId;
+fn to_cpu_f32<S: Storage<f32> + 'static>(
+    ctx: &ComputeDevice,
+    tensor: &Tensor<f32, S>,
+) -> crate::Result<CpuTensor<f32>> {
+    use cv_core::storage::CpuStorage;
     use cv_hal::storage::GpuStorage;
-    if TypeId::of::<S>() == TypeId::of::<GpuStorage<f32>>() {
-        let ptr = tensor as *const Tensor<f32, S> as *const Tensor<f32, GpuStorage<f32>>;
-        let gpu_tensor = unsafe { &*ptr };
+    use cv_hal::tensor_ext::TensorToCpu;
+
+    if let Some(gpu_storage) = tensor.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+        let gpu_tensor = Tensor {
+            storage: gpu_storage.clone(),
+            shape: tensor.shape,
+            dtype: tensor.dtype,
+            _phantom: std::marker::PhantomData,
+        };
         match ctx {
-            ComputeDevice::Gpu(gpu) => gpu_tensor.to_cpu_ctx(gpu).expect("Download from GPU failed"),
-            _ => panic!("Logic error: GpuStorage with non-GPU context"),
+            ComputeDevice::Gpu(gpu) => gpu_tensor.to_cpu_ctx(gpu).map_err(|e| {
+                crate::FeatureError::DetectionError(format!("Download from GPU failed: {}", e))
+            }),
+            _ => Err(crate::FeatureError::DetectionError(
+                "GpuStorage with non-GPU context".into(),
+            )),
         }
+    } else if let Some(cpu_storage) = tensor.storage.as_any().downcast_ref::<CpuStorage<f32>>() {
+        let cpu_tensor = Tensor {
+            storage: cpu_storage.clone(),
+            shape: tensor.shape,
+            dtype: tensor.dtype,
+            _phantom: std::marker::PhantomData,
+        };
+        Ok(cpu_tensor)
     } else {
-        let ptr = tensor as *const Tensor<f32, S> as *const CpuTensor<f32>;
-        unsafe { &*ptr }.clone()
+        Err(crate::FeatureError::DetectionError(
+            "Unsupported storage type".into(),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cv_core::{storage::CpuStorage, TensorShape};
     use cv_hal::cpu::CpuBackend;
-    use cv_core::{TensorShape, storage::CpuStorage};
 
     fn create_test_image() -> Tensor<u8, CpuStorage<u8>> {
         let size = 128usize;
         let mut data = vec![0u8; size * size];
         for y in 0..size {
             for x in 0..size {
-                if ((x / 16) + (y / 16)) % 2 == 0 { data[y * size + x] = 255; }
+                if ((x / 16) + (y / 16)) % 2 == 0 {
+                    data[y * size + x] = 255;
+                }
             }
         }
         Tensor::from_vec(data, TensorShape::new(1, size, size)).unwrap()

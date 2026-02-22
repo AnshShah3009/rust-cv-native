@@ -6,13 +6,13 @@ pub type Vector6<T> = nalgebra::Vector6<T>;
 pub trait CameraModel<T: nalgebra::Scalar> {
     /// Projects a 3D point in camera coordinates to 2D pixel coordinates.
     fn project(&self, point: &Point3<T>) -> Point2<T>;
-    
+
     /// Unprojects a 2D pixel coordinate to a 3D point at a given depth.
     fn unproject(&self, pixel: &Point2<T>, depth: T) -> Point3<T>;
-    
+
     /// Returns the image width in pixels.
     fn width(&self) -> u32;
-    
+
     /// Returns the image height in pixels.
     fn height(&self) -> u32;
 }
@@ -27,7 +27,10 @@ pub struct PinholeModel {
 
 impl PinholeModel {
     pub fn new(intrinsics: CameraIntrinsics, distortion: Distortion) -> Self {
-        Self { intrinsics, distortion }
+        Self {
+            intrinsics,
+            distortion,
+        }
     }
 }
 
@@ -40,7 +43,10 @@ impl CameraModel<f64> for PinholeModel {
         let x = point.x / z;
         let y = point.y / z;
         let (xd, yd) = self.distortion.apply(x, y);
-        Point2::new(xd * self.intrinsics.fx + self.intrinsics.cx, yd * self.intrinsics.fy + self.intrinsics.cy)
+        Point2::new(
+            xd * self.intrinsics.fx + self.intrinsics.cx,
+            yd * self.intrinsics.fy + self.intrinsics.cy,
+        )
     }
 
     fn unproject(&self, pixel: &Point2<f64>, depth: f64) -> Point3<f64> {
@@ -50,8 +56,12 @@ impl CameraModel<f64> for PinholeModel {
         Point3::new(xu * depth, yu * depth, depth)
     }
 
-    fn width(&self) -> u32 { self.intrinsics.width }
-    fn height(&self) -> u32 { self.intrinsics.height }
+    fn width(&self) -> u32 {
+        self.intrinsics.width
+    }
+    fn height(&self) -> u32 {
+        self.intrinsics.height
+    }
 }
 
 /// A standard Pinhole Camera Model with radial and tangential distortion.
@@ -64,7 +74,10 @@ pub struct PinholeModelF32 {
 
 impl PinholeModelF32 {
     pub fn new(intrinsics: CameraIntrinsicsF32, distortion: DistortionF32) -> Self {
-        Self { intrinsics, distortion }
+        Self {
+            intrinsics,
+            distortion,
+        }
     }
 }
 
@@ -77,7 +90,10 @@ impl CameraModel<f32> for PinholeModelF32 {
         let x = point.x / z;
         let y = point.y / z;
         let (xd, yd) = self.distortion.apply(x, y);
-        Point2::new(xd * self.intrinsics.fx + self.intrinsics.cx, yd * self.intrinsics.fy + self.intrinsics.cy)
+        Point2::new(
+            xd * self.intrinsics.fx + self.intrinsics.cx,
+            yd * self.intrinsics.fy + self.intrinsics.cy,
+        )
     }
 
     fn unproject(&self, pixel: &Point2<f32>, depth: f32) -> Point3<f32> {
@@ -87,8 +103,12 @@ impl CameraModel<f32> for PinholeModelF32 {
         Point3::new(xu * depth, yu * depth, depth)
     }
 
-    fn width(&self) -> u32 { self.intrinsics.width }
-    fn height(&self) -> u32 { self.intrinsics.height }
+    fn width(&self) -> u32 {
+        self.intrinsics.width
+    }
+    fn height(&self) -> u32 {
+        self.intrinsics.height
+    }
 }
 
 /// Camera intrinsic parameters (focal length, principal point) for `f64`.
@@ -135,8 +155,9 @@ impl CameraIntrinsics {
     }
 
     pub fn project(&self, point: &Point3<f64>) -> Point2<f64> {
+        const EPSILON: f64 = 1e-10;
         let z = point.z;
-        if z == 0.0 {
+        if z.abs() < EPSILON {
             return Point2::new(self.cx, self.cy);
         }
         let x = point.x / z;
@@ -192,8 +213,9 @@ impl CameraIntrinsicsF32 {
     }
 
     pub fn project(&self, point: &Point3<f32>) -> Point2<f32> {
+        const EPSILON: f32 = 1e-7;
         let z = point.z;
-        if z == 0.0 {
+        if z.abs() < EPSILON {
             return Point2::new(self.cx, self.cy);
         }
         let x = point.x / z;
@@ -368,7 +390,7 @@ pub fn skew_symmetric(v: &Vector3<f64>) -> Matrix3<f64> {
 }
 
 /// Radial and Tangential distortion coefficients (Brown-Conrady model).
-/// 
+///
 /// - `k1, k2, k3`: Radial distortion coefficients.
 /// - `p1, p2`: Tangential distortion coefficients.
 #[derive(Debug, Clone, Copy)]
@@ -502,7 +524,12 @@ impl FisheyeDistortion {
     }
 
     pub fn none() -> Self {
-        Self { k1: 0.0, k2: 0.0, k3: 0.0, k4: 0.0 }
+        Self {
+            k1: 0.0,
+            k2: 0.0,
+            k3: 0.0,
+            k4: 0.0,
+        }
     }
 
     pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
@@ -515,8 +542,9 @@ impl FisheyeDistortion {
         let theta4 = theta2 * theta2;
         let theta6 = theta4 * theta2;
         let theta8 = theta4 * theta4;
-        
-        let theta_d = theta * (1.0 + self.k1 * theta2 + self.k2 * theta4 + self.k3 * theta6 + self.k4 * theta8);
+
+        let theta_d = theta
+            * (1.0 + self.k1 * theta2 + self.k2 * theta4 + self.k3 * theta6 + self.k4 * theta8);
         let scale = theta_d / r;
         (x * scale, y * scale)
     }
@@ -526,7 +554,7 @@ impl FisheyeDistortion {
         if r_d < 1e-10 {
             return (x, y);
         }
-        
+
         // Iterative solver for theta
         let mut theta = r_d;
         for _ in 0..10 {
@@ -534,11 +562,17 @@ impl FisheyeDistortion {
             let theta4 = theta2 * theta2;
             let theta6 = theta4 * theta2;
             let theta8 = theta4 * theta4;
-            let f = theta * (1.0 + self.k1 * theta2 + self.k2 * theta4 + self.k3 * theta6 + self.k4 * theta8) - r_d;
-            let df = 1.0 + 3.0 * self.k1 * theta2 + 5.0 * self.k2 * theta4 + 7.0 * self.k3 * theta6 + 9.0 * self.k4 * theta8;
+            let f = theta
+                * (1.0 + self.k1 * theta2 + self.k2 * theta4 + self.k3 * theta6 + self.k4 * theta8)
+                - r_d;
+            let df = 1.0
+                + 3.0 * self.k1 * theta2
+                + 5.0 * self.k2 * theta4
+                + 7.0 * self.k3 * theta6
+                + 9.0 * self.k4 * theta8;
             theta -= f / df;
         }
-        
+
         let r = theta.tan();
         let scale = r / r_d;
         (x * scale, y * scale)
@@ -575,7 +609,12 @@ impl FisheyeDistortionF32 {
     }
 
     pub fn none() -> Self {
-        Self { k1: 0.0, k2: 0.0, k3: 0.0, k4: 0.0 }
+        Self {
+            k1: 0.0,
+            k2: 0.0,
+            k3: 0.0,
+            k4: 0.0,
+        }
     }
 
     pub fn apply(&self, x: f32, y: f32) -> (f32, f32) {
@@ -588,8 +627,9 @@ impl FisheyeDistortionF32 {
         let theta4 = theta2 * theta2;
         let theta6 = theta4 * theta2;
         let theta8 = theta4 * theta4;
-        
-        let theta_d = theta * (1.0 + self.k1 * theta2 + self.k2 * theta4 + self.k3 * theta6 + self.k4 * theta8);
+
+        let theta_d = theta
+            * (1.0 + self.k1 * theta2 + self.k2 * theta4 + self.k3 * theta6 + self.k4 * theta8);
         let scale = theta_d / r;
         (x * scale, y * scale)
     }
@@ -599,18 +639,24 @@ impl FisheyeDistortionF32 {
         if r_d < 1e-7 {
             return (x, y);
         }
-        
+
         let mut theta = r_d;
         for _ in 0..10 {
             let theta2 = theta * theta;
             let theta4 = theta2 * theta2;
             let theta6 = theta4 * theta2;
             let theta8 = theta4 * theta4;
-            let f = theta * (1.0 + self.k1 * theta2 + self.k2 * theta4 + self.k3 * theta6 + self.k4 * theta8) - r_d;
-            let df = 1.0 + 3.0 * self.k1 * theta2 + 5.0 * self.k2 * theta4 + 7.0 * self.k3 * theta6 + 9.0 * self.k4 * theta8;
+            let f = theta
+                * (1.0 + self.k1 * theta2 + self.k2 * theta4 + self.k3 * theta6 + self.k4 * theta8)
+                - r_d;
+            let df = 1.0
+                + 3.0 * self.k1 * theta2
+                + 5.0 * self.k2 * theta4
+                + 7.0 * self.k3 * theta6
+                + 9.0 * self.k4 * theta8;
             theta -= f / df;
         }
-        
+
         let r = theta.tan();
         let scale = r / r_d;
         (x * scale, y * scale)
@@ -685,7 +731,13 @@ pub struct RotatedRect {
 
 impl RotatedRect {
     pub fn new(cx: f32, cy: f32, w: f32, h: f32, angle: f32) -> Self {
-        Self { cx, cy, w, h, angle }
+        Self {
+            cx,
+            cy,
+            w,
+            h,
+            angle,
+        }
     }
 
     pub fn area(&self) -> f32 {
@@ -784,7 +836,9 @@ pub fn intersection_area_polygons(p1: &Polygon, p2: &Polygon) -> f32 {
     let pts1 = &p1.points;
     let pts2 = &p2.points;
 
-    if pts1.len() < 3 || pts2.len() < 3 { return 0.0; }
+    if pts1.len() < 3 || pts2.len() < 3 {
+        return 0.0;
+    }
 
     let mut poly = pts1.clone();
 
@@ -794,7 +848,9 @@ pub fn intersection_area_polygons(p1: &Polygon, p2: &Polygon) -> f32 {
         let edge_p2 = pts2[(i + 1) % pts2.len()];
 
         let mut next_poly = Vec::new();
-        if poly.is_empty() { return 0.0; }
+        if poly.is_empty() {
+            return 0.0;
+        }
 
         for j in 0..poly.len() {
             let cur = poly[j];
@@ -815,7 +871,9 @@ pub fn intersection_area_polygons(p1: &Polygon, p2: &Polygon) -> f32 {
         poly = next_poly;
     }
 
-    if poly.len() < 3 { return 0.0; }
+    if poly.len() < 3 {
+        return 0.0;
+    }
     let mut area = 0.0;
     for i in 0..poly.len() {
         let p1 = poly[i];
@@ -890,9 +948,10 @@ pub struct Detection {
 
 impl Detection {
     pub fn new(rect: Rect, score: f32, class_id: i32) -> Self {
-        Self { rect, score, class_id }
+        Self {
+            rect,
+            score,
+            class_id,
+        }
     }
 }
-
-
-
