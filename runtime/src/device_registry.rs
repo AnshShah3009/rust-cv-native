@@ -1,9 +1,9 @@
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
-pub use cv_hal::{DeviceId, BackendType, SubmissionIndex, context::ComputeContext, ComputeBackend};
-use crate::Result;
 use crate::executor::ExecutorPool;
 use crate::memory_manager::MemoryManager;
+use crate::Result;
+pub use cv_hal::{context::ComputeContext, BackendType, ComputeBackend, DeviceId, SubmissionIndex};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// Supported compute backend contexts.
 pub enum BackendContext {
@@ -31,17 +31,17 @@ impl BackendContext {
 }
 
 /// Runtime state for a specific compute device.
-/// 
+///
 /// Owns the compute context and manages execution and memory for that device.
 pub struct DeviceRuntime {
     id: DeviceId,
     backend: BackendType,
     context: BackendContext,
-    
+
     // Track GPU submission ordering
     last_submitted: Mutex<SubmissionIndex>,
     last_completed: Mutex<SubmissionIndex>,
-    
+
     executors: Mutex<ExecutorPool>,
     memory: Arc<MemoryManager>,
 }
@@ -81,27 +81,35 @@ impl DeviceRuntime {
     }
 
     pub fn next_submission(&self) -> SubmissionIndex {
-        let mut last = self.last_submitted.lock().unwrap();
-        last.next()
+        if let Ok(mut last) = self.last_submitted.lock() {
+            last.next()
+        } else {
+            SubmissionIndex::new(0)
+        }
     }
 
     pub fn mark_completed(&self, index: SubmissionIndex) {
-        let mut last = self.last_completed.lock().unwrap();
-        if index > *last {
-            *last = index;
+        if let Ok(mut last) = self.last_completed.lock() {
+            if index > *last {
+                *last = index;
+            }
         }
-        
+
         // Collect garbage when GPU operations complete
         self.memory.collect_garbage(index);
     }
 
     pub fn last_completed(&self) -> SubmissionIndex {
-        *self.last_completed.lock().unwrap()
+        self.last_completed
+            .lock()
+            .ok()
+            .map(|l| *l)
+            .unwrap_or_else(SubmissionIndex::new)
     }
 }
 
 /// Global registry of all available compute devices.
-/// 
+///
 /// This is the primary owner of all device-specific resources.
 pub struct DeviceRegistry {
     devices: Mutex<HashMap<DeviceId, Arc<DeviceRuntime>>>,
@@ -112,12 +120,15 @@ pub struct DeviceRegistry {
 impl DeviceRegistry {
     pub fn new() -> Result<Self> {
         let mut devices = HashMap::new();
-        
+
         // Always initialize CPU backend
-        let cpu_backend = cv_hal::cpu::CpuBackend::new()
-            .ok_or_else(|| crate::Error::RuntimeError("Failed to initialize CPU backend".to_string()))?;
+        let cpu_backend = cv_hal::cpu::CpuBackend::new().ok_or_else(|| {
+            crate::Error::RuntimeError("Failed to initialize CPU backend".to_string())
+        })?;
         let cpu_id = ComputeContext::device_id(&cpu_backend);
-        let cpu_runtime = Arc::new(DeviceRuntime::new(BackendContext::Cpu(Arc::new(cpu_backend))));
+        let cpu_runtime = Arc::new(DeviceRuntime::new(BackendContext::Cpu(Arc::new(
+            cpu_backend,
+        ))));
         devices.insert(cpu_id, cpu_runtime);
 
         Ok(Self {
@@ -129,14 +140,18 @@ impl DeviceRegistry {
 
     /// Register a new device context
     pub fn register_device(&self, context: BackendContext, is_default_gpu: bool) {
-        let mut devices = self.devices.lock().unwrap();
-        let id = context.device_id();
-        let runtime = Arc::new(DeviceRuntime::new(context));
-        devices.insert(id, runtime);
-        
-        if is_default_gpu {
-            *self.default_gpu.lock().unwrap() = Some(id);
+        if let Ok(mut devices) = self.devices.lock() {
+            let id = context.device_id();
+            let runtime = Arc::new(DeviceRuntime::new(context));
+            devices.insert(id, runtime);
+
+            if is_default_gpu {
+                if let Ok(mut default_gpu) = self.default_gpu.lock() {
+                    *default_gpu = Some(id);
+                }
+            }
         }
+    }
     }
 
     pub fn get_device(&self, id: DeviceId) -> Option<Arc<DeviceRuntime>> {
@@ -144,7 +159,8 @@ impl DeviceRegistry {
     }
 
     pub fn default_cpu(&self) -> Arc<DeviceRuntime> {
-        self.get_device(self.default_cpu).expect("CPU device must exist")
+        self.get_device(self.default_cpu)
+            .expect("CPU device must exist")
     }
 
     pub fn default_gpu(&self) -> Option<Arc<DeviceRuntime>> {
@@ -162,19 +178,23 @@ use std::sync::OnceLock;
 static GLOBAL_REGISTRY: OnceLock<Result<Arc<DeviceRegistry>>> = OnceLock::new();
 
 pub fn registry() -> Result<Arc<DeviceRegistry>> {
-    GLOBAL_REGISTRY.get_or_init(|| {
-        let registry = Arc::new(DeviceRegistry::new()?);
-        
-        // Attempt to auto-detect GPU
-        if let Ok(gpu_context) = cv_hal::gpu::GpuContext::global() {
-            registry.register_device(BackendContext::Gpu(Arc::new(gpu_context.clone())), true);
-        }
-        
-        // Attempt to auto-detect MLX (on Apple Silicon)
-        if let Some(mlx_context) = cv_hal::mlx::MlxContext::new() {
-            registry.register_device(BackendContext::Mlx(Arc::new(mlx_context)), false);
-        }
+    GLOBAL_REGISTRY
+        .get_or_init(|| {
+            let registry = Arc::new(DeviceRegistry::new()?);
 
-        Ok(registry)
-    }).as_ref().map(|r| r.clone()).map_err(|e| crate::Error::RuntimeError(e.to_string()))
+            // Attempt to auto-detect GPU
+            if let Ok(gpu_context) = cv_hal::gpu::GpuContext::global() {
+                registry.register_device(BackendContext::Gpu(Arc::new(gpu_context.clone())), true);
+            }
+
+            // Attempt to auto-detect MLX (on Apple Silicon)
+            if let Some(mlx_context) = cv_hal::mlx::MlxContext::new() {
+                registry.register_device(BackendContext::Mlx(Arc::new(mlx_context)), false);
+            }
+
+            Ok(registry)
+        })
+        .as_ref()
+        .map(|r| r.clone())
+        .map_err(|e| crate::Error::RuntimeError(e.to_string()))
 }

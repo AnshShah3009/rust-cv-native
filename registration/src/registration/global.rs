@@ -208,7 +208,7 @@ pub fn registration_ransac_based_on_feature_matching(
         }
     }
 
-    correspondences.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+    correspondences.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
     let top_correspondences: Vec<_> = correspondences.into_iter().take(1000).collect();
 
     if top_correspondences.len() < ransac_n {
@@ -551,7 +551,7 @@ pub fn compute_iss_features(cloud: &PointCloud, detector: ISSDetector) -> Vec<IS
     let mut keypoints: Vec<usize> = Vec::new();
 
     // Sort by saliency (descending)
-    saliencies.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    saliencies.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut suppressed = vec![false; n];
 

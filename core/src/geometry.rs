@@ -166,8 +166,19 @@ impl CameraIntrinsics {
     }
 
     pub fn unproject(&self, pixel: Point2<f64>, depth: f64) -> Point3<f64> {
-        let x = (pixel.x - self.cx) / self.fx;
-        let y = (pixel.y - self.cy) / self.fy;
+        const EPSILON: f64 = 1e-10;
+        let fx = if self.fx.abs() < EPSILON {
+            1.0
+        } else {
+            self.fx
+        };
+        let fy = if self.fy.abs() < EPSILON {
+            1.0
+        } else {
+            self.fy
+        };
+        let x = (pixel.x - self.cx) / fx;
+        let y = (pixel.y - self.cy) / fy;
         Point3::new(x * depth, y * depth, depth)
     }
 }
@@ -224,8 +235,19 @@ impl CameraIntrinsicsF32 {
     }
 
     pub fn unproject(&self, pixel: Point2<f32>, depth: f32) -> Point3<f32> {
-        let x = (pixel.x - self.cx) / self.fx;
-        let y = (pixel.y - self.cy) / self.fy;
+        const EPSILON: f32 = 1e-7;
+        let fx = if self.fx.abs() < EPSILON {
+            1.0
+        } else {
+            self.fx
+        };
+        let fy = if self.fy.abs() < EPSILON {
+            1.0
+        } else {
+            self.fy
+        };
+        let x = (pixel.x - self.cx) / fx;
+        let y = (pixel.y - self.cy) / fy;
         Point3::new(x * depth, y * depth, depth)
     }
 }

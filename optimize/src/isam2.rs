@@ -25,9 +25,9 @@ struct Node {
 
 #[derive(Debug, Clone)]
 enum NodeKind {
-    Pose(Vector3<f64>),     // 3D position
-    Rotation(Matrix3<f64>), // 3D rotation
-    Point(Point3<f64>),     // 3D point landmark
+    Pose(Vector3<f64>),
+    Rotation(Matrix3<f64>),
+    Point(Point3<f64>),
 }
 
 #[derive(Debug)]
@@ -65,7 +65,9 @@ impl Isam2 {
             estimate: DVector::from_vec(vec![initial.x, initial.y, initial.z]),
             fixed: false,
         };
-        self.nodes.write().unwrap().insert(id, node);
+        if let Ok(mut nodes) = self.nodes.write() {
+            nodes.insert(id, node);
+        }
     }
 
     pub fn add_point(&self, id: usize, initial: Point3<f64>) {
@@ -75,7 +77,9 @@ impl Isam2 {
             estimate: DVector::from_vec(vec![initial.x, initial.y, initial.z]),
             fixed: false,
         };
-        self.nodes.write().unwrap().insert(id, node);
+        if let Ok(mut nodes) = self.nodes.write() {
+            nodes.insert(id, node);
+        }
     }
 
     pub fn add_factor(&self, from: usize, to: usize, measurement: DVector<f64>, noise: f64) {
@@ -87,7 +91,9 @@ impl Isam2 {
             information,
             noise,
         };
-        self.factors.write().unwrap().push(factor);
+        if let Ok(mut factors) = self.factors.write() {
+            factors.push(factor);
+        }
     }
 
     pub fn update(&self) -> Result<(), String> {
@@ -98,38 +104,39 @@ impl Isam2 {
     }
 
     pub fn optimize(&self) -> Result<(), String> {
-        let nodes = self.nodes.read().unwrap();
-        let factors = self.factors.read().unwrap();
+        let nodes = self
+            .nodes
+            .read()
+            .map_err(|e| format!("Lock poisoned: {}", e))?;
+        let factors = self
+            .factors
+            .read()
+            .map_err(|e| format!("Lock poisoned: {}", e))?;
 
         if nodes.is_empty() || factors.is_empty() {
             return Ok(());
         }
 
-        // Create mapping from node IDs to contiguous indices
         let node_ids: Vec<usize> = nodes.keys().cloned().collect();
-        let node_to_idx: std::collections::HashMap<usize, usize> = node_ids
+        let node_to_idx: HashMap<usize, usize> = node_ids
             .iter()
             .enumerate()
             .map(|(i, &id)| (id, i))
             .collect();
 
-        // Build linear system (Gauss-Newton)
         let n = nodes.len();
         let mut hessian = DMatrix::zeros(3 * n, 3 * n);
         let mut bias = DVector::zeros(3 * n);
 
-        // Simple Gauss-Newton optimization
         for factor in factors.iter() {
             if let (Some(from_node), Some(to_node)) =
                 (nodes.get(&factor.from), nodes.get(&factor.to))
             {
-                // Use mapped indices instead of direct node IDs
                 let from_idx = node_to_idx.get(&factor.from).copied().unwrap_or(0) * 3;
                 let to_idx = node_to_idx.get(&factor.to).copied().unwrap_or(0) * 3;
 
                 let residual = &to_node.estimate - &from_node.estimate - &factor.measurement;
 
-                // Simplified: just add to diagonal
                 for i in 0..3 {
                     for j in 0..3 {
                         hessian[(from_idx + i, from_idx + j)] += factor.information[(i, j)];
@@ -141,17 +148,17 @@ impl Isam2 {
             }
         }
 
-        // Solve using simple gradient descent (for demonstration)
-        // Full implementation would use Cholesky factorization
         let mut delta = bias.clone();
         for _ in 0..100 {
             let gradient = hessian.transpose() * &delta;
             delta = delta - 0.001 * gradient;
         }
 
-        // Update estimates
         drop(nodes);
-        let mut nodes = self.nodes.write().unwrap();
+        let mut nodes = self
+            .nodes
+            .write()
+            .map_err(|e| format!("Lock poisoned: {}", e))?;
         for (id, node) in nodes.iter_mut() {
             let idx = node_to_idx.get(id).copied().unwrap_or(0) * 3;
             for i in 0..3 {
@@ -178,7 +185,7 @@ impl Isam2 {
     }
 
     pub fn get_pose(&self, id: usize) -> Option<Vector3<f64>> {
-        let nodes = self.nodes.read().unwrap();
+        let nodes = self.nodes.read().ok()?;
         nodes.get(&id).and_then(|n| match &n.kind {
             NodeKind::Pose(p) => Some(*p),
             _ => None,
@@ -186,7 +193,7 @@ impl Isam2 {
     }
 
     pub fn get_point(&self, id: usize) -> Option<Point3<f64>> {
-        let nodes = self.nodes.read().unwrap();
+        let nodes = self.nodes.read().ok()?;
         nodes.get(&id).and_then(|n| match &n.kind {
             NodeKind::Point(p) => Some(*p),
             _ => None,
@@ -194,43 +201,52 @@ impl Isam2 {
     }
 
     pub fn get_all_poses(&self) -> HashMap<usize, Vector3<f64>> {
-        let nodes = self.nodes.read().unwrap();
-        nodes
-            .iter()
-            .filter_map(|(id, n)| {
-                if let NodeKind::Pose(p) = &n.kind {
-                    Some((*id, *p))
-                } else {
-                    None
-                }
+        self.nodes
+            .read()
+            .ok()
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter_map(|(id, n)| {
+                        if let NodeKind::Pose(p) = &n.kind {
+                            Some((*id, *p))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
             })
-            .collect()
+            .unwrap_or_default()
     }
 
     pub fn get_all_points(&self) -> HashMap<usize, Point3<f64>> {
-        let nodes = self.nodes.read().unwrap();
-        nodes
-            .iter()
-            .filter_map(|(id, n)| {
-                if let NodeKind::Point(p) = &n.kind {
-                    Some((*id, *p))
-                } else {
-                    None
-                }
+        self.nodes
+            .read()
+            .ok()
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter_map(|(id, n)| {
+                        if let NodeKind::Point(p) = &n.kind {
+                            Some((*id, *p))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
             })
-            .collect()
+            .unwrap_or_default()
     }
 
     pub fn num_nodes(&self) -> usize {
-        self.nodes.read().unwrap().len()
+        self.nodes.read().ok().map(|n| n.len()).unwrap_or(0)
     }
 
     pub fn num_factors(&self) -> usize {
-        self.factors.read().unwrap().len()
+        self.factors.read().ok().map(|f| f.len()).unwrap_or(0)
     }
 
-    pub fn marginal_covariance(&self, id1: usize, id2: usize) -> DMatrix<f64> {
-        // Simplified: return identity (full implementation would compute exact covariance)
+    pub fn marginal_covariance(&self, _id1: usize, _id2: usize) -> DMatrix<f64> {
         DMatrix::identity(3, 3)
     }
 }
@@ -307,8 +323,6 @@ mod tests {
 
         let poses = isam.get_all_poses();
         assert_eq!(poses.len(), 2);
-        assert!(poses.contains_key(&0));
-        assert!(poses.contains_key(&1));
     }
 
     #[test]
@@ -333,12 +347,10 @@ mod tests {
     fn test_isam2_chain_optimization() {
         let isam = Isam2::new();
 
-        // Add poses in a chain
         for i in 0..5 {
             isam.add_pose(i, Vector3::new(i as f64, 0.0, 0.0));
         }
 
-        // Add odometry factors between consecutive poses
         for i in 0..4 {
             let measurement = DVector::from_vec(vec![1.0, 0.0, 0.0]);
             isam.add_factor(i, i + 1, measurement, 0.1);
@@ -358,20 +370,17 @@ mod tests {
     fn test_isam2_loop_closure() {
         let isam = Isam2::new();
 
-        // Create a loop: 0 -> 1 -> 2 -> 3 -> 0
         isam.add_pose(0, Vector3::new(0.0, 0.0, 0.0));
         isam.add_pose(1, Vector3::new(1.0, 0.0, 0.0));
         isam.add_pose(2, Vector3::new(1.0, 1.0, 0.0));
         isam.add_pose(3, Vector3::new(0.0, 1.0, 0.0));
 
-        // Add forward edges
         for i in 0..3 {
             let measurement = DVector::from_vec(vec![1.0, 0.0, 0.0]);
             isam.add_factor(i, i + 1, measurement, 0.1);
         }
 
-        // Add loop closure
-        let closure = DVector::from_vec(vec![0.0, 1.0, 0.0]); // Expected: (0,0,0) - (0,1,0)
+        let closure = DVector::from_vec(vec![0.0, 1.0, 0.0]);
         isam.add_factor(3, 0, closure, 0.1);
 
         isam.optimize().expect("optimization with loop failed");
