@@ -955,3 +955,320 @@ impl Detection {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nalgebra::{Matrix3, Point3, Vector3};
+
+    mod pose_tests {
+        use super::*;
+
+        #[test]
+        fn test_pose_identity() {
+            let pose = Pose::identity();
+            assert!(pose.rotation.is_identity(1e-10));
+            assert_eq!(pose.translation, Vector3::zeros());
+        }
+
+        #[test]
+        fn test_pose_new() {
+            let rotation = Matrix3::identity();
+            let translation = Vector3::new(1.0, 2.0, 3.0);
+            let pose = Pose::new(rotation, translation);
+
+            assert_eq!(pose.translation.x, 1.0);
+            assert_eq!(pose.translation.y, 2.0);
+            assert_eq!(pose.translation.z, 3.0);
+        }
+
+        #[test]
+        fn test_pose_inverse_roundtrip() {
+            let rotation = Matrix3::identity();
+            let translation = Vector3::new(1.0, 2.0, 3.0);
+            let pose = Pose::new(rotation, translation);
+
+            let result = pose.compose(&pose.inverse());
+            assert!(result.rotation.is_identity(1e-10));
+            assert!(result.translation.norm() < 1e-10);
+        }
+
+        #[test]
+        fn test_pose_compose_identity() {
+            let translation = Vector3::new(0.5, 0.6, 0.7);
+            let pose = Pose::new(Matrix3::identity(), translation);
+
+            let result = pose.compose(&Pose::identity());
+            assert!((result.translation - translation).norm() < 1e-10);
+        }
+
+        #[test]
+        fn test_pose_transform_point() {
+            let pose = Pose::identity();
+            let point = Point3::new(1.0, 2.0, 3.0);
+            let result = pose.transform_point(&point);
+
+            assert!((result - point).norm() < 1e-10);
+        }
+
+        #[test]
+        fn test_pose_matrix() {
+            let pose = Pose::identity();
+            let matrix = pose.matrix();
+
+            assert_eq!(matrix[(0, 0)], 1.0);
+            assert_eq!(matrix[(1, 1)], 1.0);
+            assert_eq!(matrix[(2, 2)], 1.0);
+            assert_eq!(matrix[(3, 3)], 1.0);
+        }
+
+        #[test]
+        fn test_pose_default() {
+            let pose = Pose::default();
+            assert!(pose.rotation.is_identity(1e-10));
+            assert_eq!(pose.translation, Vector3::zeros());
+        }
+    }
+
+    mod camera_intrinsics_tests {
+        use super::*;
+
+        #[test]
+        fn test_camera_intrinsics_new() {
+            let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+
+            assert_eq!(intrinsics.fx, 500.0);
+            assert_eq!(intrinsics.fy, 500.0);
+            assert_eq!(intrinsics.cx, 320.0);
+            assert_eq!(intrinsics.cy, 240.0);
+        }
+
+        #[test]
+        fn test_camera_intrinsics_new_ideal() {
+            let intrinsics = CameraIntrinsics::new_ideal(640, 480);
+
+            assert_eq!(intrinsics.fx, 640.0);
+            assert_eq!(intrinsics.fy, 640.0);
+            assert_eq!(intrinsics.cx, 320.0);
+            assert_eq!(intrinsics.cy, 240.0);
+        }
+
+        #[test]
+        fn test_camera_intrinsics_f32() {
+            let intrinsics = CameraIntrinsicsF32::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+
+            assert_eq!(intrinsics.fx, 500.0f32);
+            assert_eq!(intrinsics.fy, 500.0f32);
+        }
+    }
+
+    mod distortion_tests {
+        use super::*;
+
+        #[test]
+        fn test_distortion_identity() {
+            let dist = Distortion::new(0.0, 0.0, 0.0, 0.0, 0.0);
+
+            let (xd, yd) = dist.apply(0.5, 0.5);
+            assert!((xd - 0.5).abs() < 1e-10);
+            assert!((yd - 0.5).abs() < 1e-10);
+        }
+
+        #[test]
+        fn test_distortion_apply_remove_roundtrip() {
+            let dist = Distortion::new(0.1, 0.01, 0.001, 0.001, 0.0);
+
+            let (xd, yd) = dist.apply(0.3, 0.4);
+            let (xr, yr) = dist.remove(xd, yd);
+
+            assert!((xr - 0.3).abs() < 1e-4);
+            assert!((yr - 0.4).abs() < 1e-4);
+        }
+
+        #[test]
+        fn test_distortion_at_origin() {
+            let dist = Distortion::new(0.5, 0.3, 0.01, 0.01, 0.1);
+
+            let (xd, yd) = dist.apply(0.0, 0.0);
+            assert!((xd).abs() < 1e-10);
+            assert!((yd).abs() < 1e-10);
+        }
+
+        #[test]
+        fn test_fisheye_distortion_identity() {
+            let dist = FisheyeDistortion::new(0.0, 0.0, 0.0, 0.0);
+
+            let (xd, yd) = dist.apply(0.0, 0.0);
+            assert!((xd).abs() < 1e-10);
+            assert!((yd).abs() < 1e-10);
+        }
+
+        #[test]
+        fn test_fisheye_distortion_roundtrip() {
+            let dist = FisheyeDistortion::new(0.1, 0.01, 0.001, 0.001);
+
+            let (xd, yd) = dist.apply(0.3, 0.4);
+            let (xr, yr) = dist.remove(xd, yd);
+
+            assert!((xr - 0.3).abs() < 1e-3);
+            assert!((yr - 0.4).abs() < 1e-3);
+        }
+    }
+
+    mod rect_tests {
+        use super::*;
+
+        #[test]
+        fn test_rect_area() {
+            let rect = Rect::new(0.0, 0.0, 10.0, 20.0);
+            assert!((rect.area() - 200.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_rect_area_negative() {
+            let rect = Rect::new(0.0, 0.0, 0.0, 20.0);
+            assert!((rect.area() - 0.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_rect_iou_identical() {
+            let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+            assert!((rect.iou(&rect) - 1.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_rect_iou_no_overlap() {
+            let rect1 = Rect::new(0.0, 0.0, 10.0, 10.0);
+            let rect2 = Rect::new(20.0, 20.0, 10.0, 10.0);
+            assert!((rect1.iou(&rect2)).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_rect_iou_partial_overlap() {
+            let rect1 = Rect::new(0.0, 0.0, 10.0, 10.0);
+            let rect2 = Rect::new(5.0, 5.0, 10.0, 10.0);
+
+            let iou = rect1.iou(&rect2);
+            assert!(iou > 0.0 && iou < 1.0);
+        }
+
+        #[test]
+        fn test_rect_bounds() {
+            let rect = Rect::new(1.0, 2.0, 10.0, 20.0);
+
+            assert!((rect.x1() - 1.0).abs() < 1e-5);
+            assert!((rect.y1() - 2.0).abs() < 1e-5);
+            assert!((rect.x2() - 11.0).abs() < 1e-5);
+            assert!((rect.y2() - 22.0).abs() < 1e-5);
+        }
+    }
+
+    mod polygon_tests {
+        use super::*;
+
+        fn create_square() -> Polygon {
+            Polygon {
+                points: vec![[0.0f32, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
+            }
+        }
+
+        #[test]
+        fn test_polygon_area_square() {
+            let poly = create_square();
+            let area = poly.unsigned_area();
+
+            assert!((area - 100.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_polygon_area_triangle() {
+            let poly = Polygon {
+                points: vec![[0.0f32, 0.0], [10.0, 0.0], [0.0, 10.0]],
+            };
+
+            assert!((poly.unsigned_area() - 50.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_polygon_area_empty() {
+            let poly = Polygon { points: vec![] };
+            assert_eq!(poly.area(), 0.0);
+        }
+
+        #[test]
+        fn test_polygon_iou_identical() {
+            let poly = create_square();
+
+            assert!((polygon_iou(&poly, &poly) - 1.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_polygon_iou_no_overlap() {
+            let poly1 = Polygon {
+                points: vec![[0.0f32, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
+            };
+            let poly2 = Polygon {
+                points: vec![[20.0f32, 20.0], [30.0, 20.0], [30.0, 30.0], [20.0, 30.0]],
+            };
+
+            assert!(polygon_iou(&poly1, &poly2).abs() < 1e-5);
+        }
+    }
+
+    mod geometry_util_tests {
+        use super::*;
+
+        #[test]
+        fn test_skew_symmetric_zero() {
+            let v = Vector3::zeros();
+            let skew = skew_symmetric(&v);
+
+            assert_eq!(skew, Matrix3::zeros());
+        }
+
+        #[test]
+        fn test_skew_symmetric_unit_x() {
+            let v = Vector3::x();
+            let skew = skew_symmetric(&v);
+
+            assert_eq!(skew[(0, 1)], 0.0);
+            assert_eq!(skew[(0, 2)], 0.0);
+            assert_eq!(skew[(1, 0)], 0.0);
+            assert_eq!(skew[(1, 2)], -1.0);
+            assert_eq!(skew[(2, 0)], 0.0);
+            assert_eq!(skew[(2, 1)], 1.0);
+        }
+
+        #[test]
+        fn test_twist_to_se3_zero() {
+            let twist = Vector6::zeros();
+            let (r, t) = twist_to_se3(&twist);
+
+            assert!(r.is_identity(1e-10));
+            assert!(t.norm() < 1e-10);
+        }
+    }
+
+    mod rotated_rect_tests {
+        use super::*;
+
+        #[test]
+        fn test_rotated_rect_area() {
+            let rect = RotatedRect::new(10.0, 10.0, 20.0, 10.0, 0.0);
+            assert!((rect.area() - 200.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_rotated_rect_area_rotated() {
+            let rect = RotatedRect::new(10.0, 10.0, 20.0, 10.0, 45.0);
+            assert!((rect.area() - 200.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_rotated_rect_points() {
+            let rect = RotatedRect::new(50.0, 50.0, 10.0, 20.0, 0.0);
+            let points = rect.points();
+            assert_eq!(points.len(), 4);
+        }
+    }
+}

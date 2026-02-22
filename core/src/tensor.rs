@@ -581,3 +581,327 @@ pub fn create_tensor_3d<T: Clone + Copy + Default + fmt::Debug + 'static>(
 ) -> crate::Result<Tensor<T>> {
     Tensor::new(TensorShape::new(channels, height, width))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod tensor_shape_tests {
+        use super::*;
+
+        #[test]
+        fn test_tensor_shape_new() {
+            let shape = TensorShape::new(3, 100, 200);
+
+            assert_eq!(shape.channels, 3);
+            assert_eq!(shape.height, 100);
+            assert_eq!(shape.width, 200);
+        }
+
+        #[test]
+        fn test_tensor_shape_len() {
+            let shape = TensorShape::new(3, 100, 200);
+            assert_eq!(shape.len(), 3 * 100 * 200);
+        }
+
+        #[test]
+        fn test_tensor_shape_hw() {
+            let shape = TensorShape::new(3, 100, 200);
+            let (h, w) = shape.hw();
+            assert_eq!(h, 100);
+            assert_eq!(w, 200);
+        }
+
+        #[test]
+        fn test_tensor_shape_chw() {
+            let shape = TensorShape::new(3, 100, 200);
+            let (c, h, w) = shape.chw();
+            assert_eq!(c, 3);
+            assert_eq!(h, 100);
+            assert_eq!(w, 200);
+        }
+
+        #[test]
+        fn test_tensor_shape_is_1d() {
+            assert!(TensorShape::new(100, 1, 1).is_1d());
+            assert!(!TensorShape::new(1, 100, 1).is_1d());
+        }
+
+        #[test]
+        fn test_tensor_shape_is_2d() {
+            assert!(TensorShape::new(1, 100, 200).is_2d());
+            assert!(!TensorShape::new(3, 100, 200).is_2d());
+        }
+
+        #[test]
+        fn test_tensor_shape_is_3d() {
+            assert!(TensorShape::new(3, 100, 200).is_3d());
+        }
+    }
+
+    mod tensor_creation_tests {
+        use super::*;
+
+        #[test]
+        fn test_tensor_zeros() {
+            let tensor: Tensor<f32> = Tensor::zeros(TensorShape::new(1, 10, 10)).unwrap();
+
+            assert_eq!(tensor.shape.channels, 1);
+            assert_eq!(tensor.shape.height, 10);
+            assert_eq!(tensor.shape.width, 10);
+        }
+
+        #[test]
+        fn test_tensor_ones() {
+            let tensor: Tensor<f32> = Tensor::ones(TensorShape::new(1, 2, 2)).unwrap();
+
+            let slice = tensor.as_slice().unwrap();
+            for &v in slice {
+                assert!((v - 1.0).abs() < 1e-5);
+            }
+        }
+
+        #[test]
+        fn test_tensor_from_vec() {
+            let data = vec![1.0f32, 2.0, 3.0, 4.0];
+            let tensor: Tensor<f32> =
+                Tensor::from_vec(data.clone(), TensorShape::new(1, 2, 2)).unwrap();
+
+            let slice = tensor.as_slice().unwrap();
+            assert_eq!(slice, &data[..]);
+        }
+
+        #[test]
+        fn test_tensor_from_vec_wrong_size() {
+            let data = vec![1.0f32, 2.0, 3.0];
+            let result: Result<Tensor<f32>, _> = Tensor::from_vec(data, TensorShape::new(1, 2, 2));
+
+            assert!(result.is_err());
+        }
+    }
+
+    mod tensor_slice_tests {
+        use super::*;
+
+        #[test]
+        fn test_slice_valid() {
+            let tensor: Tensor<f32> = Tensor::zeros(TensorShape::new(1, 10, 10)).unwrap();
+
+            let slice = tensor.slice(0..1, 2..5, 3..7).unwrap();
+            assert_eq!(slice.shape.height, 3);
+            assert_eq!(slice.shape.width, 4);
+        }
+
+        #[test]
+        fn test_slice_out_of_bounds() {
+            let tensor: Tensor<f32> = Tensor::zeros(TensorShape::new(1, 10, 10)).unwrap();
+
+            let result = tensor.slice(0..1, 0..20, 0..10);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_slice_empty() {
+            let tensor: Tensor<f32> = Tensor::zeros(TensorShape::new(1, 10, 10)).unwrap();
+
+            let result = tensor.slice(0..1, 5..5, 0..10);
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_slice_copy() {
+            let mut tensor: Tensor<f32> = Tensor::zeros(TensorShape::new(1, 10, 10)).unwrap();
+
+            {
+                let data = tensor.as_mut_slice().unwrap();
+                for v in data.iter_mut() {
+                    *v = 42.0;
+                }
+            }
+
+            let slice = tensor.slice(0..1, 2..5, 3..7).unwrap();
+            let slice_data = slice.as_slice().unwrap();
+            for &v in slice_data {
+                assert!((v - 42.0).abs() < 1e-5);
+            }
+        }
+    }
+
+    mod tensor_concat_tests {
+        use super::*;
+
+        fn create_tensor_with_value(shape: TensorShape, val: f32) -> Tensor<f32> {
+            let mut t = Tensor::zeros(shape).unwrap();
+            let slice = t.as_mut_slice().unwrap();
+            for v in slice.iter_mut() {
+                *v = val;
+            }
+            t
+        }
+
+        #[test]
+        fn test_concat_along_channels() {
+            let t1 = create_tensor_with_value(TensorShape::new(1, 2, 2), 1.0);
+            let t2 = create_tensor_with_value(TensorShape::new(2, 2, 2), 2.0);
+
+            let result = Tensor::concat(&[&t1, &t2], 0).unwrap();
+
+            assert_eq!(result.shape.channels, 3);
+            assert_eq!(result.shape.height, 2);
+            assert_eq!(result.shape.width, 2);
+        }
+
+        #[test]
+        fn test_concat_along_height() {
+            let t1 = create_tensor_with_value(TensorShape::new(1, 2, 4), 1.0);
+            let t2 = create_tensor_with_value(TensorShape::new(1, 3, 4), 2.0);
+
+            let result = Tensor::concat(&[&t1, &t2], 1).unwrap();
+
+            assert_eq!(result.shape.channels, 1);
+            assert_eq!(result.shape.height, 5);
+            assert_eq!(result.shape.width, 4);
+        }
+
+        #[test]
+        fn test_concat_along_width() {
+            let t1 = create_tensor_with_value(TensorShape::new(1, 2, 3), 1.0);
+            let t2 = create_tensor_with_value(TensorShape::new(1, 2, 4), 2.0);
+
+            let result = Tensor::concat(&[&t1, &t2], 2).unwrap();
+
+            assert_eq!(result.shape.channels, 1);
+            assert_eq!(result.shape.height, 2);
+            assert_eq!(result.shape.width, 7);
+        }
+
+        #[test]
+        fn test_concat_empty_list() {
+            let tensors: Vec<&Tensor<f32>> = vec![];
+
+            let result = Tensor::concat(&tensors, 0);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_concat_shape_mismatch() {
+            let t1 = create_tensor_with_value(TensorShape::new(1, 2, 3), 1.0);
+            let t2 = create_tensor_with_value(TensorShape::new(1, 4, 5), 2.0);
+
+            let result = Tensor::concat(&[&t1, &t2], 0);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_concat_invalid_dim() {
+            let t1 = create_tensor_with_value(TensorShape::new(1, 2, 2), 1.0);
+            let t2 = create_tensor_with_value(TensorShape::new(1, 2, 2), 2.0);
+
+            let result = Tensor::concat(&[&t1, &t2], 3);
+            assert!(result.is_err());
+        }
+    }
+
+    mod tensor_operations_tests {
+        use super::*;
+
+        #[test]
+        fn test_index() {
+            let mut tensor: Tensor<f32> = Tensor::zeros(TensorShape::new(3, 4, 5)).unwrap();
+
+            {
+                let slice = tensor.as_mut_slice().unwrap();
+                slice[0] = 1.0;
+                slice[1] = 2.0;
+            }
+
+            let idx0 = tensor.index(0, 0, 0).unwrap();
+            let idx1 = tensor.index(0, 0, 1).unwrap();
+
+            assert!((idx0 - 1.0).abs() < 1e-5);
+            assert!((idx1 - 2.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_index_out_of_bounds() {
+            let tensor: Tensor<f32> = Tensor::zeros(TensorShape::new(1, 2, 2)).unwrap();
+
+            let result = tensor.index(2, 0, 0);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_index_mut() {
+            let mut tensor: Tensor<f32> = Tensor::zeros(TensorShape::new(1, 2, 2)).unwrap();
+
+            *tensor.index_mut(0, 0, 0).unwrap() = 5.0;
+
+            assert!((tensor.index(0, 0, 0).unwrap() - 5.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_reshape() {
+            let data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+            let tensor: Tensor<f32> = Tensor::from_vec(data, TensorShape::new(1, 2, 3)).unwrap();
+
+            let reshaped = tensor.reshape(TensorShape::new(1, 3, 2)).unwrap();
+
+            assert_eq!(reshaped.shape.height, 3);
+            assert_eq!(reshaped.shape.width, 2);
+        }
+    }
+
+    mod tensor_image_tests {
+        use super::*;
+
+        #[test]
+        fn test_from_image_gray() {
+            let data = vec![0u8, 128, 255];
+            let result = Tensor::<f32>::from_image_gray(&data, 3, 1).unwrap();
+
+            assert_eq!(result.shape.width, 3);
+            assert_eq!(result.shape.height, 1);
+            assert_eq!(result.shape.channels, 1);
+        }
+
+        #[test]
+        fn test_from_image_gray_wrong_size() {
+            let data = vec![0u8, 128];
+            let result = Tensor::<f32>::from_image_gray(&data, 2, 2);
+
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_from_image_rgb() {
+            let data = vec![255u8, 0, 0, 0, 255, 0];
+            let result = Tensor::<f32>::from_image_rgb(&data, 1, 2).unwrap();
+
+            assert_eq!(result.shape.width, 1);
+            assert_eq!(result.shape.height, 2);
+            assert_eq!(result.shape.channels, 3);
+        }
+    }
+
+    mod helper_function_tests {
+        use super::*;
+
+        #[test]
+        fn test_create_tensor_2d() {
+            let tensor: Tensor<f32> = create_tensor_2d(10, 20).unwrap();
+
+            assert_eq!(tensor.shape.channels, 1);
+            assert_eq!(tensor.shape.height, 10);
+            assert_eq!(tensor.shape.width, 20);
+        }
+
+        #[test]
+        fn test_create_tensor_3d() {
+            let tensor: Tensor<f32> = create_tensor_3d(3, 10, 20).unwrap();
+
+            assert_eq!(tensor.shape.channels, 3);
+            assert_eq!(tensor.shape.height, 10);
+            assert_eq!(tensor.shape.width, 20);
+        }
+    }
+}

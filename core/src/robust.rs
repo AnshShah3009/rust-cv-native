@@ -348,3 +348,296 @@ impl<D, M: RobustModel<D>> Prosac<D, M> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nalgebra::Point2;
+
+    #[derive(Clone)]
+    struct LineModel {
+        a: f64,
+        b: f64,
+        c: f64,
+    }
+
+    struct LineEstimator;
+
+    impl LineEstimator {
+        fn fit_line(p1: &Point2<f64>, p2: &Point2<f64>) -> LineModel {
+            let dx = p2.x - p1.x;
+            let dy = p2.y - p1.y;
+            let norm = (dx * dx + dy * dy).sqrt();
+            if norm < 1e-10 {
+                LineModel {
+                    a: 0.0,
+                    b: 0.0,
+                    c: 0.0,
+                }
+            } else {
+                LineModel {
+                    a: dy / norm,
+                    b: -dx / norm,
+                    c: -(dy * p1.x - dx * p1.y) / norm,
+                }
+            }
+        }
+
+        fn distance(model: &LineModel, p: &Point2<f64>) -> f64 {
+            (model.a * p.x + model.b * p.y + model.c).abs()
+        }
+    }
+
+    impl RobustModel<Point2<f64>> for LineEstimator {
+        type Model = LineModel;
+
+        fn min_sample_size(&self) -> usize {
+            2
+        }
+
+        fn estimate(&self, data: &[&Point2<f64>]) -> Option<Self::Model> {
+            if data.len() < 2 {
+                return None;
+            }
+            Some(Self::fit_line(data[0], data[1]))
+        }
+
+        fn compute_error(&self, model: &Self::Model, point: &Point2<f64>) -> f64 {
+            Self::distance(model, point)
+        }
+    }
+
+    fn create_line_points(
+        a: f64,
+        b: f64,
+        c: f64,
+        n_inliers: usize,
+        n_outliers: usize,
+        noise: f64,
+    ) -> Vec<Point2<f64>> {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let mut points = Vec::new();
+
+        for i in 0..n_inliers {
+            let x = i as f64 * 0.1;
+            let y = if b.abs() > 1e-10 {
+                -(a * x + c) / b
+            } else {
+                -c / a
+            };
+            let y = y + rng.gen_range(-noise..noise);
+            points.push(Point2::new(x, y));
+        }
+
+        for _ in 0..n_outliers {
+            let x = rng.gen_range(0.0..10.0);
+            let y = rng.gen_range(-10.0..10.0);
+            points.push(Point2::new(x, y));
+        }
+
+        points
+    }
+
+    mod ransac_tests {
+        use super::*;
+
+        #[test]
+        fn test_ransac_perfect_data() {
+            let points: Vec<Point2<f64>> = (0..10)
+                .map(|i| Point2::new(i as f64, i as f64 * 2.0))
+                .collect();
+
+            let ransac = Ransac::new(RobustConfig {
+                threshold: 0.1,
+                confidence: 0.99,
+                max_iterations: 100,
+                min_sample_size: 2,
+            });
+
+            let estimator = LineEstimator;
+            let result = ransac.run(&estimator, &points);
+
+            assert!(result.model.is_some());
+            assert!(result.num_inliers >= 8);
+        }
+
+        #[test]
+        fn test_ransac_with_outliers() {
+            let points = create_line_points(2.0, -1.0, 0.0, 20, 5, 0.01);
+
+            let ransac = Ransac::new(RobustConfig {
+                threshold: 0.2,
+                confidence: 0.99,
+                max_iterations: 1000,
+                min_sample_size: 2,
+            });
+
+            let estimator = LineEstimator;
+            let result = ransac.run(&estimator, &points);
+
+            assert!(result.model.is_some());
+            assert!(result.num_inliers >= 15);
+        }
+
+        #[test]
+        fn test_ransac_insufficient_points() {
+            let points = vec![Point2::new(0.0, 0.0)];
+
+            let ransac = Ransac::new(RobustConfig {
+                threshold: 0.1,
+                confidence: 0.99,
+                max_iterations: 100,
+                min_sample_size: 2,
+            });
+
+            let estimator = LineEstimator;
+            let result = ransac.run(&estimator, &points);
+
+            assert!(result.model.is_none());
+            assert_eq!(result.num_inliers, 0);
+        }
+
+        #[test]
+        fn test_ransac_empty_data() {
+            let points: Vec<Point2<f64>> = vec![];
+
+            let ransac = Ransac::new(RobustConfig {
+                threshold: 0.1,
+                confidence: 0.99,
+                max_iterations: 100,
+                min_sample_size: 2,
+            });
+
+            let estimator = LineEstimator;
+            let result = ransac.run(&estimator, &points);
+
+            assert!(result.model.is_none());
+        }
+
+        #[test]
+        fn test_ransac_config_default() {
+            let config = RobustConfig::default();
+
+            assert_eq!(config.threshold, 1.0);
+            assert_eq!(config.confidence, 0.99);
+            assert_eq!(config.max_iterations, 1000);
+        }
+    }
+
+    mod lmeds_tests {
+        use super::*;
+
+        #[test]
+        fn test_lmeds_perfect_data() {
+            let points: Vec<Point2<f64>> = (0..10)
+                .map(|i| Point2::new(i as f64, i as f64 * 2.0))
+                .collect();
+
+            let lmeds = LMedS::new(RobustConfig {
+                threshold: 0.1,
+                max_iterations: 100,
+                confidence: 0.99,
+                min_sample_size: 2,
+            });
+
+            let estimator = LineEstimator;
+            let result = lmeds.run(&estimator, &points);
+
+            assert!(result.model.is_some());
+        }
+
+        #[test]
+        fn test_lmeds_with_outliers() {
+            let points = create_line_points(1.0, -1.0, 0.0, 20, 10, 0.01);
+
+            let lmeds = LMedS::new(RobustConfig {
+                threshold: 0.3,
+                max_iterations: 500,
+                confidence: 0.99,
+                min_sample_size: 2,
+            });
+
+            let estimator = LineEstimator;
+            let result = lmeds.run(&estimator, &points);
+
+            assert!(result.model.is_some());
+        }
+
+        #[test]
+        fn test_lmeds_handles_nan() {
+            let mut points: Vec<Point2<f64>> =
+                (0..10).map(|i| Point2::new(i as f64, i as f64)).collect();
+            points.push(Point2::new(f64::NAN, 0.0));
+
+            let lmeds = LMedS::new(RobustConfig {
+                threshold: 0.1,
+                max_iterations: 100,
+                confidence: 0.99,
+                min_sample_size: 2,
+            });
+
+            let estimator = LineEstimator;
+            let result = lmeds.run(&estimator, &points);
+
+            assert!(result.model.is_some());
+        }
+    }
+
+    mod prosac_tests {
+        use super::*;
+
+        #[test]
+        fn test_prosac_perfect_data() {
+            let points: Vec<Point2<f64>> = (0..10)
+                .map(|i| Point2::new(i as f64, i as f64 * 2.0))
+                .collect();
+
+            let prosac = Prosac::new(RobustConfig {
+                threshold: 0.1,
+                confidence: 0.99,
+                max_iterations: 100,
+                min_sample_size: 2,
+            });
+
+            let estimator = LineEstimator;
+            let result = prosac.run(&estimator, &points);
+
+            assert!(result.model.is_some());
+        }
+
+        #[test]
+        fn test_prosac_with_outliers() {
+            let points = create_line_points(1.5, -1.0, 0.5, 20, 5, 0.01);
+
+            let prosac = Prosac::new(RobustConfig {
+                threshold: 0.2,
+                confidence: 0.99,
+                max_iterations: 500,
+                min_sample_size: 2,
+            });
+
+            let estimator = LineEstimator;
+            let result = prosac.run(&estimator, &points);
+
+            assert!(result.model.is_some());
+        }
+    }
+
+    mod robust_result_tests {
+        use super::*;
+
+        #[test]
+        fn test_robust_result_default() {
+            let result: RobustResult<LineModel> = RobustResult {
+                model: None,
+                inliers: vec![],
+                num_inliers: 0,
+                residual: f64::INFINITY,
+            };
+
+            assert!(result.model.is_none());
+            assert_eq!(result.num_inliers, 0);
+        }
+    }
+}
