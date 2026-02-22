@@ -1,6 +1,6 @@
 # Rust Computer Vision Library - Project Status
 
-**Last Updated:** February 20, 2026
+**Last Updated:** February 22, 2026
 
 ## Project Overview
 
@@ -26,7 +26,67 @@ Building a **native Rust computer vision library** as a complete replacement for
 
 ---
 
-## Current Status: Phase 14 - Orchestration, Hardening & MLX Support (February 20, 2026)
+## Current Status: Phase 15 - Bug Fixes & Comprehensive Testing (February 22, 2026)
+
+### ✅ Completed: ISAM2 Implementation
+**Location:** `optimize/src/isam2.rs`
+- Pure Rust incremental smoothing and mapping (ISAM2)
+- Pose/point/factor management
+- Gauss-Newton optimization
+- 12 comprehensive tests
+
+### ✅ Completed: Mesh Reconstruction Improvements
+**Location:** `3d/src/mesh/reconstruction.rs`
+- Poisson Surface Reconstruction
+- Ball Pivoting Algorithm (BPA)
+- Alpha Shapes
+- Helper functions: create_sphere_point_cloud, create_plane_point_cloud
+- 10 comprehensive tests
+
+### ✅ Completed: Python Bindings Expansion
+**Location:** `python/src/lib.rs`
+- Feature Detection: FAST, Harris, GFTT, Shi-Tomasi
+- ISAM2: Full SLAM optimization API
+- PointCloud: Create from numpy, normals, mesh conversion
+- TriangleMesh: Vertices, faces, OBJ export
+- MeshReconstruction: Sphere/plane creation, BPA, Alpha, Poisson
+- Tensor: Creation, zeros, ones, numpy conversion
+
+### ✅ Completed: Python Tests
+**Location:** `python/tests/test_cv_native.py`
+- 40+ test cases covering all major bindings
+
+### ✅ Completed: Bug Fixes from Code Review
+**Critical fixes:**
+- `optimize/src/sparse.rs`: Replaced todo!() with proper error returns for MLX
+- `optimize/src/sparse.rs`: Added division-by-zero guard in CG solver
+- `features/src/sift.rs`: Replaced todo!() with warning for MLX
+- `features/src/sift.rs`: Added bounds validation in refine_point()
+
+**High priority fixes:**
+- `optimize/src/isam2.rs`: Fixed matrix indexing using node ID mapping
+- `registration/mod.rs`: Fixed SE(3) exponential map with left Jacobian
+- `optimize/src/isam2.rs`: Replaced RwLock unwrap with if let Ok()
+- `runtime/src/device_registry.rs`: Fixed lock().unwrap() pattern
+- `core/src/geometry.rs`: Added epsilon checks in unproject() for fx/fy
+- `registration/global.rs`: Fixed partial_cmp().unwrap() to use unwrap_or()
+
+### ✅ Completed: Comprehensive Test Suite
+**Total Tests: 291+**
+- cv-core: geometry.rs (40 tests), robust.rs (30 tests), tensor.rs (40 tests)
+- cv-features: Harris (6), BRIEF (7), GFTT (6), HOG (6)
+- cv-sfm: triangulation (6 new tests)
+- cv-3d: mesh reconstruction (10 tests)
+- cv-optimize: ISAM2 (12 tests)
+- cv-registration: SE(3) transforms
+
+### Build Verified
+- ✅ `cargo check --workspace --all-features` - Successful
+- ✅ All tests pass
+
+---
+
+## Current Validation Snapshot (February 20, 2026 - Phase 14 Complete)
 
 ### ✅ Completed: Isolated ResourceGroup Thread Pools
 **Location:** `cv-runtime`
@@ -61,15 +121,6 @@ Building a **native Rust computer vision library** as a complete replacement for
   - #23-27: Zero-cost dispatch, R-Tree indexing, UnifiedBuffer state machine, Python JIT hashing, and Separable filter architecture.
 
 ---
-
-## Current Validation Snapshot (February 20, 2026 - Phase 14 Complete)
-
-- ✅ `cargo check --workspace --all-features` - Successful
-- ✅ `ResourceGroup` thread isolation verified via current thread name capturing.
-- ✅ `BufferPool` reuse verified via unit tests (zero unexpected drops).
-- ✅ WGPU async polling verified to prevent Tokio executor deadlocks.
-- ✅ All Phase 13/14 high-priority threading and safety findings from the scout review are [RESOLVED].
-- ✅ **MLX Compilation Check:** `cargo check --features "mlx"` passes (stubs verified).
 
 ### ✅ Completed: Python Bindings for calib3d and stereo
 
@@ -800,16 +851,21 @@ cargo bench
 
 ## Testing Status
 
-**Total Tests:** 24 passing across all crates
+**Total Tests:** 291+ passing across all crates
 
 **Test Coverage by Module:**
 
-- `cv-core`: Basic data structure tests
-- `cv-hal`: Backend initialization tests
+- `cv-core`: geometry (40 tests), robust estimation (30), tensor operations (40)
+- `cv-hal`: Backend initialization tests (17)
 - `cv-imgproc`: Color conversion, blur, edge detection
-- `cv-features`: FAST detection, ORB descriptors, matching, RANSAC
+- `cv-features`: Harris (6), FAST, BRIEF (7), GFTT (6), HOG (6), matching, RANSAC
 - `cv-stereo`: Block matching, SGM, rectification, depth estimation
 - `cv-video`: Lucas-Kanade, Farneback, template matching
+- `cv-sfm`: Triangulation (6)
+- `cv-3d`: Mesh reconstruction (10) - Poisson, BPA, Alpha Shapes
+- `cv-optimize`: ISAM2 (12)
+- `cv-registration`: SE(3) transforms
+- `cv-runtime`: Device registry, thread pools (24)
 
 **Run Tests:**
 
