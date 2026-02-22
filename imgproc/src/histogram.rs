@@ -10,8 +10,11 @@ pub fn compute_histogram(image: &GrayImage) -> [u32; 256] {
 }
 
 pub fn compute_histogram_normalized(image: &GrayImage) -> [f32; 256] {
-    let hist = compute_histogram(image);
     let total = image.width() * image.height();
+    if total == 0 {
+        return [0.0f32; 256];
+    }
+    let hist = compute_histogram(image);
     hist.map(|h| h as f32 / total as f32)
 }
 

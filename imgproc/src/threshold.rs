@@ -300,4 +300,100 @@ mod tests {
         let out = threshold(&img, 100, 255, ThresholdType::Binary);
         assert_eq!(out.as_raw(), &[0, 0, 0, 255]);
     }
+
+    #[test]
+    fn binary_inv_threshold() {
+        let mut img = GrayImage::new(4, 1);
+        for (i, v) in [50u8, 100, 150, 200].iter().enumerate() {
+            img.put_pixel(i as u32, 0, Luma([*v]));
+        }
+        let out = threshold(&img, 100, 255, ThresholdType::BinaryInv);
+        // > 100 → 0, <= 100 → 255
+        assert_eq!(out.as_raw(), &[255, 255, 0, 0]);
+    }
+
+    #[test]
+    fn trunc_threshold() {
+        let mut img = GrayImage::new(3, 1);
+        img.put_pixel(0, 0, Luma([50]));
+        img.put_pixel(1, 0, Luma([100]));
+        img.put_pixel(2, 0, Luma([200]));
+        let out = threshold(&img, 100, 255, ThresholdType::Trunc);
+        assert_eq!(out.as_raw(), &[50, 100, 100]);
+    }
+
+    #[test]
+    fn to_zero_threshold() {
+        let mut img = GrayImage::new(4, 1);
+        for (i, v) in [50u8, 100, 150, 200].iter().enumerate() {
+            img.put_pixel(i as u32, 0, Luma([*v]));
+        }
+        let out = threshold(&img, 100, 255, ThresholdType::ToZero);
+        assert_eq!(out.as_raw(), &[0, 0, 150, 200]);
+    }
+
+    #[test]
+    fn to_zero_inv_threshold() {
+        let mut img = GrayImage::new(4, 1);
+        for (i, v) in [50u8, 100, 150, 200].iter().enumerate() {
+            img.put_pixel(i as u32, 0, Luma([*v]));
+        }
+        let out = threshold(&img, 100, 255, ThresholdType::ToZeroInv);
+        assert_eq!(out.as_raw(), &[50, 100, 0, 0]);
+    }
+
+    #[test]
+    fn threshold_custom_max_value() {
+        let mut img = GrayImage::new(2, 1);
+        img.put_pixel(0, 0, Luma([50]));
+        img.put_pixel(1, 0, Luma([200]));
+        let out = threshold(&img, 100, 128, ThresholdType::Binary);
+        assert_eq!(out.as_raw(), &[0, 128]);
+    }
+
+    #[test]
+    fn threshold_1x1_image() {
+        let mut img = GrayImage::new(1, 1);
+        img.put_pixel(0, 0, Luma([150]));
+        let out = threshold(&img, 100, 255, ThresholdType::Binary);
+        assert_eq!(out.as_raw(), &[255]);
+    }
+
+    #[test]
+    fn otsu_bimodal_picks_correct_threshold() {
+        let mut img = GrayImage::new(20, 1);
+        for x in 0..10 { img.put_pixel(x, 0, Luma([50])); }
+        for x in 10..20 { img.put_pixel(x, 0, Luma([200])); }
+        let (thresh, result) = threshold_otsu(&img, 255, ThresholdType::Binary);
+        // Verify the result properly segments the bimodal histogram
+        assert!(thresh >= 50 && thresh <= 200, "threshold should be in reasonable range: {}", thresh);
+        // Check segmentation correctness - lower group should map to 0, upper to 255
+        let mut lower_count_zero = 0;
+        let mut upper_count_255 = 0;
+        for x in 0..10 { if result.get_pixel(x, 0)[0] == 0 { lower_count_zero += 1; } }
+        for x in 10..20 { if result.get_pixel(x, 0)[0] == 255 { upper_count_255 += 1; } }
+        assert!(lower_count_zero >= 5, "most lower pixels should be 0");
+        assert!(upper_count_255 >= 5, "most upper pixels should be 255");
+    }
+
+    #[test]
+    fn otsu_uniform_image_no_panic() {
+        let img = GrayImage::from_pixel(10, 10, Luma([128u8]));
+        let (_, result) = threshold_otsu(&img, 255, ThresholdType::Binary);
+        assert_eq!(result.width(), 10);
+    }
+
+    #[test]
+    fn adaptive_mean_correct_dimensions() {
+        let img = GrayImage::new(20, 20);
+        let result = adaptive_threshold(&img, 255, AdaptiveMethod::MeanC, ThresholdType::Binary, 5, 0.0);
+        assert_eq!((result.width(), result.height()), (20, 20));
+    }
+
+    #[test]
+    fn adaptive_gaussian_correct_dimensions() {
+        let img = GrayImage::new(20, 20);
+        let result = adaptive_threshold(&img, 255, AdaptiveMethod::GaussianC, ThresholdType::Binary, 5, 0.0);
+        assert_eq!((result.width(), result.height()), (20, 20));
+    }
 }
