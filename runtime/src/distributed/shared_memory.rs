@@ -124,19 +124,45 @@ impl ShmCoordinator {
         }
     }
 
+    /// Get the header from the mmap with bounds validation.
+    ///
+    /// # Safety
+    /// The mmap must be at least as large as `size_of::<ShmHeader>()`.
     fn header_mut(mmap: &mut memmap2::MmapMut) -> &mut ShmHeader {
+        let header_size = std::mem::size_of::<ShmHeader>();
+        debug_assert!(
+            mmap.len() >= header_size,
+            "Mmap too small for header: {} < {}",
+            mmap.len(),
+            header_size
+        );
         unsafe { &mut *(mmap.as_mut_ptr() as *mut ShmHeader) }
+    }
+
+    /// Get a slot at the given index with bounds validation (mutable mmap).
+    ///
+    /// # Safety
+    /// The mmap must be large enough to contain the slot at the given index.
+    fn get_slot_mut_at(mmap: &mut memmap2::MmapMut, index: usize) -> Option<&mut LoadSlot> {
+        let header_size = std::mem::size_of::<ShmHeader>();
+        let slot_size = std::mem::size_of::<LoadSlot>();
+        let offset = header_size.checked_add(index.checked_mul(slot_size)?)?;
+
+        if offset + slot_size > mmap.len() {
+            return None;
+        }
+
+        Some(unsafe { &mut *(mmap.as_mut_ptr().add(offset) as *mut LoadSlot) })
     }
 
     fn find_or_allocate_slot(mmap: &mut memmap2::MmapMut, pid: u32) -> io::Result<usize> {
         let header = Self::header_mut(mmap);
         let num_slots = header.num_slots.load(Ordering::Relaxed) as usize;
-        let header_size = std::mem::size_of::<ShmHeader>();
-        let slot_size = std::mem::size_of::<LoadSlot>();
 
         for i in 0..num_slots.min(MAX_PROCESSES) {
-            let offset = header_size + i * slot_size;
-            let slot = unsafe { &mut *(mmap.as_mut_ptr().add(offset) as *mut LoadSlot) };
+            let slot = Self::get_slot_mut_at(mmap, i).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Other, "Invalid slot offset in shared memory")
+            })?;
 
             let slot_pid = slot.pid.load(Ordering::Relaxed);
 
@@ -163,10 +189,19 @@ impl ShmCoordinator {
         ))
     }
 
+    /// Get the slot at the stored index with bounds validation.
     fn get_slot(&self) -> &LoadSlot {
         let header_size = std::mem::size_of::<ShmHeader>();
         let slot_size = std::mem::size_of::<LoadSlot>();
         let offset = header_size + self.slot_index * slot_size;
+
+        debug_assert!(
+            offset + slot_size <= self.mmap.len(),
+            "Slot offset out of bounds: {} + {} > {}",
+            offset,
+            slot_size,
+            self.mmap.len()
+        );
 
         unsafe { &*(self.mmap.as_ptr().add(offset) as *const LoadSlot) }
     }
@@ -189,6 +224,31 @@ impl ShmCoordinator {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64
+    }
+
+    /// Get the header from the mmap (read-only) with bounds validation.
+    fn header(&self) -> &ShmHeader {
+        let header_size = std::mem::size_of::<ShmHeader>();
+        debug_assert!(
+            self.mmap.len() >= header_size,
+            "Mmap too small for header: {} < {}",
+            self.mmap.len(),
+            header_size
+        );
+        unsafe { &*(self.mmap.as_ptr() as *const ShmHeader) }
+    }
+
+    /// Get a slot at the given index (read-only) with bounds validation.
+    fn get_slot_at(&self, index: usize) -> Option<&LoadSlot> {
+        let header_size = std::mem::size_of::<ShmHeader>();
+        let slot_size = std::mem::size_of::<LoadSlot>();
+        let offset = header_size.checked_add(index.checked_mul(slot_size)?)?;
+
+        if offset + slot_size > self.mmap.len() {
+            return None;
+        }
+
+        Some(unsafe { &*(self.mmap.as_ptr().add(offset) as *const LoadSlot) })
     }
 }
 
@@ -221,14 +281,13 @@ impl LoadCoordinator for ShmCoordinator {
         let now = Self::current_timestamp();
         let stale_timeout = 30_000u64;
 
-        let header = unsafe { &*(self.mmap.as_ptr() as *const ShmHeader) };
+        let header = self.header();
         let num_slots = header.num_slots.load(Ordering::Relaxed) as usize;
-        let header_size = std::mem::size_of::<ShmHeader>();
-        let slot_size = std::mem::size_of::<LoadSlot>();
 
         for i in 0..num_slots {
-            let offset = header_size + i * slot_size;
-            let slot = unsafe { &*(self.mmap.as_ptr().add(offset) as *const LoadSlot) };
+            let Some(slot) = self.get_slot_at(i) else {
+                continue;
+            };
 
             let slot_pid = slot.pid.load(Ordering::Relaxed);
             if slot_pid == 0 {

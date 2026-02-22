@@ -45,7 +45,7 @@ pub fn voxel_down_sample(pc: &PointCloud, voxel_size: f32) -> PointCloud {
     let mut new_points = Vec::new();
     let has_colors = pc.colors.is_some();
     let has_normals = pc.normals.is_some();
-    
+
     let mut new_colors = if has_colors { Some(Vec::new()) } else { None };
     let mut new_normals = if has_normals { Some(Vec::new()) } else { None };
 
@@ -64,7 +64,7 @@ pub fn voxel_down_sample(pc: &PointCloud, voxel_size: f32) -> PointCloud {
             // Push previous voxel
             let factor = 1.0 / count as f32;
             new_points.push(Point3::from(sum_p * factor));
-            
+
             if let Some(nc) = &mut new_colors {
                 nc.push(Point3::from(sum_c * factor));
             }
@@ -102,7 +102,7 @@ pub fn voxel_down_sample(pc: &PointCloud, voxel_size: f32) -> PointCloud {
     if count > 0 {
         let factor = 1.0 / count as f32;
         new_points.push(Point3::from(sum_p * factor));
-        
+
         if let Some(nc) = &mut new_colors {
             nc.push(Point3::from(sum_c * factor));
         }
@@ -615,7 +615,7 @@ pub fn remove_radius_outliers(
     )
 }
 
-use cv_core::{RobustModel, RobustConfig, Ransac};
+use cv_core::{Ransac, RobustConfig, RobustModel};
 
 pub struct PlaneEstimator;
 
@@ -780,124 +780,143 @@ pub fn compute_fpfh_feature(pc: &PointCloud, search_radius: f32) -> Option<Vec<[
     let r2 = search_radius * search_radius;
 
     // 1. Compute SPFH (Simplified Point Feature Histograms)
-    let spfh: Vec<[f32; 33]> = (0..n_points).into_par_iter().map(|i| {
-        let p = pc.points[i];
-        let n = normals[i];
-        let query_point = [p.x, p.y, p.z];
-        
-        // Find neighbors
-        let neighbors: Vec<&PointWrapper> = tree
-            .locate_within_distance(query_point, r2)
-            .collect();
-        
-        if neighbors.len() <= 1 {
-            return [0.0; 33];
-        }
+    let spfh: Vec<[f32; 33]> = (0..n_points)
+        .into_par_iter()
+        .map(|i| {
+            let p = pc.points[i];
+            let n = normals[i];
+            let query_point = [p.x, p.y, p.z];
 
-        let mut hist = [0.0; 33]; // 11 bins for alpha, 11 for phi, 11 for theta
-        let mut count = 0;
+            // Find neighbors
+            let neighbors: Vec<&PointWrapper> =
+                tree.locate_within_distance(query_point, r2).collect();
 
-        for nb in neighbors {
-            let j = nb.0;
-            if i == j { continue; }
-            
-            let p_j = pc.points[j];
-            let n_j = normals[j];
-            
-            let (alpha, phi, theta) = compute_pair_features(&p, &n, &p_j, &n_j);
-            
-            // Binning: assume ranges.
-            // alpha: [-1, 1] -> cos angle. 
-            // phi: [-1, 1]
-            // theta: [-PI, PI]
-            
-            let bin_alpha = ((alpha + 1.0) * 5.5).floor().clamp(0.0, 10.0) as usize;
-            let bin_phi = ((phi + 1.0) * 5.5).floor().clamp(0.0, 10.0) as usize;
-            let bin_theta = ((theta + std::f32::consts::PI) * (11.0 / (2.0 * std::f32::consts::PI))).floor().clamp(0.0, 10.0) as usize;
-            
-            hist[bin_alpha] += 1.0;
-            hist[11 + bin_phi] += 1.0;
-            hist[22 + bin_theta] += 1.0;
-            count += 1;
-        }
-        
-        if count > 0 {
-            let inv_k = 1.0 / count as f32;
-            for val in &mut hist { *val *= inv_k; }
-        }
-        hist
-    }).collect();
+            if neighbors.len() <= 1 {
+                return [0.0; 33];
+            }
+
+            let mut hist = [0.0; 33]; // 11 bins for alpha, 11 for phi, 11 for theta
+            let mut count = 0;
+
+            for nb in neighbors {
+                let j = nb.0;
+                if i == j {
+                    continue;
+                }
+
+                let p_j = pc.points[j];
+                let n_j = normals[j];
+
+                let (alpha, phi, theta) = compute_pair_features(&p, &n, &p_j, &n_j);
+
+                // Binning: assume ranges.
+                // alpha: [-1, 1] -> cos angle.
+                // phi: [-1, 1]
+                // theta: [-PI, PI]
+
+                let bin_alpha = ((alpha + 1.0) * 5.5).floor().clamp(0.0, 10.0) as usize;
+                let bin_phi = ((phi + 1.0) * 5.5).floor().clamp(0.0, 10.0) as usize;
+                let bin_theta = ((theta + std::f32::consts::PI)
+                    * (11.0 / (2.0 * std::f32::consts::PI)))
+                    .floor()
+                    .clamp(0.0, 10.0) as usize;
+
+                hist[bin_alpha] += 1.0;
+                hist[11 + bin_phi] += 1.0;
+                hist[22 + bin_theta] += 1.0;
+                count += 1;
+            }
+
+            if count > 0 {
+                let inv_k = 1.0 / count as f32;
+                for val in &mut hist {
+                    *val *= inv_k;
+                }
+            }
+            hist
+        })
+        .collect();
 
     // 2. Compute FPFH (Weighted sum of neighbors' SPFH)
-    let fpfh: Vec<[f32; 33]> = (0..n_points).into_par_iter().map(|i| {
-        let p = pc.points[i];
-        let query_point = [p.x, p.y, p.z];
-        
-        let neighbors: Vec<&PointWrapper> = tree
-            .locate_within_distance(query_point, r2)
-            .collect();
-            
-        if neighbors.len() <= 1 {
-            return spfh[i];
-        }
+    let fpfh: Vec<[f32; 33]> = (0..n_points)
+        .into_par_iter()
+        .map(|i| {
+            let p = pc.points[i];
+            let query_point = [p.x, p.y, p.z];
 
-        let mut final_hist = spfh[i]; // Start with own SPFH
-        let k = neighbors.len() - 1; // excluding self
-        let weight = 1.0 / k as f32;
+            let neighbors: Vec<&PointWrapper> =
+                tree.locate_within_distance(query_point, r2).collect();
 
-        for nb in neighbors {
-            let j = nb.0;
-            if i == j { continue; }
-            
-            let dist = (p - pc.points[j]).norm();
-            if dist < 1e-6 { continue; }
-            
-            let w = weight / dist; // Simple weighting
-            
-            for k in 0..33 {
-                final_hist[k] += spfh[j][k] * w;
+            if neighbors.len() <= 1 {
+                return spfh[i];
             }
-        }
-        
-        // Normalize again? FPFH usually normalized to sum to 100 or 1.
-        // Simple normalization
-        let sum: f32 = final_hist.iter().sum();
-        if sum > 1e-6 {
-            let scale = 100.0 / sum;
-            for val in &mut final_hist { *val *= scale; }
-        }
-        
-        final_hist
-    }).collect();
+
+            let mut final_hist = spfh[i]; // Start with own SPFH
+            let k = neighbors.len() - 1; // excluding self
+            let weight = 1.0 / k as f32;
+
+            for nb in neighbors {
+                let j = nb.0;
+                if i == j {
+                    continue;
+                }
+
+                let dist = (p - pc.points[j]).norm();
+                if dist < 1e-6 {
+                    continue;
+                }
+
+                let w = weight / dist; // Simple weighting
+
+                for k in 0..33 {
+                    final_hist[k] += spfh[j][k] * w;
+                }
+            }
+
+            // Normalize again? FPFH usually normalized to sum to 100 or 1.
+            // Simple normalization
+            let sum: f32 = final_hist.iter().sum();
+            if sum > 1e-6 {
+                let scale = 100.0 / sum;
+                for val in &mut final_hist {
+                    *val *= scale;
+                }
+            }
+
+            final_hist
+        })
+        .collect();
 
     Some(fpfh)
 }
 
 fn compute_pair_features(
-    p1: &Point3<f32>, n1: &Vector3<f32>,
-    p2: &Point3<f32>, n2: &Vector3<f32>
+    p1: &Point3<f32>,
+    n1: &Vector3<f32>,
+    p2: &Point3<f32>,
+    n2: &Vector3<f32>,
 ) -> (f32, f32, f32) {
     let delta = p2 - p1;
     let dist = delta.norm();
-    
+
     if dist < 1e-6 {
         return (0.0, 0.0, 0.0);
     }
-    
+
     let u = n1;
     let v = delta.cross(u);
     let v_norm = v.norm();
-    
+
     if v_norm < 1e-6 {
         return (0.0, 0.0, 0.0);
     }
     let v = v / v_norm;
     let w = u.cross(&v);
-    
+
     let alpha = v.dot(n2);
     let phi = u.dot(&delta) / dist;
     let theta = w.dot(n2).atan2(u.dot(n2));
-    
+
     (alpha, phi, theta)
 }
 

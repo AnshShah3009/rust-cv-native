@@ -173,7 +173,10 @@ impl Akaze {
                     }
                 }
             }
-            ComputeDevice::Mlx(_) => todo!("AKAZE evolution not implemented for MLX"),
+            ComputeDevice::Mlx(_) => {
+                eprintln!("Warning: AKAZE evolution not implemented for MLX backend, returning empty evolution");
+                return evolution;
+            }
         }
 
         evolution

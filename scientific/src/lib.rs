@@ -46,10 +46,10 @@ pub mod special;
 pub enum Error {
     #[error("Decomposition failed: {0}")]
     DecompositionError(String),
-    
+
     #[error("Invalid input: {0}")]
     InvalidInput(String),
-    
+
     #[error("Mathematical error: {0}")]
     MathError(String),
 
@@ -111,9 +111,23 @@ impl Interp1d {
 
         let idx = self
             .x
-            .binary_search_by(|v| v.partial_cmp(&x_val).expect("NaN in Interp1d"))
+            .binary_search_by(|v| {
+                v.partial_cmp(&x_val).unwrap_or_else(|| {
+                    if v.is_nan() {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Greater
+                    }
+                })
+            })
             .unwrap_or_else(|pos| pos - 1);
-        let t = (x_val - self.x[idx]) / (self.x[idx + 1] - self.x[idx]);
+
+        let denominator = self.x[idx + 1] - self.x[idx];
+        let t = if denominator.abs() < 1e-10 {
+            0.5
+        } else {
+            (x_val - self.x[idx]) / denominator
+        };
         lerp(self.y[idx], self.y[idx + 1], t)
     }
 }

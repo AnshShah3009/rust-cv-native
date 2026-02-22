@@ -17,12 +17,14 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
     // 1. Flatten and pad matrix to square n x n
     let mut matrix = vec![0.0; n * n];
     let mut max_val = 0.0;
-    
+
     // Find max value for padding
     for r in 0..rows {
         for c in 0..cols {
             let val = cost_matrix[r][c];
-            if val > max_val { max_val = val; }
+            if val > max_val {
+                max_val = val;
+            }
         }
     }
 
@@ -84,17 +86,21 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
                     }
                 }
                 for c in 0..n {
-                    if col_covered[c] { count += 1; }
+                    if col_covered[c] {
+                        count += 1;
+                    }
                 }
-                
-                if count >= n { break; } // Done
+
+                if count >= n {
+                    break;
+                } // Done
                 step = 4;
             }
             4 => {
                 // Step 4: Find a non-covered zero and prime it
                 if let Some((r, c)) = find_uncovered_zero(&matrix, &row_covered, &col_covered, n) {
                     mask[r * n + c] = 2; // Prime it
-                    
+
                     // If there is a starred zero in this row
                     if let Some(star_c) = find_star_in_row(&mask, r, n) {
                         row_covered[r] = true;
@@ -113,9 +119,9 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
                 // Step 5: Construct series of alternating primed and starred zeros
                 let mut path = Vec::with_capacity(n);
                 path.push(prime_rc);
-                
+
                 let mut curr_c = prime_rc.1;
-                
+
                 loop {
                     // Find starred zero in current column
                     if let Some(r) = find_star_in_col(&mask, curr_c, n) {
@@ -125,7 +131,7 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
                             path.push((r, c));
                             curr_c = c;
                         } else {
-                            break; 
+                            break;
                         }
                     } else {
                         break;
@@ -145,9 +151,11 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
                 row_covered.fill(false);
                 col_covered.fill(false);
                 for i in 0..mask.len() {
-                    if mask[i] == 2 { mask[i] = 0; }
+                    if mask[i] == 2 {
+                        mask[i] = 0;
+                    }
                 }
-                
+
                 step = 3;
             }
             6 => {
@@ -163,8 +171,12 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
 
                 for r in 0..n {
                     for c in 0..n {
-                        if row_covered[r] { matrix[r * n + c] += min_val; }
-                        if !col_covered[c] { matrix[r * n + c] -= min_val; }
+                        if row_covered[r] {
+                            matrix[r * n + c] += min_val;
+                        }
+                        if !col_covered[c] {
+                            matrix[r * n + c] -= min_val;
+                        }
                     }
                 }
                 step = 4;
@@ -186,7 +198,9 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
 
 fn find_uncovered_zero(m: &[f64], rc: &[bool], cc: &[bool], n: usize) -> Option<(usize, usize)> {
     for r in 0..n {
-        if rc[r] { continue; }
+        if rc[r] {
+            continue;
+        }
         for c in 0..n {
             if !cc[c] && m[r * n + c].abs() < 1e-9 {
                 return Some((r, c));
@@ -198,21 +212,27 @@ fn find_uncovered_zero(m: &[f64], rc: &[bool], cc: &[bool], n: usize) -> Option<
 
 fn find_star_in_row(mask: &[u8], r: usize, n: usize) -> Option<usize> {
     for c in 0..n {
-        if mask[r * n + c] == 1 { return Some(c); }
+        if mask[r * n + c] == 1 {
+            return Some(c);
+        }
     }
     None
 }
 
 fn find_star_in_col(mask: &[u8], c: usize, n: usize) -> Option<usize> {
     for r in 0..n {
-        if mask[r * n + c] == 1 { return Some(r); }
+        if mask[r * n + c] == 1 {
+            return Some(r);
+        }
     }
     None
 }
 
 fn find_prime_in_row(mask: &[u8], r: usize, n: usize) -> Option<usize> {
     for c in 0..n {
-        if mask[r * n + c] == 2 { return Some(c); }
+        if mask[r * n + c] == 2 {
+            return Some(c);
+        }
     }
     None
 }
@@ -230,7 +250,7 @@ mod tests {
         ];
         let matches = hungarian_matching(&cost);
         assert_eq!(matches.len(), 3);
-        
+
         let mut total_cost = 0.0;
         for (r, c) in matches {
             total_cost += cost[r][c];

@@ -283,19 +283,67 @@ pub fn detect_and_compute_ctx<S: Storage<u8> + 'static>(
 
         // Ensure input is on GPU
         let temp_input;
-        let input_gpu =
-            if let Some(gpu_storage) = image.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-                temp_input = Tensor {
-                    storage: gpu_storage.clone(),
+        let owned_input;
+        let input_gpu = if let Some(gpu_storage) =
+            image.storage.as_any().downcast_ref::<GpuStorage<u8>>()
+        {
+            temp_input = Tensor {
+                storage: gpu_storage.clone(),
+                shape: image.shape,
+                dtype: image.dtype,
+                _phantom: std::marker::PhantomData,
+            };
+            &temp_input
+        } else {
+            use cv_core::storage::CpuStorage;
+            use cv_hal::tensor_ext::TensorToGpu;
+
+            let cpu_tensor = if let Some(cpu_storage) =
+                image.storage.as_any().downcast_ref::<CpuStorage<u8>>()
+            {
+                Tensor {
+                    storage: cpu_storage.clone(),
                     shape: image.shape,
                     dtype: image.dtype,
                     _phantom: std::marker::PhantomData,
-                };
-                &temp_input
+                }
             } else {
-                // This case should be rare, but we handle it
-                unimplemented!("Auto-migration to GPU in orb.rs not yet optimized");
+                eprintln!("Warning: Auto-migration to GPU from non-CPU storage not supported, results may be empty");
+                return (
+                    KeyPoints {
+                        keypoints: Vec::new(),
+                    },
+                    Descriptors {
+                        descriptors: Vec::new(),
+                    },
+                );
             };
+
+            match cpu_tensor.to_gpu_ctx(gpu) {
+                Ok(gpu_tensor) => {
+                    owned_input = gpu_tensor;
+                    &owned_input
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to upload tensor to GPU: {}, falling back to CPU",
+                        e
+                    );
+                    let mut keypoints = orb.detect_ctx(ctx, image);
+                    let cpu_img_tensor = convert_to_cpu_image(ctx, image);
+                    let (h, w) = cpu_img_tensor.shape.hw();
+                    let gray = image::GrayImage::from_raw(
+                        w as u32,
+                        h as u32,
+                        cpu_img_tensor.storage.as_slice().unwrap_or(&[]).to_vec(),
+                    )
+                    .unwrap_or_else(|| image::GrayImage::new(w as u32, h as u32));
+                    orb.compute_orientations(&gray, &mut keypoints);
+                    let descriptors = orb.extract(&gray, &keypoints);
+                    return (keypoints, descriptors);
+                }
+            }
+        };
 
         // 1. Build Pyramid
         let pyramid =
