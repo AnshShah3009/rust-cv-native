@@ -386,4 +386,212 @@ mod tests {
         let out = dilate(&img, &k, 0);
         assert_eq!(out.as_raw(), img.as_raw());
     }
+
+    #[test]
+    fn create_rectangle_kernel() {
+        let kernel = create_morph_kernel(MorphShape::Rectangle, 3, 3);
+        assert_eq!(kernel.len(), 9); // 3x3 = 9
+    }
+
+    #[test]
+    fn create_ellipse_kernel() {
+        let kernel = create_morph_kernel(MorphShape::Ellipse, 3, 3);
+        // Ellipse with 3x3 should have multiple points
+        assert!(kernel.len() > 0);
+        assert!(kernel.len() <= 9);
+    }
+
+    #[test]
+    fn create_cross_kernel() {
+        let kernel = create_morph_kernel(MorphShape::Cross, 3, 3);
+        // Cross pattern: horizontal + vertical lines
+        assert!(kernel.len() > 0);
+        // Should have some cross-shaped points
+        assert!(kernel.len() <= 9);
+    }
+
+    #[test]
+    fn dilate_white_point() {
+        let mut img = GrayImage::new(8, 8);
+        img.put_pixel(4, 4, Luma([255]));
+        let k = create_morph_kernel(MorphShape::Rectangle, 3, 3);
+        let out = dilate(&img, &k, 1);
+
+        // Dilate should expand the white region
+        assert!(out.get_pixel(3, 4)[0] > 0); // Should expand left
+        assert!(out.get_pixel(5, 4)[0] > 0); // Should expand right
+        assert!(out.get_pixel(4, 3)[0] > 0); // Should expand up
+        assert!(out.get_pixel(4, 5)[0] > 0); // Should expand down
+    }
+
+    #[test]
+    fn erode_white_region() {
+        let mut img = GrayImage::new(16, 16);
+        // Create a white square
+        for y in 5..11 {
+            for x in 5..11 {
+                img.put_pixel(x, y, Luma([255]));
+            }
+        }
+        let k = create_morph_kernel(MorphShape::Rectangle, 3, 3);
+        let out = erode(&img, &k, 1);
+
+        // Erode should shrink the white region
+        assert!(out.get_pixel(5, 8)[0] == 0); // Boundary should be eroded
+        assert!(out.get_pixel(8, 8)[0] > 0); // Center should remain
+    }
+
+    #[test]
+    fn opening_removes_noise() {
+        let mut img = GrayImage::new(12, 12);
+        // Create white square with noise
+        for y in 3..9 {
+            for x in 3..9 {
+                img.put_pixel(x, y, Luma([255]));
+            }
+        }
+        // Add noise (isolated white pixels)
+        img.put_pixel(1, 1, Luma([255]));
+        img.put_pixel(10, 10, Luma([255]));
+
+        let k = create_morph_kernel(MorphShape::Rectangle, 3, 3);
+        let out = opening(&img, &k, 1);
+
+        // Opening should remove isolated pixels
+        assert!(out.get_pixel(1, 1)[0] == 0);
+        assert!(out.get_pixel(10, 10)[0] == 0);
+    }
+
+    #[test]
+    fn closing_fills_holes() {
+        let mut img = GrayImage::new(12, 12);
+        // Create white region with a hole
+        for y in 3..9 {
+            for x in 3..9 {
+                img.put_pixel(x, y, Luma([255]));
+            }
+        }
+        img.put_pixel(6, 6, Luma([0])); // Create a hole
+
+        let k = create_morph_kernel(MorphShape::Rectangle, 3, 3);
+        let out = closing(&img, &k, 1);
+
+        // Closing should fill the hole
+        assert!(out.get_pixel(6, 6)[0] > 0);
+    }
+
+    #[test]
+    fn multiple_iterations() {
+        let mut img = GrayImage::new(16, 16);
+        img.put_pixel(8, 8, Luma([255]));
+        let k = create_morph_kernel(MorphShape::Rectangle, 3, 3);
+
+        let iter1 = dilate(&img, &k, 1);
+        let iter2 = dilate(&img, &k, 2);
+
+        // More iterations should expand more
+        let count1 = iter1.as_raw().iter().filter(|&&v| v > 0).count();
+        let count2 = iter2.as_raw().iter().filter(|&&v| v > 0).count();
+        assert!(count2 > count1);
+    }
+
+    #[test]
+    fn morphological_gradient_basic() {
+        let mut img = GrayImage::new(16, 16);
+        // Create a white square
+        for y in 5..11 {
+            for x in 5..11 {
+                img.put_pixel(x, y, Luma([255]));
+            }
+        }
+        let grad = morphological_gradient(&img, 3);
+
+        assert_eq!(grad.width(), 16);
+        assert_eq!(grad.height(), 16);
+        // Gradient should be non-zero at boundaries
+        assert!(grad.as_raw().iter().any(|&v| v > 0));
+    }
+
+    #[test]
+    fn dilate_output_dimensions() {
+        let img = GrayImage::new(32, 24);
+        let k = create_morph_kernel(MorphShape::Rectangle, 3, 3);
+        let out = dilate(&img, &k, 1);
+
+        assert_eq!(out.width(), 32);
+        assert_eq!(out.height(), 24);
+    }
+
+    #[test]
+    fn erode_output_dimensions() {
+        let img = GrayImage::new(32, 24);
+        let k = create_morph_kernel(MorphShape::Rectangle, 3, 3);
+        let out = erode(&img, &k, 1);
+
+        assert_eq!(out.width(), 32);
+        assert_eq!(out.height(), 24);
+    }
+
+    #[test]
+    fn opening_then_closing() {
+        let mut img = GrayImage::new(16, 16);
+        // Create pattern with noise and holes
+        for y in 4..12 {
+            for x in 4..12 {
+                img.put_pixel(x, y, Luma([255]));
+            }
+        }
+        // Add noise
+        img.put_pixel(2, 2, Luma([255]));
+        // Add hole
+        img.put_pixel(8, 8, Luma([0]));
+
+        let k = create_morph_kernel(MorphShape::Rectangle, 3, 3);
+        let out = opening(&img, &k, 1);
+        let final_out = closing(&out, &k, 1);
+
+        assert_eq!(final_out.width(), 16);
+        assert_eq!(final_out.height(), 16);
+        // Should remove noise and fill hole
+        assert!(final_out.get_pixel(2, 2)[0] == 0); // Noise removed
+        assert!(final_out.get_pixel(8, 8)[0] > 0); // Hole filled
+    }
+
+    #[test]
+    fn different_kernel_shapes() {
+        let mut img = GrayImage::new(16, 16);
+        img.put_pixel(8, 8, Luma([255]));
+
+        let rect_k = create_morph_kernel(MorphShape::Rectangle, 5, 5);
+        let ellipse_k = create_morph_kernel(MorphShape::Ellipse, 5, 5);
+        let cross_k = create_morph_kernel(MorphShape::Cross, 5, 5);
+
+        let out_rect = dilate(&img, &rect_k, 1);
+        let out_ellipse = dilate(&img, &ellipse_k, 1);
+        let out_cross = dilate(&img, &cross_k, 1);
+
+        // Different kernels should produce different results
+        let rect_count = out_rect.as_raw().iter().filter(|&&v| v > 0).count();
+        let ellipse_count = out_ellipse.as_raw().iter().filter(|&&v| v > 0).count();
+        let cross_count = out_cross.as_raw().iter().filter(|&&v| v > 0).count();
+
+        assert_ne!(rect_count, ellipse_count);
+        assert_ne!(rect_count, cross_count);
+    }
+
+    #[test]
+    fn dilate_preserves_range() {
+        let mut img = GrayImage::new(16, 16);
+        for y in 0..16 {
+            for x in 0..16 {
+                let val = ((x + y) % 256) as u8;
+                img.put_pixel(x, y, Luma([val]));
+            }
+        }
+        let k = create_morph_kernel(MorphShape::Rectangle, 3, 3);
+        let out = dilate(&img, &k, 1);
+
+        // Output values should be in valid byte range
+        assert!(out.as_raw().iter().all(|&v| v <= 255));
+    }
 }

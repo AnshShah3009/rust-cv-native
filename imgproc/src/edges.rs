@@ -483,4 +483,171 @@ mod tests {
         assert!(gx.as_raw().iter().all(|&v| v == 0));
         assert!(gy.as_raw().iter().all(|&v| v == 0));
     }
+
+    #[test]
+    fn sobel_vertical_edge() {
+        let mut img = GrayImage::new(16, 16);
+        // Left half: black, right half: white
+        for y in 0..16 {
+            for x in 0..16 {
+                let val = if x < 8 { 0u8 } else { 255u8 };
+                img.put_pixel(x, y, Luma([val]));
+            }
+        }
+        let (gx, _gy) = sobel(&img);
+        // X-gradient should be high at vertical edges
+        assert!(gx.get_pixel(8, 8)[0] > 100);
+    }
+
+    #[test]
+    fn sobel_horizontal_edge() {
+        let mut img = GrayImage::new(16, 16);
+        // Top half: black, bottom half: white
+        for y in 0..16 {
+            for x in 0..16 {
+                let val = if y < 8 { 0u8 } else { 255u8 };
+                img.put_pixel(x, y, Luma([val]));
+            }
+        }
+        let (_gx, gy) = sobel(&img);
+        // Y-gradient should be high at horizontal edges
+        assert!(gy.get_pixel(8, 8)[0] > 100);
+    }
+
+    #[test]
+    fn sobel_magnitude_dimensions() {
+        let mut img = GrayImage::new(32, 32);
+        for y in 0..32 {
+            for x in 0..32 {
+                img.put_pixel(x, y, Luma([((x + y) % 256) as u8]));
+            }
+        }
+        let (gx, gy) = sobel(&img);
+        let mag = sobel_magnitude(&gx, &gy);
+
+        assert_eq!(mag.width(), 32);
+        assert_eq!(mag.height(), 32);
+    }
+
+    #[test]
+    fn sobel_magnitude_positive_values() {
+        let mut img = GrayImage::new(16, 16);
+        for y in 0..16 {
+            for x in 0..16 {
+                img.put_pixel(x, y, Luma([100]));
+            }
+        }
+        let (gx, gy) = sobel(&img);
+        let mag = sobel_magnitude(&gx, &gy);
+
+        // Constant image should have near-zero magnitude
+        assert!(mag.as_raw().iter().all(|&v| v < 10));
+    }
+
+    #[test]
+    fn laplacian_constant_image() {
+        let mut img = GrayImage::new(16, 16);
+        for y in 0..16 {
+            for x in 0..16 {
+                img.put_pixel(x, y, Luma([128]));
+            }
+        }
+        let lap = laplacian(&img);
+
+        // Laplacian of constant image should be zero
+        assert!(lap.as_raw().iter().all(|&v| v < 10));
+    }
+
+    #[test]
+    fn laplacian_edge_detection() {
+        let mut img = GrayImage::new(20, 20);
+        // Create a white square in the center
+        for y in 5..15 {
+            for x in 5..15 {
+                img.put_pixel(x, y, Luma([255]));
+            }
+        }
+        let lap = laplacian(&img);
+
+        // Laplacian should respond to edges
+        // Should detect some variation at the boundary
+        assert!(lap.as_raw().iter().any(|&v| v > 0));
+    }
+
+    #[test]
+    fn scharr_output_dimensions() {
+        let mut img = GrayImage::new(32, 24);
+        for y in 0..24 {
+            for x in 0..32 {
+                img.put_pixel(x, y, Luma([128]));
+            }
+        }
+        let (gx, gy) = scharr(&img);
+
+        assert_eq!(gx.width(), 32);
+        assert_eq!(gx.height(), 24);
+        assert_eq!(gy.width(), 32);
+        assert_eq!(gy.height(), 24);
+    }
+
+    #[test]
+    fn canny_basic() {
+        let mut img = GrayImage::new(32, 32);
+        // Create a white square
+        for y in 8..24 {
+            for x in 8..24 {
+                img.put_pixel(x, y, Luma([255]));
+            }
+        }
+        let edges = canny(&img, 50u8, 150u8);
+
+        assert_eq!(edges.width(), 32);
+        assert_eq!(edges.height(), 32);
+        // Should detect some edges
+        assert!(edges.as_raw().iter().any(|&v| v > 0));
+    }
+
+    #[test]
+    fn canny_uniform_image() {
+        let img = GrayImage::new(32, 32);
+        let edges = canny(&img, 50u8, 150u8);
+
+        // Uniform image should have no edges
+        assert!(edges.as_raw().iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn canny_threshold_effect() {
+        let mut img = GrayImage::new(32, 32);
+        for y in 8..24 {
+            for x in 8..24 {
+                img.put_pixel(x, y, Luma([255]));
+            }
+        }
+
+        let edges_low = canny(&img, 10u8, 50u8);
+        let edges_high = canny(&img, 100u8, 200u8);
+
+        // Lower threshold should detect more edges
+        let low_count = edges_low.as_raw().iter().filter(|&&v| v > 0).count();
+        let high_count = edges_high.as_raw().iter().filter(|&&v| v > 0).count();
+        assert!(low_count >= high_count);
+    }
+
+    #[test]
+    fn canny_various_sizes() {
+        for size in &[16, 32, 48, 64] {
+            let mut img = GrayImage::new(*size, *size);
+            for y in 0..*size {
+                for x in 0..*size {
+                    let val = if (x + y) % 2 == 0 { 0u8 } else { 255u8 };
+                    img.put_pixel(x, y, Luma([val]));
+                }
+            }
+            let edges = canny(&img, 50u8, 150u8);
+
+            assert_eq!(edges.width(), *size);
+            assert_eq!(edges.height(), *size);
+        }
+    }
 }
