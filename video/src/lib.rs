@@ -29,15 +29,17 @@ use image::GrayImage;
 pub mod optical_flow;
 /// Object tracking algorithms
 pub mod tracking;
-/// Kalman filter implementations
-pub mod kalman;
 /// Mixture of Gaussians background subtraction
 pub mod mog2;
 
 pub use optical_flow::*;
 pub use tracking::*;
-pub use kalman::*;
 pub use cv_core::{Error, Result};
+
+// Re-export from cv-core (Kalman is a general estimation primitive)
+pub use cv_core::kalman::{DynamicKalmanFilter, KalmanFilter, KalmanFilterState, ExtendedKalmanFilter};
+/// Backwards-compatible alias
+pub use cv_core::kalman as kalman;
 
 /// Backward compatibility alias for deprecated custom error type
 #[deprecated(
