@@ -131,18 +131,19 @@ pub fn recover_pose_from_essential(
     let mut best = None;
     let mut best_score = i32::MIN;
     for cand in candidates {
+        let rot_mat = cand.rotation_matrix();
         let p2 = Matrix3x4::new(
-            cand.rotation[(0, 0)],
-            cand.rotation[(0, 1)],
-            cand.rotation[(0, 2)],
+            rot_mat[(0, 0)],
+            rot_mat[(0, 1)],
+            rot_mat[(0, 2)],
             cand.translation[0],
-            cand.rotation[(1, 0)],
-            cand.rotation[(1, 1)],
-            cand.rotation[(1, 2)],
+            rot_mat[(1, 0)],
+            rot_mat[(1, 1)],
+            rot_mat[(1, 2)],
             cand.translation[1],
-            cand.rotation[(2, 0)],
-            cand.rotation[(2, 1)],
-            cand.rotation[(2, 2)],
+            rot_mat[(2, 0)],
+            rot_mat[(2, 1)],
+            rot_mat[(2, 2)],
             cand.translation[2],
         );
 

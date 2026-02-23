@@ -369,7 +369,7 @@ pub fn solve_pnp_refine_ctx(
 }
 
 fn extrinsics_to_params(ext: &Pose) -> [f64; 6] {
-    let r = Rotation3::from_matrix_unchecked(ext.rotation);
+    let r = Rotation3::from_matrix_unchecked(ext.rotation_matrix());
     let omega = r.scaled_axis();
     [
         omega[0],

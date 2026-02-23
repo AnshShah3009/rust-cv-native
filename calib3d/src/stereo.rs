@@ -96,7 +96,8 @@ pub fn stereo_calibrate_planar_with_options(
         let r_r = right.extrinsics[i].rotation;
         let t_r = right.extrinsics[i].translation;
 
-        let r_rel = r_r * r_l.transpose();
+        // Convert quaternion rotation to matrix for accumulation
+        let r_rel = (r_r * r_l.inverse()).to_rotation_matrix().into_inner();
         let t_rel = t_r - r_rel * t_l;
         r_sum += r_rel;
         t_sum += t_rel;

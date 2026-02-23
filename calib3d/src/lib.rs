@@ -279,7 +279,7 @@ mod tests {
         assert!(inlier_count >= 70);
 
         let t_err = (est.translation - gt.translation).norm();
-        let r_err = (est.rotation - gt.rotation).norm();
+        let r_err = est.rotation.angle_to(&gt.rotation).abs();
         assert!(t_err < 0.08);
         assert!(r_err < 0.08);
 
@@ -1110,7 +1110,6 @@ mod tests {
     // ========== Dataset-Backed Tests ==========
 
     #[test]
-    #[ignore]
     fn calibrate_camera_dataset_ground_truth_loading() {
         // Test that we can load ground truth calibration data
         let ground_truth = load_calibration_ground_truth();
@@ -1125,7 +1124,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn calibrate_camera_synthetic_validation_against_expected() {
         // Validate that synthetic calibration can match expected results
         // This uses synthetic data with known ground truth rather than real images

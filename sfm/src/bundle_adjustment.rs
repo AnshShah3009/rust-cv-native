@@ -1,5 +1,5 @@
 use cv_core::{Pose, CameraIntrinsics};
-use nalgebra::{DMatrix, DVector, Point2, Point3, Rotation3, Vector3};
+use nalgebra::{DMatrix, DVector, Point2, Point3, Rotation3, UnitQuaternion, Vector3};
 use rayon::prelude::*;
 use cv_runtime::orchestrator::{ResourceGroup, scheduler};
 
@@ -104,7 +104,7 @@ impl SfMState {
         let mut params = DVector::zeros(6 * n_cam + 3 * n_lm);
 
         for (i, cam) in self.cameras.iter().enumerate() {
-            let rotation = Rotation3::from_matrix_unchecked(cam.rotation);
+            let rotation = cam.rotation.to_rotation_matrix();
             let axis_angle = rotation.scaled_axis();
             params[6 * i + 0] = axis_angle.x;
             params[6 * i + 1] = axis_angle.y;
@@ -128,7 +128,7 @@ impl SfMState {
         let n_cam = self.cameras.len();
         for (i, cam) in self.cameras.iter_mut().enumerate() {
             let axis_angle = Vector3::new(params[6 * i], params[6 * i + 1], params[6 * i + 2]);
-            cam.rotation = Rotation3::new(axis_angle).into_inner();
+            cam.rotation = UnitQuaternion::new(axis_angle);
             cam.translation = Vector3::new(params[6 * i + 3], params[6 * i + 4], params[6 * i + 5]);
         }
 
@@ -474,10 +474,7 @@ mod tests {
     }
 
     fn create_test_pose(translation: Vector3<f64>) -> Pose {
-        Pose {
-            rotation: Matrix3::identity(),
-            translation,
-        }
+        Pose::new(Matrix3::identity(), translation)
     }
 
     #[test]

@@ -4,7 +4,8 @@
 //! relative constraints (loop closures).
 
 use cv_core::Pose;
-use cv_optimize::SparseLMSolver;
+use cv_optimize::pose_graph::{PoseGraph as OptimizePoseGraph};
+use nalgebra::Isometry3;
 
 pub struct PoseGraphEdge {
     pub from: usize,
@@ -36,15 +37,42 @@ impl PoseGraph {
         self.edges.push(PoseGraphEdge { from, to, relative_pose: rel, information: info });
     }
 
-    /// Optimize graph using Sparse LM
-    pub fn optimize(&mut self, _solver: &SparseLMSolver) {
-        // Trajectory refinement logic
-        // 1. Convert poses to 6D parameters
-        // 2. Compute residuals: log(rel_pose_est^-1 * rel_pose_obs)
-        // 3. Compute sparse Jacobian
-        // 4. Solve Sparse LM step
+    /// Optimize the pose graph using Gauss-Newton optimization
+    ///
+    /// Refines all camera poses to minimize reprojection error while respecting
+    /// loop closure constraints. The first pose is fixed as reference frame.
+    pub fn optimize(&mut self, iterations: usize) -> Result<f64, String> {
+        if self.poses.is_empty() {
+            return Ok(0.0);
+        }
 
-        // This is a placeholder for the complex graph optimization loop
+        // Convert slam poses to cv_optimize's Isometry3 representation
+        let mut opt_graph = OptimizePoseGraph::new();
+        for (i, pose) in self.poses.iter().enumerate() {
+            let iso = Isometry3::from(pose.clone());
+            opt_graph.add_node(i, iso);
+        }
+
+        // Fix first pose as reference (common in SLAM)
+        opt_graph.set_fixed(0);
+
+        // Add edges from constraints
+        for edge in &self.edges {
+            let iso_measurement = Isometry3::from(edge.relative_pose.clone());
+            opt_graph.add_edge(edge.from, edge.to, iso_measurement, edge.information);
+        }
+
+        // Run optimization
+        let final_error = opt_graph.optimize(iterations)?;
+
+        // Convert optimized poses back to cv_core::Pose
+        for (i, pose) in self.poses.iter_mut().enumerate() {
+            if let Some(optimized_iso) = opt_graph.nodes.get(&i) {
+                *pose = Pose::from(optimized_iso.clone());
+            }
+        }
+
+        Ok(final_error)
     }
 
     /// Get the number of poses in the graph

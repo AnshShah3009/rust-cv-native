@@ -1059,7 +1059,7 @@ impl Triangulator {
                 let dt = Vector3::new(delta[3], delta[4], delta[5]);
 
                 let d_rot = nalgebra::Rotation3::new(omega);
-                let next_rot = d_rot * nalgebra::Rotation3::from_matrix(&current_pose.rotation);
+                let next_rot = d_rot * current_pose.rotation.to_rotation_matrix();
                 let next_t = current_pose.translation - dt; // We solved J*delta = -r, so new = old + delta?
                                                             // Wait, typically J*delta = -r -> delta is step towards solution.
                                                             // My J was d(error)/d(param).  Actually J should be d(residual)/d(param).

@@ -175,7 +175,7 @@ pub fn project_points_with_jacobian(
 
     // Convert rotation matrix to axis-angle for Jacobian computation
     let rvec = if options.compute_jacobians {
-        Some(rotation_matrix_to_rodrigues(&extrinsics.rotation))
+        Some(rotation_matrix_to_rodrigues(&extrinsics.rotation_matrix()))
     } else {
         None
     };
@@ -319,10 +319,7 @@ fn compute_projection_jacobians(
         let mut rvec_pert = *rvec;
         rvec_pert[k] += eps;
         let r_pert = rodrigues_to_rotation_matrix(&rvec_pert);
-        let ext_pert = Pose {
-            rotation: r_pert,
-            translation: extrinsics.translation,
-        };
+        let ext_pert = Pose::new(r_pert, extrinsics.translation);
 
         let p_cam_pert = ext_pert.rotation * p_obj.coords + ext_pert.translation;
         let x_pert = p_cam_pert[0] / p_cam_pert[2];

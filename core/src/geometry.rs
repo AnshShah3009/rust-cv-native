@@ -667,6 +667,127 @@ impl Default for FisheyeDistortionF32 {
     }
 }
 
+// From/Into trait implementations for precision pairs (f64 ↔ f32)
+
+impl From<CameraIntrinsics> for CameraIntrinsicsF32 {
+    fn from(c: CameraIntrinsics) -> Self {
+        Self::from_intrinsics(&c)
+    }
+}
+
+impl From<CameraIntrinsicsF32> for CameraIntrinsics {
+    fn from(c: CameraIntrinsicsF32) -> Self {
+        CameraIntrinsics::new(
+            c.fx as f64,
+            c.fy as f64,
+            c.cx as f64,
+            c.cy as f64,
+            c.width,
+            c.height,
+        )
+    }
+}
+
+impl From<Distortion> for DistortionF32 {
+    fn from(d: Distortion) -> Self {
+        Self::from_distortion(&d)
+    }
+}
+
+impl From<DistortionF32> for Distortion {
+    fn from(d: DistortionF32) -> Self {
+        Distortion::new(
+            d.k1 as f64,
+            d.k2 as f64,
+            d.p1 as f64,
+            d.p2 as f64,
+            d.k3 as f64,
+        )
+    }
+}
+
+impl From<FisheyeDistortion> for FisheyeDistortionF32 {
+    fn from(d: FisheyeDistortion) -> Self {
+        Self {
+            k1: d.k1 as f32,
+            k2: d.k2 as f32,
+            k3: d.k3 as f32,
+            k4: d.k4 as f32,
+        }
+    }
+}
+
+impl From<FisheyeDistortionF32> for FisheyeDistortion {
+    fn from(d: FisheyeDistortionF32) -> Self {
+        Self {
+            k1: d.k1 as f64,
+            k2: d.k2 as f64,
+            k3: d.k3 as f64,
+            k4: d.k4 as f64,
+        }
+    }
+}
+
+/// Unified 3D-to-2D point projection with optional extrinsics and distortion.
+///
+/// This is the canonical single-point projection function combining camera extrinsics,
+/// intrinsics, and distortion into one operation.
+///
+/// # Arguments
+/// * `point` - 3D point in world coordinates
+/// * `intrinsics` - Camera intrinsic matrix (focal length, principal point)
+/// * `extrinsics` - Optional camera extrinsic matrix (rotation, translation)
+/// * `distortion` - Optional distortion coefficients
+///
+/// # Returns
+/// `Some(Point2<f64>)` if projection succeeds, `None` if depth is near-zero or non-finite
+///
+/// # Examples
+/// ```
+/// use cv_core::{project_point, CameraIntrinsics};
+/// use nalgebra::Point3;
+///
+/// let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+/// let point = Point3::new(0.1, 0.05, 1.0);
+/// let projected = project_point(&point, &intrinsics, None, None);
+/// assert!(projected.is_some());
+/// ```
+pub fn project_point(
+    point: &Point3<f64>,
+    intrinsics: &CameraIntrinsics,
+    extrinsics: Option<&Pose>,
+    distortion: Option<&Distortion>,
+) -> Option<Point2<f64>> {
+    // Apply extrinsics if provided
+    let p_cam = if let Some(ext) = extrinsics {
+        ext.rotation * point.coords + ext.translation
+    } else {
+        point.coords
+    };
+
+    // Check depth guard - must have positive, finite depth
+    if !p_cam.iter().all(|v| v.is_finite()) || p_cam[2] <= 1e-10 {
+        return None;
+    }
+
+    // Normalize to image plane
+    let x = p_cam[0] / p_cam[2];
+    let y = p_cam[1] / p_cam[2];
+
+    // Apply distortion if provided
+    let (xd, yd) = if let Some(dist) = distortion {
+        dist.apply(x, y)
+    } else {
+        (x, y)
+    };
+
+    // Project to pixel coordinates
+    Some(Point2::new(
+        intrinsics.fx * xd + intrinsics.cx,
+        intrinsics.fy * yd + intrinsics.cy,
+    ))
+}
+
 /// A 2D axis-aligned rectangle.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Rect {
@@ -1267,6 +1388,154 @@ mod tests {
             let rect = RotatedRect::new(50.0, 50.0, 10.0, 20.0, 0.0);
             let points = rect.points();
             assert_eq!(points.len(), 4);
+        }
+    }
+
+    mod from_into_traits_tests {
+        use super::*;
+
+        #[test]
+        fn test_camera_intrinsics_f64_to_f32() {
+            let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+            let intrinsics_f32: CameraIntrinsicsF32 = intrinsics.into();
+            assert!((intrinsics_f32.fx - 500.0).abs() < 1e-5);
+            assert!((intrinsics_f32.fy - 500.0).abs() < 1e-5);
+            assert!((intrinsics_f32.cx - 320.0).abs() < 1e-5);
+            assert!((intrinsics_f32.cy - 240.0).abs() < 1e-5);
+            assert_eq!(intrinsics_f32.width, 640);
+            assert_eq!(intrinsics_f32.height, 480);
+        }
+
+        #[test]
+        fn test_camera_intrinsics_f32_to_f64() {
+            let intrinsics_f32 = CameraIntrinsicsF32::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+            let intrinsics: CameraIntrinsics = intrinsics_f32.into();
+            assert!((intrinsics.fx - 500.0).abs() < 1e-10);
+            assert!((intrinsics.fy - 500.0).abs() < 1e-10);
+            assert!((intrinsics.cx - 320.0).abs() < 1e-10);
+            assert!((intrinsics.cy - 240.0).abs() < 1e-10);
+            assert_eq!(intrinsics.width, 640);
+            assert_eq!(intrinsics.height, 480);
+        }
+
+        #[test]
+        fn test_distortion_f64_to_f32() {
+            let distortion = Distortion::new(0.1, 0.01, 0.001, 0.0001, 0.00001);
+            let distortion_f32: DistortionF32 = distortion.into();
+            assert!((distortion_f32.k1 - 0.1).abs() < 1e-5);
+            assert!((distortion_f32.k2 - 0.01).abs() < 1e-5);
+            assert!((distortion_f32.p1 - 0.001).abs() < 1e-5);
+            assert!((distortion_f32.p2 - 0.0001).abs() < 1e-5);
+            assert!((distortion_f32.k3 - 0.00001).abs() < 1e-6);
+        }
+
+        #[test]
+        fn test_distortion_f32_to_f64() {
+            let distortion_f32 = DistortionF32::new(0.1, 0.01, 0.001, 0.0001, 0.00001);
+            let distortion: Distortion = distortion_f32.into();
+            // f32→f64 conversions have ~1e-7 relative error for values ~0.1
+            assert!((distortion.k1 - 0.1).abs() < 1e-7);
+            assert!((distortion.k2 - 0.01).abs() < 1e-8);
+            assert!((distortion.p1 - 0.001).abs() < 1e-8);
+            assert!((distortion.p2 - 0.0001).abs() < 1e-8);
+            assert!((distortion.k3 - 0.00001).abs() < 1e-9);
+        }
+
+        #[test]
+        fn test_fisheye_distortion_f64_to_f32() {
+            let fisheye = FisheyeDistortion::new(0.1, 0.01, 0.001, 0.0001);
+            let fisheye_f32: FisheyeDistortionF32 = fisheye.into();
+            assert!((fisheye_f32.k1 - 0.1).abs() < 1e-5);
+            assert!((fisheye_f32.k2 - 0.01).abs() < 1e-5);
+            assert!((fisheye_f32.k3 - 0.001).abs() < 1e-5);
+            assert!((fisheye_f32.k4 - 0.0001).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_fisheye_distortion_f32_to_f64() {
+            let fisheye_f32 = FisheyeDistortionF32::new(0.1, 0.01, 0.001, 0.0001);
+            let fisheye: FisheyeDistortion = fisheye_f32.into();
+            // f32→f64 conversions have ~1e-7 relative error for values ~0.1
+            assert!((fisheye.k1 - 0.1).abs() < 1e-7);
+            assert!((fisheye.k2 - 0.01).abs() < 1e-8);
+            assert!((fisheye.k3 - 0.001).abs() < 1e-8);
+            assert!((fisheye.k4 - 0.0001).abs() < 1e-8);
+        }
+    }
+
+    mod projection_tests {
+        use super::*;
+
+        #[test]
+        fn test_project_point_without_extrinsics_or_distortion() {
+            let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+            let point = Point3::new(0.1, 0.05, 1.0);
+
+            let result = project_point(&point, &intrinsics, None, None);
+            assert!(result.is_some());
+
+            let proj = result.unwrap();
+            // u = fx * x/z + cx = 500 * 0.1 + 320 = 370
+            // v = fy * y/z + cy = 500 * 0.05 + 240 = 265
+            assert!((proj.x - 370.0).abs() < 1e-10);
+            assert!((proj.y - 265.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn test_project_point_with_extrinsics() {
+            let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+            let extrinsics = Pose::identity();
+            let point = Point3::new(0.1, 0.05, 1.0);
+
+            let result = project_point(&point, &intrinsics, Some(&extrinsics), None);
+            assert!(result.is_some());
+
+            let proj = result.unwrap();
+            // With identity pose, should be same as without extrinsics
+            assert!((proj.x - 370.0).abs() < 1e-10);
+            assert!((proj.y - 265.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn test_project_point_with_distortion() {
+            let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+            let distortion = Distortion::new(0.0, 0.0, 0.0, 0.0, 0.0); // No distortion
+            let point = Point3::new(0.1, 0.05, 1.0);
+
+            let result = project_point(&point, &intrinsics, None, Some(&distortion));
+            assert!(result.is_some());
+
+            let proj = result.unwrap();
+            // No distortion, should be same as without
+            assert!((proj.x - 370.0).abs() < 1e-10);
+            assert!((proj.y - 265.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn test_project_point_guards_against_zero_depth() {
+            let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+            let point = Point3::new(0.1, 0.05, 0.0);
+
+            let result = project_point(&point, &intrinsics, None, None);
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn test_project_point_guards_against_negative_depth() {
+            let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+            let point = Point3::new(0.1, 0.05, -1.0);
+
+            let result = project_point(&point, &intrinsics, None, None);
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn test_project_point_guards_against_non_finite_coordinates() {
+            let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+            let point = Point3::new(0.1, 0.05, f64::NAN);
+
+            let result = project_point(&point, &intrinsics, None, None);
+            assert!(result.is_none());
         }
     }
 }
