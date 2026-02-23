@@ -281,7 +281,7 @@ fn local_mean_image(src: &GrayImage, block_size: u32) -> GrayImage {
 
 fn local_gaussian_image(src: &GrayImage, block_size: u32) -> GrayImage {
     let sigma = 0.3 * (((block_size as f32) - 1.0) * 0.5 - 1.0) + 0.8;
-    gaussian_blur_with_border(src, sigma, BorderMode::Reflect101).unwrap_or_else(|_| src.clone())
+    gaussian_blur_with_border(src, sigma, BorderMode::Reflect101)
 }
 
 #[cfg(test)]

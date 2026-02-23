@@ -3,6 +3,8 @@
 //! Provides a high-level interface for running neural network inference
 //! using `tract` (Pure Rust).
 
+pub mod blob;
+
 use cv_core::Tensor;
 use cv_runtime::orchestrator::ResourceGroup;
 use image::DynamicImage;

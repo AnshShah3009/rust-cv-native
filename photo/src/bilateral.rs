@@ -34,13 +34,13 @@ pub fn bilateral_filter(
                     if sx < 0 || sx >= width as i32 { continue; }
 
                     let val = src.get_pixel(sx as u32, sy as u32)[0] as f32;
-                    
+
                     let dist_sq = (dx * dx + dy * dy) as f32;
                     let color_diff = val - center_val;
                     let color_diff_sq = color_diff * color_diff;
 
                     let weight = (dist_sq * gauss_space_coeff + color_diff_sq * gauss_color_coeff).exp();
-                    
+
                     sum_val += val * weight;
                     sum_weight += weight;
                 }
@@ -51,4 +51,105 @@ pub fn bilateral_filter(
     }
 
     dst
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bilateral_filter_output_dimensions() {
+        let img = GrayImage::new(5, 7);
+        let filtered = bilateral_filter(&img, 5, 10.0, 10.0);
+
+        assert_eq!(filtered.width(), img.width());
+        assert_eq!(filtered.height(), img.height());
+    }
+
+    #[test]
+    fn test_bilateral_filter_preserves_uniform_image() {
+        let mut img = GrayImage::new(5, 5);
+        for pixel in img.iter_mut() {
+            *pixel = 128;
+        }
+
+        let filtered = bilateral_filter(&img, 5, 10.0, 10.0);
+
+        // Uniform image should remain unchanged
+        for pixel in filtered.iter() {
+            assert_eq!(*pixel, 128);
+        }
+    }
+
+    #[test]
+    fn test_bilateral_filter_range_check() {
+        let mut img = GrayImage::new(5, 5);
+        // Create an image with varying values
+        for y in 0..5 {
+            for x in 0..5 {
+                img.put_pixel(x, y, Luma([50 + (x + y) as u8 * 10]));
+            }
+        }
+
+        let filtered = bilateral_filter(&img, 5, 10.0, 10.0);
+
+        // Output values should be in valid range [0, 255]
+        for pixel in filtered.iter() {
+            assert!(*pixel <= 255);
+        }
+    }
+
+    #[test]
+    fn test_bilateral_filter_with_auto_radius() {
+        let img = GrayImage::new(5, 5);
+        let filtered = bilateral_filter(&img, -1, 10.0, 5.0);
+
+        // Auto radius should work (d <= 0)
+        assert_eq!(filtered.width(), img.width());
+        assert_eq!(filtered.height(), img.height());
+    }
+
+    #[test]
+    fn test_bilateral_filter_with_explicit_radius() {
+        let img = GrayImage::new(7, 7);
+        let filtered = bilateral_filter(&img, 4, 20.0, 15.0);
+
+        // Explicit radius should work (d > 0)
+        assert_eq!(filtered.width(), img.width());
+        assert_eq!(filtered.height(), img.height());
+    }
+
+    #[test]
+    fn test_bilateral_filter_single_pixel() {
+        let mut img = GrayImage::new(1, 1);
+        img.put_pixel(0, 0, Luma([200]));
+
+        let filtered = bilateral_filter(&img, 3, 50.0, 50.0);
+
+        // Single pixel should not change
+        assert_eq!(filtered.get_pixel(0, 0)[0], 200);
+    }
+
+    #[test]
+    fn test_bilateral_filter_noise_reduction() {
+        let mut img = GrayImage::new(5, 5);
+        // Create base image with value 128
+        for y in 0..5 {
+            for x in 0..5 {
+                img.put_pixel(x, y, Luma([128]));
+            }
+        }
+        // Add salt-and-pepper noise at center
+        img.put_pixel(2, 2, Luma([255]));
+        img.put_pixel(2, 3, Luma([0]));
+
+        let filtered = bilateral_filter(&img, 5, 30.0, 30.0);
+
+        // Center pixels should be smoothed toward uniform value
+        let center = filtered.get_pixel(2, 2)[0] as i32;
+        let noise_val = 255i32;
+        let diff = (center - noise_val).abs();
+        // After filtering, should be significantly reduced
+        assert!(diff < 100);
+    }
 }

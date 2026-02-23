@@ -31,6 +31,8 @@ impl Hog {
         Self { params }
     }
 
+    /// Compute HOG descriptor for the given image
+    /// Returns empty vector if image is smaller than cell_size
     pub fn compute(&self, image: &GrayImage) -> Vec<f32> {
         let (gx, gy) = sobel(image);
         let width = image.width() as usize;
@@ -108,5 +110,172 @@ impl Hog {
         });
 
         descriptor
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::Luma;
+
+    #[test]
+    fn test_hog_output_dimensions() {
+        let hog = Hog::new(HogParams::default());
+        let img = GrayImage::new(64, 64);
+        let descriptor = hog.compute(&img);
+
+        // With 64x64 image, 8x8 cells -> 8 cells x 8 cells
+        // With 2x2 block size and 9 bins
+        // n_blocks_x = 8 - 2 + 1 = 7
+        // n_blocks_y = 8 - 2 + 1 = 7
+        // block_dim = 2 * 2 * 9 = 36
+        // total = 7 * 7 * 36 = 1764
+        let expected_size = 7 * 7 * 36;
+        assert_eq!(descriptor.len(), expected_size);
+    }
+
+    #[test]
+    fn test_hog_normalization_range() {
+        let hog = Hog::new(HogParams::default());
+        let img = GrayImage::new(64, 64);
+        let descriptor = hog.compute(&img);
+
+        // All values should be in [0, ~1] range after normalization
+        for &val in &descriptor {
+            assert!(val >= 0.0, "Value {} is negative", val);
+            assert!(val <= 1.0, "Value {} is > 1.0", val);
+        }
+    }
+
+    #[test]
+    fn test_hog_with_gradient_image() {
+        let hog = Hog::new(HogParams::default());
+        let mut img = GrayImage::new(64, 64);
+
+        // Create gradient image
+        for y in 0..64 {
+            for x in 0..64 {
+                img.put_pixel(x, y, Luma([((x + y) % 256) as u8]));
+            }
+        }
+
+        let descriptor = hog.compute(&img);
+        assert!(!descriptor.is_empty());
+        assert!(descriptor.iter().all(|&v| v >= 0.0 && v <= 1.0));
+    }
+
+    #[test]
+    fn test_hog_minimum_valid_image() {
+        let hog = Hog::new(HogParams::default());
+        // Minimum size to have at least one 2x2 block
+        // Need at least 2 cells x 2 cells = 16 pixels with cell_size 8
+        let img = GrayImage::new(16, 16);
+        let descriptor = hog.compute(&img);
+
+        // With 16x16 image, 8x8 cells -> 2 cells x 2 cells
+        // With 2x2 block size
+        // n_blocks_x = 2 - 2 + 1 = 1
+        // n_blocks_y = 2 - 2 + 1 = 1
+        // block_dim = 2 * 2 * 9 = 36
+        // total = 1 * 1 * 36 = 36
+        assert_eq!(descriptor.len(), 36);
+    }
+
+    #[test]
+    fn test_hog_small_image() {
+        let hog = Hog::new(HogParams::default());
+        let img = GrayImage::new(32, 32);
+        let descriptor = hog.compute(&img);
+
+        // With 32x32 image, 8x8 cells -> 4 cells x 4 cells
+        // With 2x2 block size
+        // n_blocks_x = 4 - 2 + 1 = 3
+        // n_blocks_y = 4 - 2 + 1 = 3
+        // block_dim = 2 * 2 * 9 = 36
+        // total = 3 * 3 * 36 = 324
+        let expected_size = 3 * 3 * 36;
+        assert_eq!(descriptor.len(), expected_size);
+    }
+
+    #[test]
+    fn test_hog_custom_params() {
+        let params = HogParams {
+            cell_size: 16,
+            block_size: 1,
+            n_bins: 8,
+        };
+        let hog = Hog::new(params);
+        let img = GrayImage::new(64, 64);
+        let descriptor = hog.compute(&img);
+
+        // With 64x64 image, 16x16 cells -> 4 cells x 4 cells
+        // With 1x1 block size
+        // n_blocks_x = 4 - 1 + 1 = 4
+        // n_blocks_y = 4 - 1 + 1 = 4
+        // block_dim = 1 * 1 * 8 = 8
+        // total = 4 * 4 * 8 = 128
+        let expected_size = 4 * 4 * 8;
+        assert_eq!(descriptor.len(), expected_size);
+    }
+
+    #[test]
+    fn test_hog_uniform_image() {
+        let hog = Hog::new(HogParams::default());
+        let mut img = GrayImage::new(64, 64);
+
+        // Uniform image (all same intensity)
+        for pixel in img.iter_mut() {
+            *pixel = 128;
+        }
+
+        let descriptor = hog.compute(&img);
+
+        // Uniform image should have gradients close to zero
+        // Most values should be very small after normalization
+        let sum: f32 = descriptor.iter().sum();
+        let avg = sum / descriptor.len() as f32;
+        assert!(avg < 0.1, "Average value {} is too high for uniform image", avg);
+    }
+
+    #[test]
+    fn test_hog_different_sizes() {
+        let hog = Hog::new(HogParams::default());
+
+        // Test various image sizes
+        for size in &[16, 32, 48, 64, 80, 96] {
+            let img = GrayImage::new(*size, *size);
+            let descriptor = hog.compute(&img);
+
+            let n_cells = (size / 8) as usize;
+            if n_cells >= 2 {
+                let n_blocks = n_cells - 1;
+                let block_dim = 2 * 2 * 9;
+                let expected = n_blocks * n_blocks * block_dim;
+                assert_eq!(descriptor.len(), expected, "Size {} produced wrong descriptor length", size);
+            }
+        }
+    }
+
+    #[test]
+    fn test_hog_normalization_preserves_structure() {
+        let hog = Hog::new(HogParams::default());
+        let mut img = GrayImage::new(64, 64);
+
+        // Create two distinct regions
+        for y in 0..32 {
+            for x in 0..64 {
+                img.put_pixel(x, y, Luma([50]));
+            }
+        }
+        for y in 32..64 {
+            for x in 0..64 {
+                img.put_pixel(x, y, Luma([200]));
+            }
+        }
+
+        let descriptor = hog.compute(&img);
+
+        // Should have non-zero descriptors
+        assert!(descriptor.iter().any(|&v| v > 0.01));
     }
 }

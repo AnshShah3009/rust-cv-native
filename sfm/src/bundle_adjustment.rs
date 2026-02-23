@@ -452,3 +452,316 @@ pub fn bundle_adjust_ctx(state: &mut SfMState, config: &BundleAdjustmentConfig, 
         state.from_parameters(&final_params);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cv_core::Pose;
+    use nalgebra::{Matrix3, Vector3};
+
+    fn create_test_intrinsics() -> CameraIntrinsics {
+        CameraIntrinsics {
+            fx: 500.0,
+            fy: 500.0,
+            cx: 320.0,
+            cy: 240.0,
+            width: 640,
+            height: 480,
+        }
+    }
+
+    fn create_test_pose(translation: Vector3<f64>) -> Pose {
+        Pose {
+            rotation: Matrix3::identity(),
+            translation,
+        }
+    }
+
+    #[test]
+    fn test_sfm_state_creation() {
+        let intrinsics = create_test_intrinsics();
+        let state = SfMState::new(intrinsics);
+
+        assert_eq!(state.cameras.len(), 0);
+        assert_eq!(state.landmarks.len(), 0);
+    }
+
+    #[test]
+    fn test_add_camera() {
+        let intrinsics = create_test_intrinsics();
+        let mut state = SfMState::new(intrinsics);
+
+        let pose = create_test_pose(Vector3::zeros());
+        let id1 = state.add_camera(pose.clone());
+        assert_eq!(id1, 0);
+        assert_eq!(state.cameras.len(), 1);
+
+        let pose2 = create_test_pose(Vector3::new(1.0, 0.0, 0.0));
+        let id2 = state.add_camera(pose2);
+        assert_eq!(id2, 1);
+        assert_eq!(state.cameras.len(), 2);
+    }
+
+    #[test]
+    fn test_landmark_creation() {
+        let pos = Point3::new(0.0, 0.0, 5.0);
+        let landmark = Landmark::new(pos);
+
+        assert_eq!(landmark.position, pos);
+        assert_eq!(landmark.observations.len(), 0);
+        assert!(landmark.is_valid);
+    }
+
+    #[test]
+    fn test_add_landmark() {
+        let intrinsics = create_test_intrinsics();
+        let mut state = SfMState::new(intrinsics);
+
+        let observations = vec![(0, Point2::new(320.0, 240.0))];
+        let id = state.add_landmark(Point3::new(0.0, 0.0, 5.0), observations);
+
+        assert_eq!(id, 0);
+        assert_eq!(state.landmarks.len(), 1);
+        assert_eq!(state.landmarks[0].observations.len(), 1);
+    }
+
+    #[test]
+    fn test_landmark_add_observation() {
+        let mut landmark = Landmark::new(Point3::new(0.0, 0.0, 5.0));
+
+        landmark.add_observation(0, Point2::new(320.0, 240.0));
+        assert_eq!(landmark.observations.len(), 1);
+
+        landmark.add_observation(1, Point2::new(300.0, 250.0));
+        assert_eq!(landmark.observations.len(), 2);
+    }
+
+    #[test]
+    fn test_total_reprojection_error_empty() {
+        let intrinsics = create_test_intrinsics();
+        let state = SfMState::new(intrinsics);
+
+        let error = state.total_reprojection_error();
+        assert_eq!(error, 0.0);
+    }
+
+    #[test]
+    fn test_total_reprojection_error_perfect_projection() {
+        let intrinsics = create_test_intrinsics();
+        let mut state = SfMState::new(intrinsics);
+
+        // Add camera at origin
+        let pose = create_test_pose(Vector3::zeros());
+        state.add_camera(pose);
+
+        // Add 3D point in front of camera
+        let point_3d = Point3::new(0.0, 0.0, 5.0);
+        // Project it to expected 2D location (center of image for point at origin)
+        let obs_2d = Point2::new(320.0, 240.0); // Principal point
+        let obs = vec![(0, obs_2d)];
+
+        state.add_landmark(point_3d, obs);
+
+        let error = state.total_reprojection_error();
+        // Error should be very small for perfectly projected point
+        assert!(error < 1.0);
+    }
+
+    #[test]
+    fn test_total_reprojection_error_with_offset() {
+        let intrinsics = create_test_intrinsics();
+        let mut state = SfMState::new(intrinsics);
+
+        let pose = create_test_pose(Vector3::zeros());
+        state.add_camera(pose);
+
+        let point_3d = Point3::new(0.0, 0.0, 5.0);
+        // Observation with intentional offset
+        let obs_2d = Point2::new(330.0, 240.0); // 10 pixels off
+        let obs = vec![(0, obs_2d)];
+
+        state.add_landmark(point_3d, obs);
+
+        let error = state.total_reprojection_error();
+        // Error should reflect the 10-pixel offset
+        assert!(error > 0.0);
+    }
+
+    #[test]
+    fn test_to_and_from_parameters() {
+        let intrinsics = create_test_intrinsics();
+        let mut state = SfMState::new(intrinsics);
+
+        // Add camera and landmarks
+        let pose = create_test_pose(Vector3::new(1.0, 2.0, 3.0));
+        state.add_camera(pose);
+
+        let point_3d = Point3::new(1.0, 2.0, 5.0);
+        state.add_landmark(point_3d, vec![]);
+
+        // Extract parameters
+        let params = state.to_parameters();
+
+        // Should have 6 camera params + 3 landmark params
+        assert_eq!(params.len(), 6 + 3);
+
+        // Create new state with same intrinsics
+        let mut state2 = SfMState::new(intrinsics);
+        state2.add_camera(create_test_pose(Vector3::zeros()));
+        state2.add_landmark(Point3::new(0.0, 0.0, 0.0), vec![]);
+
+        // Load parameters from state1 into state2
+        state2.from_parameters(&params);
+
+        // Verify translation matches
+        assert!((state2.cameras[0].translation.x - 1.0).abs() < 1e-6);
+        assert!((state2.cameras[0].translation.y - 2.0).abs() < 1e-6);
+        assert!((state2.cameras[0].translation.z - 3.0).abs() < 1e-6);
+
+        // Verify landmark position matches
+        assert!((state2.landmarks[0].position.x - 1.0).abs() < 1e-6);
+        assert!((state2.landmarks[0].position.y - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_residuals_computation() {
+        let intrinsics = create_test_intrinsics();
+        let mut state = SfMState::new(intrinsics);
+
+        let pose = create_test_pose(Vector3::zeros());
+        state.add_camera(pose);
+
+        let point_3d = Point3::new(0.0, 0.0, 5.0);
+        let obs = vec![(0, Point2::new(320.0, 240.0))];
+        state.add_landmark(point_3d, obs);
+
+        let residuals = state.residuals();
+        // Should have 2 residuals per observation (x and y error)
+        assert_eq!(residuals.len(), 2);
+    }
+
+    #[test]
+    fn test_remove_outliers() {
+        let intrinsics = create_test_intrinsics();
+        let mut state = SfMState::new(intrinsics);
+
+        let pose = create_test_pose(Vector3::zeros());
+        state.add_camera(pose);
+
+        // Add landmark with perfect observation
+        let point_3d = Point3::new(0.0, 0.0, 5.0);
+        let obs_good = vec![(0, Point2::new(320.0, 240.0))];
+        state.add_landmark(point_3d, obs_good);
+
+        // Add landmark with bad observation (large error)
+        let point_3d_bad = Point3::new(10.0, 10.0, 5.0);
+        let obs_bad = vec![(0, Point2::new(100.0, 100.0))];
+        state.add_landmark(point_3d_bad, obs_bad);
+
+        assert_eq!(state.landmarks.len(), 2);
+        assert!(state.landmarks[0].is_valid);
+        assert!(state.landmarks[1].is_valid);
+
+        // Remove outliers with low threshold
+        state.remove_outliers(1.0);
+
+        // Good landmark should still be valid, bad one should be invalid
+        assert!(state.landmarks[0].is_valid);
+        assert!(!state.landmarks[1].is_valid);
+    }
+
+    #[test]
+    fn test_bundle_adjustment_config_default() {
+        let config = BundleAdjustmentConfig::default();
+
+        assert_eq!(config.max_iterations, 100);
+        assert!(config.convergence_threshold < 1e-5);
+        assert!(config.use_sparsity);
+        assert!(config.robust_kernel);
+    }
+
+    #[test]
+    fn test_bundle_adjustment_config_custom() {
+        let config = BundleAdjustmentConfig {
+            max_iterations: 50,
+            convergence_threshold: 1e-4,
+            lambda: 0.01,
+            use_sparsity: false,
+            robust_kernel: false,
+        };
+
+        assert_eq!(config.max_iterations, 50);
+        assert!((config.convergence_threshold - 1e-4).abs() < 1e-10);
+        assert!((config.lambda - 0.01).abs() < 1e-6);
+        assert!(!config.use_sparsity);
+        assert!(!config.robust_kernel);
+    }
+
+    #[test]
+    fn test_dimensions_consistency() {
+        let intrinsics = create_test_intrinsics();
+        let mut state = SfMState::new(intrinsics);
+
+        // Add 2 cameras
+        state.add_camera(create_test_pose(Vector3::new(0.0, 0.0, 0.0)));
+        state.add_camera(create_test_pose(Vector3::new(1.0, 0.0, 0.0)));
+
+        // Add 3 landmarks
+        state.add_landmark(Point3::new(0.0, 0.0, 5.0), vec![(0, Point2::new(320.0, 240.0))]);
+        state.add_landmark(Point3::new(1.0, 0.0, 5.0), vec![(0, Point2::new(330.0, 240.0))]);
+        state.add_landmark(
+            Point3::new(2.0, 0.0, 5.0),
+            vec![(0, Point2::new(340.0, 240.0)), (1, Point2::new(320.0, 240.0))],
+        );
+
+        let (n_res, n_params) = state.dimensions();
+        // n_res: 2 observations per landmark = 2*1 + 2*1 + 2*2 = 8
+        // n_params: 6*2 cameras + 3*3 landmarks = 12 + 9 = 21
+        assert_eq!(n_res, 8);
+        assert_eq!(n_params, 21);
+    }
+
+    #[test]
+    fn test_multiple_cameras_single_landmark() {
+        let intrinsics = create_test_intrinsics();
+        let mut state = SfMState::new(intrinsics);
+
+        // Add 3 cameras
+        state.add_camera(create_test_pose(Vector3::new(0.0, 0.0, 0.0)));
+        state.add_camera(create_test_pose(Vector3::new(1.0, 0.0, 0.0)));
+        state.add_camera(create_test_pose(Vector3::new(0.0, 1.0, 0.0)));
+
+        // Single landmark observed by all cameras
+        let observations = vec![
+            (0, Point2::new(320.0, 240.0)),
+            (1, Point2::new(310.0, 240.0)),
+            (2, Point2::new(320.0, 250.0)),
+        ];
+        state.add_landmark(Point3::new(0.0, 0.0, 5.0), observations);
+
+        assert_eq!(state.landmarks[0].observations.len(), 3);
+
+        // All landmarks should have their 3 observations
+        let residuals = state.residuals();
+        assert_eq!(residuals.len(), 6); // 3 observations * 2 residuals each
+    }
+
+    #[test]
+    fn test_invalid_landmark_handling() {
+        let intrinsics = create_test_intrinsics();
+        let mut state = SfMState::new(intrinsics);
+
+        let pose = create_test_pose(Vector3::zeros());
+        state.add_camera(pose);
+
+        state.add_landmark(Point3::new(0.0, 0.0, 5.0), vec![(0, Point2::new(320.0, 240.0))]);
+        state.add_landmark(Point3::new(1.0, 0.0, 5.0), vec![(0, Point2::new(330.0, 240.0))]);
+
+        // Mark first landmark as invalid
+        state.landmarks[0].is_valid = false;
+
+        let residuals = state.residuals();
+        // Should only have residuals for valid landmarks
+        assert_eq!(residuals.len(), 4); // Only 2nd landmark: 2 residuals
+    }
+}

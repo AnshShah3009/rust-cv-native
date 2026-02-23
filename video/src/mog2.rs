@@ -241,4 +241,198 @@ mod tests {
         println!("Detected {} foreground pixels in 20x20 square", fg_count);
         assert!(fg_count > 300);
     }
+
+    #[test]
+    fn test_mog2_uniform_background() {
+        let cpu = CpuBackend::new().unwrap();
+        let device = ComputeDevice::Cpu(&cpu);
+        let mut mog2 = Mog2::new(100, 16.0, false);
+
+        let width = 32usize;
+        let height = 32usize;
+        let uniform_data = vec![128u8; width * height];
+        let frame: CpuTensor<u8> =
+            CpuTensor::from_vec(uniform_data, TensorShape::new(1, height, width)).unwrap();
+
+        // Apply to the same frame multiple times
+        for _ in 0..20 {
+            let _ = mog2.apply_ctx(&frame, -1.0, &device);
+        }
+
+        // Uniform background should be learned
+        let mask = mog2.apply_ctx(&frame, -1.0, &device);
+        let mask_slice = mask.as_slice().unwrap();
+
+        // Count foreground pixels (should be minimal for uniform background)
+        let fg_count = mask_slice.iter().filter(|&&v| v > 127).count();
+        assert!(fg_count < 100); // Most pixels should be background
+    }
+
+    #[test]
+    fn test_mog2_initialization() {
+        let mog2 = Mog2::new(50, 10.0, false);
+        assert_eq!(mog2.history, 50);
+        assert!((mog2.var_threshold - 10.0).abs() < 0.01);
+        assert!(!mog2._detect_shadows);
+        assert_eq!(mog2.n_mixtures, 5);
+    }
+
+    #[test]
+    fn test_mog2_custom_parameters() {
+        let mog2 = Mog2::new(200, 25.0, true);
+        assert_eq!(mog2.history, 200);
+        assert!((mog2.var_threshold - 25.0).abs() < 0.01);
+        assert!(mog2._detect_shadows);
+    }
+
+    #[test]
+    fn test_mog2_varying_learning_rates() {
+        let cpu = CpuBackend::new().unwrap();
+        let device = ComputeDevice::Cpu(&cpu);
+
+        let width = 32usize;
+        let height = 32usize;
+        let bg_data = vec![50u8; width * height];
+        let bg_frame: CpuTensor<u8> =
+            CpuTensor::from_vec(bg_data.clone(), TensorShape::new(1, height, width)).unwrap();
+
+        // Test with automatic learning rate
+        let mut mog2_auto = Mog2::new(100, 16.0, false);
+        for _ in 0..5 {
+            mog2_auto.apply_ctx(&bg_frame, -1.0, &device);
+        }
+
+        // Test with explicit learning rate
+        let mut mog2_explicit = Mog2::new(100, 16.0, false);
+        for _ in 0..5 {
+            mog2_explicit.apply_ctx(&bg_frame, 0.01, &device);
+        }
+
+        // Both should produce valid masks
+        let mask_auto = mog2_auto.apply_ctx(&bg_frame, -1.0, &device);
+        let mask_explicit = mog2_explicit.apply_ctx(&bg_frame, 0.01, &device);
+
+        assert_eq!(mask_auto.shape, bg_frame.shape);
+        assert_eq!(mask_explicit.shape, bg_frame.shape);
+    }
+
+    #[test]
+    fn test_mog2_dimension_preservation() {
+        let cpu = CpuBackend::new().unwrap();
+        let device = ComputeDevice::Cpu(&cpu);
+        let mut mog2 = Mog2::new(100, 16.0, false);
+
+        let width = 48usize;
+        let height = 48usize;
+        let frame_data = vec![100u8; width * height];
+        let frame: CpuTensor<u8> =
+            CpuTensor::from_vec(frame_data, TensorShape::new(1, height, width)).unwrap();
+
+        let mask = mog2.apply_ctx(&frame, -1.0, &device);
+
+        // Output mask should have same dimensions as input
+        assert_eq!(mask.shape.height, height);
+        assert_eq!(mask.shape.width, width);
+    }
+
+    #[test]
+    fn test_mog2_sequence_processing() {
+        let cpu = CpuBackend::new().unwrap();
+        let device = ComputeDevice::Cpu(&cpu);
+        let mut mog2 = Mog2::new(100, 16.0, false);
+
+        let width = 32usize;
+        let height = 32usize;
+
+        // Simulate a sequence with gradually changing frames
+        for i in 0..20 {
+            let mut frame_data = vec![100u8; width * height];
+
+            // Gradually introduce more white (255) pixels
+            for y in 10..22 {
+                for x in 10..22 {
+                    if i < 10 {
+                        frame_data[y * width + x] = 100; // Background
+                    } else {
+                        frame_data[y * width + x] = 255; // Foreground
+                    }
+                }
+            }
+
+            let frame: CpuTensor<u8> =
+                CpuTensor::from_vec(frame_data, TensorShape::new(1, height, width)).unwrap();
+            let _ = mog2.apply_ctx(&frame, -1.0, &device);
+        }
+
+        // Should complete without crashing and produce valid output
+        let final_data = vec![100u8; width * height];
+        let final_frame: CpuTensor<u8> =
+            CpuTensor::from_vec(final_data, TensorShape::new(1, height, width)).unwrap();
+        let mask = mog2.apply_ctx(&final_frame, -1.0, &device);
+
+        // Verify output is valid
+        assert_eq!(mask.shape.height, height);
+        assert_eq!(mask.shape.width, width);
+        assert_eq!(mask.as_slice().unwrap().len(), width * height);
+    }
+
+    #[test]
+    fn test_mog2_small_frame() {
+        let cpu = CpuBackend::new().unwrap();
+        let device = ComputeDevice::Cpu(&cpu);
+        let mut mog2 = Mog2::new(100, 16.0, false);
+
+        let width = 8usize;
+        let height = 8usize;
+        let frame_data = vec![128u8; width * height];
+        let frame: CpuTensor<u8> =
+            CpuTensor::from_vec(frame_data, TensorShape::new(1, height, width)).unwrap();
+
+        // Should handle small frames gracefully
+        let mask = mog2.apply_ctx(&frame, -1.0, &device);
+        assert_eq!(mask.shape.height, height);
+        assert_eq!(mask.shape.width, width);
+    }
+
+    #[test]
+    fn test_mog2_large_frame() {
+        let cpu = CpuBackend::new().unwrap();
+        let device = ComputeDevice::Cpu(&cpu);
+        let mut mog2 = Mog2::new(100, 16.0, false);
+
+        let width = 256usize;
+        let height = 256usize;
+        let frame_data = vec![128u8; width * height];
+        let frame: CpuTensor<u8> =
+            CpuTensor::from_vec(frame_data, TensorShape::new(1, height, width)).unwrap();
+
+        // Should handle large frames gracefully
+        let mask = mog2.apply_ctx(&frame, -1.0, &device);
+        assert_eq!(mask.shape.height, height);
+        assert_eq!(mask.shape.width, width);
+    }
+
+    #[test]
+    fn test_mog2_frame_dimension_change() {
+        let cpu = CpuBackend::new().unwrap();
+        let device = ComputeDevice::Cpu(&cpu);
+        let mut mog2 = Mog2::new(100, 16.0, false);
+
+        let width1 = 32usize;
+        let height1 = 32usize;
+        let frame1: CpuTensor<u8> =
+            CpuTensor::from_vec(vec![128u8; width1 * height1], TensorShape::new(1, height1, width1)).unwrap();
+
+        let _ = mog2.apply_ctx(&frame1, -1.0, &device);
+
+        // Process frame with different dimensions
+        let width2 = 48usize;
+        let height2 = 48usize;
+        let frame2: CpuTensor<u8> =
+            CpuTensor::from_vec(vec![128u8; width2 * height2], TensorShape::new(1, height2, width2)).unwrap();
+
+        let mask = mog2.apply_ctx(&frame2, -1.0, &device);
+        assert_eq!(mask.shape.height, height2);
+        assert_eq!(mask.shape.width, width2);
+    }
 }
