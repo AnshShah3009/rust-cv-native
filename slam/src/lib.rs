@@ -1,7 +1,9 @@
 pub mod mapping;
 pub mod tracking;
 pub mod pose_graph;
-pub mod kalman;
+
+pub use cv_core::kalman;
+pub use cv_core::kalman::{DynamicKalmanFilter, KalmanFilter, KalmanFilterState, ExtendedKalmanFilter};
 
 use cv_core::{Pose, CameraIntrinsics, Tensor, storage::CpuStorage, slam::WorldMap};
 use crate::tracking::Tracker;
