@@ -667,15 +667,37 @@ impl Default for FisheyeDistortionF32 {
     }
 }
 
-// From/Into trait implementations for precision pairs (f64 ↔ f32)
+/// From/Into trait implementations for precision pairs (f64 ↔ f32)
+///
+/// These implementations enable seamless conversion between double-precision (f64)
+/// and single-precision (f32) camera parameters, supporting code that works with
+/// both precisions.
 
 impl From<CameraIntrinsics> for CameraIntrinsicsF32 {
+    /// Convert double-precision camera intrinsics to single-precision.
+    ///
+    /// # Example
+    /// ```
+    /// # use cv_core::{CameraIntrinsics, CameraIntrinsicsF32};
+    /// let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+    /// let intrinsics_f32: CameraIntrinsicsF32 = intrinsics.into();
+    /// assert!((intrinsics_f32.fx - 500.0).abs() < 1e-5);
+    /// ```
     fn from(c: CameraIntrinsics) -> Self {
         Self::from_intrinsics(&c)
     }
 }
 
 impl From<CameraIntrinsicsF32> for CameraIntrinsics {
+    /// Convert single-precision camera intrinsics to double-precision.
+    ///
+    /// # Example
+    /// ```
+    /// # use cv_core::{CameraIntrinsics, CameraIntrinsicsF32};
+    /// let intrinsics_f32 = CameraIntrinsicsF32::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+    /// let intrinsics: CameraIntrinsics = intrinsics_f32.into();
+    /// assert!((intrinsics.fx - 500.0).abs() < 1e-10);
+    /// ```
     fn from(c: CameraIntrinsicsF32) -> Self {
         CameraIntrinsics::new(
             c.fx as f64,
@@ -689,12 +711,14 @@ impl From<CameraIntrinsicsF32> for CameraIntrinsics {
 }
 
 impl From<Distortion> for DistortionF32 {
+    /// Convert double-precision distortion coefficients to single-precision.
     fn from(d: Distortion) -> Self {
         Self::from_distortion(&d)
     }
 }
 
 impl From<DistortionF32> for Distortion {
+    /// Convert single-precision distortion coefficients to double-precision.
     fn from(d: DistortionF32) -> Self {
         Distortion::new(
             d.k1 as f64,
@@ -707,6 +731,7 @@ impl From<DistortionF32> for Distortion {
 }
 
 impl From<FisheyeDistortion> for FisheyeDistortionF32 {
+    /// Convert double-precision fisheye distortion coefficients to single-precision.
     fn from(d: FisheyeDistortion) -> Self {
         Self {
             k1: d.k1 as f32,
@@ -718,6 +743,7 @@ impl From<FisheyeDistortion> for FisheyeDistortionF32 {
 }
 
 impl From<FisheyeDistortionF32> for FisheyeDistortion {
+    /// Convert single-precision fisheye distortion coefficients to double-precision.
     fn from(d: FisheyeDistortionF32) -> Self {
         Self {
             k1: d.k1 as f64,
@@ -731,26 +757,46 @@ impl From<FisheyeDistortionF32> for FisheyeDistortion {
 /// Unified 3D-to-2D point projection with optional extrinsics and distortion.
 ///
 /// This is the canonical single-point projection function combining camera extrinsics,
-/// intrinsics, and distortion into one operation.
+/// intrinsics, and distortion into one operation. It handles:
+/// - Transformation from world to camera coordinates (via extrinsics)
+/// - Normalization to image plane
+/// - Lens distortion (radial and tangential)
+/// - Projection to pixel coordinates
 ///
 /// # Arguments
 /// * `point` - 3D point in world coordinates
 /// * `intrinsics` - Camera intrinsic matrix (focal length, principal point)
-/// * `extrinsics` - Optional camera extrinsic matrix (rotation, translation)
-/// * `distortion` - Optional distortion coefficients
+/// * `extrinsics` - Optional camera extrinsic transformation (pose).
+///   If `None`, assumes point is already in camera coordinates.
+/// * `distortion` - Optional lens distortion coefficients.
+///   If `None`, performs ideal pinhole projection.
 ///
 /// # Returns
-/// `Some(Point2<f64>)` if projection succeeds, `None` if depth is near-zero or non-finite
+/// - `Some(Point2<f64>)` with pixel coordinates if projection succeeds
+/// - `None` if depth is non-positive (point behind or at camera), non-finite, or invalid
+///
+/// # Computational Flow
+/// 1. Apply extrinsics: `p_cam = R * p_world + t`
+/// 2. Check depth: `if p_cam.z <= 1e-10, return None`
+/// 3. Normalize: `x_norm = p_cam.x / p_cam.z, y_norm = p_cam.y / p_cam.z`
+/// 4. Apply distortion: `(x_dist, y_dist) = distortion.apply(x_norm, y_norm)`
+/// 5. Project to pixels: `u = fx * x_dist + cx, v = fy * y_dist + cy`
 ///
 /// # Examples
 /// ```
-/// use cv_core::{project_point, CameraIntrinsics};
-/// use nalgebra::Point3;
+/// use cv_core::{project_point, CameraIntrinsics, Pose, Distortion};
+/// use nalgebra::{Point3, Matrix3, Vector3};
 ///
+/// // Simple projection without extrinsics or distortion
 /// let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
 /// let point = Point3::new(0.1, 0.05, 1.0);
 /// let projected = project_point(&point, &intrinsics, None, None);
 /// assert!(projected.is_some());
+///
+/// // With extrinsics (camera pose)
+/// let pose = Pose::identity();
+/// let with_extrinsics = project_point(&point, &intrinsics, Some(&pose), None);
+/// assert_eq!(projected, with_extrinsics);
 /// ```
 pub fn project_point(
     point: &Point3<f64>,

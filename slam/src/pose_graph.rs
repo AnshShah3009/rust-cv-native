@@ -2,24 +2,49 @@
 //!
 //! Refines camera trajectory by optimizing a graph of camera poses and
 //! relative constraints (loop closures).
+//!
+//! # Overview
+//! This module provides pose graph optimization for incremental SLAM systems.
+//! It maintains a graph of camera poses connected by relative pose measurements
+//! from matching or loop closure detection, then optimizes to find the
+//! maximum-likelihood trajectory.
 
 use cv_core::Pose;
 use cv_optimize::pose_graph::{PoseGraph as OptimizePoseGraph};
 use nalgebra::Isometry3;
 
+/// Edge in the pose graph representing a relative pose measurement.
+///
+/// Connects two camera poses (keyframes) with a measured relative transformation
+/// and measurement uncertainty (via the information matrix).
+#[derive(Clone)]
 pub struct PoseGraphEdge {
+    /// ID of the source (from) pose
     pub from: usize,
+    /// ID of the target (to) pose
     pub to: usize,
+    /// Measured relative pose from `from` to `to` camera frame
     pub relative_pose: Pose,
+    /// Information matrix (inverse covariance) representing measurement uncertainty.
+    /// Higher values indicate more confident measurements.
     pub information: nalgebra::Matrix6<f64>,
 }
 
+/// Pose graph for incremental SLAM trajectory optimization.
+///
+/// Maintains a set of camera poses (keyframes) connected by relative pose
+/// measurements from matching or loop closure detection. The graph can be
+/// optimized to find the trajectory that best satisfies all constraints.
+#[derive(Clone)]
 pub struct PoseGraph {
+    /// Camera poses indexed by keyframe ID
     pub poses: Vec<Pose>,
+    /// Relative pose constraints between poses
     pub edges: Vec<PoseGraphEdge>,
 }
 
 impl PoseGraph {
+    /// Create an empty pose graph.
     pub fn new() -> Self {
         Self {
             poses: Vec::new(),
@@ -27,20 +52,71 @@ impl PoseGraph {
         }
     }
 
+    /// Add a camera pose (keyframe) to the graph.
+    ///
+    /// # Arguments
+    /// * `pose` - The camera pose (extrinsic transformation)
+    ///
+    /// # Returns
+    /// The keyframe ID (index) assigned to this pose, which can be used
+    /// to create edges connecting this pose to others.
     pub fn add_pose(&mut self, pose: Pose) -> usize {
         let id = self.poses.len();
         self.poses.push(pose);
         id
     }
 
+    /// Add a relative pose constraint between two poses.
+    ///
+    /// # Arguments
+    /// * `from` - ID of the source (earlier) pose
+    /// * `to` - ID of the target (later) pose
+    /// * `rel` - Measured relative transformation from `from` to `to`
+    /// * `info` - Information matrix (6×6, inverse covariance) weighting the edge.
+    ///   Use `Matrix6::identity()` for unit weight.
     pub fn add_edge(&mut self, from: usize, to: usize, rel: Pose, info: nalgebra::Matrix6<f64>) {
         self.edges.push(PoseGraphEdge { from, to, relative_pose: rel, information: info });
     }
 
-    /// Optimize the pose graph using Gauss-Newton optimization
+    /// Optimize the pose graph using Gauss-Newton optimization.
     ///
-    /// Refines all camera poses to minimize reprojection error while respecting
-    /// loop closure constraints. The first pose is fixed as reference frame.
+    /// Refines all camera poses to minimize the sum of squared errors across
+    /// all pose constraints (edges) while maintaining consistency of the trajectory.
+    ///
+    /// # Algorithm
+    /// Uses Gauss-Newton optimization with:
+    /// - Automatic differentiation via numerical derivatives
+    /// - Regularization with small diagonal perturbation (1e-6)
+    /// - Convergence when error is below 1e-9 or iteration limit reached
+    ///
+    /// # Constraints
+    /// - First pose (index 0) is fixed as the reference frame
+    /// - Edges enforce relative pose constraints between cameras
+    /// - Information matrices (edge weights) scale residual influence
+    ///
+    /// # Arguments
+    /// * `iterations` - Maximum number of optimization iterations to perform
+    ///
+    /// # Returns
+    /// - `Ok(final_error)` with sum of weighted squared errors after optimization
+    /// - `Err(msg)` if Cholesky decomposition fails (non-positive-definite Hessian)
+    ///
+    /// # Example
+    /// ```
+    /// # use cv_slam::PoseGraph;
+    /// # use cv_core::Pose;
+    /// # use nalgebra::{Matrix6, Vector3, Matrix3};
+    /// let mut graph = PoseGraph::new();
+    /// let pose1 = Pose::identity();
+    /// let pose2 = Pose::new(Matrix3::identity(), Vector3::new(0.1, 0.0, 0.0));
+    ///
+    /// let id1 = graph.add_pose(pose1);
+    /// let id2 = graph.add_pose(pose2);
+    /// graph.add_edge(id1, id2, pose2, Matrix6::identity());
+    ///
+    /// let result = graph.optimize(10);
+    /// assert!(result.is_ok());
+    /// ```
     pub fn optimize(&mut self, iterations: usize) -> Result<f64, String> {
         if self.poses.is_empty() {
             return Ok(0.0);
@@ -75,17 +151,17 @@ impl PoseGraph {
         Ok(final_error)
     }
 
-    /// Get the number of poses in the graph
+    /// Get the number of poses (keyframes) in the graph.
     pub fn num_poses(&self) -> usize {
         self.poses.len()
     }
 
-    /// Get the number of edges in the graph
+    /// Get the number of edges (constraints) in the graph.
     pub fn num_edges(&self) -> usize {
         self.edges.len()
     }
 
-    /// Check if graph is empty
+    /// Check if the graph is empty (no poses).
     pub fn is_empty(&self) -> bool {
         self.poses.is_empty()
     }
