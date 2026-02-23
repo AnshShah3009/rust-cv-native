@@ -69,17 +69,11 @@ mod tests {
     use nalgebra::{Matrix3, Vector3};
 
     fn create_identity_pose() -> Pose {
-        Pose {
-            rotation: Matrix3::identity(),
-            translation: Vector3::zeros(),
-        }
+        Pose::identity()
     }
 
     fn create_translated_pose(x: f64, y: f64, z: f64) -> Pose {
-        Pose {
-            rotation: Matrix3::identity(),
-            translation: Vector3::new(x, y, z),
-        }
+        Pose::new(Matrix3::identity(), Vector3::new(x, y, z))
     }
 
     #[test]
@@ -167,10 +161,7 @@ mod tests {
         let id1 = graph.add_pose(pose1);
         let id2 = graph.add_pose(pose2);
 
-        let relative_pose = Pose {
-            rotation: Matrix3::identity(),
-            translation: Vector3::new(1.0, 1.0, 0.0),
-        };
+        let relative_pose = Pose::new(Matrix3::identity(), Vector3::new(1.0, 1.0, 0.0));
         let info = nalgebra::Matrix6::identity();
 
         graph.add_edge(id1, id2, relative_pose, info);

@@ -78,10 +78,11 @@ fn compute_rectification_transforms(
 ) -> Result<(Matrix3<f64>, Matrix3<f64>, CameraIntrinsics)> {
     // Compute relative pose between cameras
     // Relative rotation: R = R_left^T * R_right
-    let relative_rotation = left_extrinsics.rotation.transpose() * right_extrinsics.rotation;
+    let left_rot_mat = left_extrinsics.rotation_matrix();
+    let relative_rotation = left_rot_mat.transpose() * right_extrinsics.rotation_matrix();
 
     // Relative translation: t = R_left^T * (t_right - t_left)
-    let relative_translation = left_extrinsics.rotation.transpose()
+    let relative_translation = left_rot_mat.transpose()
         * (right_extrinsics.translation - left_extrinsics.translation);
 
     // Compute rectification rotation that aligns epipolar lines

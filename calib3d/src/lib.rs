@@ -421,7 +421,7 @@ mod tests {
         let pts2: Vec<Point2<f64>> = world.iter().map(|p| project_point(&k, &gt, p)).collect();
 
         let recovered = recover_pose_from_essential(&e, &pts1, &pts2, &k).unwrap();
-        assert!(recovered.rotation.determinant() > 0.0);
+        assert!(recovered.rotation_matrix().determinant() > 0.0);
         let dir_dot = recovered
             .translation
             .normalize()
@@ -470,7 +470,7 @@ mod tests {
             .collect();
 
         let recovered = recover_pose_from_essential(&e, &in1, &in2, &k).unwrap();
-        assert!(recovered.rotation.determinant() > 0.0);
+        assert!(recovered.rotation_matrix().determinant() > 0.0);
         assert!(recovered.translation.norm() > 1e-6);
     }
 
@@ -739,7 +739,7 @@ mod tests {
         let mut left_sets = Vec::new();
         let mut right_sets = Vec::new();
         for ext_l in &board_poses {
-            let ext_r = Pose::new(r_lr * ext_l.rotation, r_lr * ext_l.translation + t_lr);
+            let ext_r = Pose::new(r_lr * ext_l.rotation_matrix(), r_lr * ext_l.translation + t_lr);
             obj_sets.push(board.clone());
             left_sets.push(
                 board
@@ -866,10 +866,7 @@ mod tests {
         let intrinsics = CameraIntrinsics::new(800.0, 800.0, 320.0, 240.0, 640, 480);
         let rotation = Rotation3::from_euler_angles(0.1, 0.2, 0.3).into_inner();
         let translation = Vector3::new(0.5, -0.3, 2.0);
-        let extrinsics = Pose {
-            rotation,
-            translation,
-        };
+        let extrinsics = Pose::new(rotation, translation);
         let distortion = Distortion {
             k1: -0.2,
             k2: 0.05,
@@ -906,10 +903,7 @@ mod tests {
         let intrinsics = CameraIntrinsics::new(800.0, 800.0, 320.0, 240.0, 640, 480);
         let rotation = Rotation3::identity().into_inner();
         let translation = Vector3::new(0.0, 0.0, 2.0);
-        let extrinsics = Pose {
-            rotation,
-            translation,
-        };
+        let extrinsics = Pose::new(rotation, translation);
         let distortion = Distortion::default();
 
         let points = vec![Point3::new(0.5, 0.3, 1.5)];

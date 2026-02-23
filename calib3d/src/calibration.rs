@@ -639,7 +639,7 @@ fn is_valid_camera_calibration(result: &CameraCalibrationResult) -> bool {
     }
 
     result.extrinsics.iter().all(|ext| {
-        ext.rotation.iter().all(|v: &f64| v.is_finite())
+        ext.rotation_matrix().iter().all(|v: &f64| v.is_finite())
             && ext.translation.iter().all(|v: &f64| v.is_finite())
     })
 }

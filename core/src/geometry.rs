@@ -1,4 +1,4 @@
-use nalgebra::{Matrix3, Matrix4, Point2, Point3, Vector3};
+use nalgebra::{Isometry3, Matrix3, Matrix4, Point2, Point3, Rotation3, UnitQuaternion, Vector3};
 
 pub type Vector6<T> = nalgebra::Vector6<T>;
 
@@ -267,50 +267,66 @@ impl CameraIntrinsicsF32 {
 /// Note: Sometimes conventions differ. Here, `transform_point` applies R*p + t.
 #[derive(Debug, Clone, Copy)]
 pub struct Pose {
-    pub rotation: Matrix3<f64>,
+    pub rotation: UnitQuaternion<f64>,
     pub translation: Vector3<f64>,
 }
 
 impl Pose {
+    /// Create a new Pose from a rotation matrix and translation vector
+    /// Converts the rotation matrix to a quaternion internally
     pub fn new(rotation: Matrix3<f64>, translation: Vector3<f64>) -> Self {
+        let quat = UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(rotation));
+        Self {
+            rotation: quat,
+            translation,
+        }
+    }
+
+    /// Create a Pose from a rotation matrix (reference) and translation vector
+    pub fn from_rotation_translation(r: &Rotation3<f64>, t: &Vector3<f64>) -> Self {
+        Self {
+            rotation: UnitQuaternion::from_rotation_matrix(r),
+            translation: *t,
+        }
+    }
+
+    /// Create a Pose from a quaternion and translation vector
+    pub fn from_quat_translation(rotation: UnitQuaternion<f64>, translation: Vector3<f64>) -> Self {
         Self {
             rotation,
             translation,
         }
     }
 
-    pub fn from_rotation_translation(r: &Matrix3<f64>, t: &Vector3<f64>) -> Self {
-        Self {
-            rotation: *r,
-            translation: *t,
-        }
+    /// Get the rotation as a 3x3 matrix
+    pub fn rotation_matrix(&self) -> Matrix3<f64> {
+        self.rotation.to_rotation_matrix().into_inner()
     }
 
     pub fn identity() -> Self {
         Self {
-            rotation: Matrix3::identity(),
+            rotation: UnitQuaternion::identity(),
             translation: Vector3::zeros(),
         }
     }
 
     pub fn matrix(&self) -> Matrix4<f64> {
         let mut m = Matrix4::identity();
-        m.fixed_view_mut::<3, 3>(0, 0).copy_from(&self.rotation);
+        m.fixed_view_mut::<3, 3>(0, 0).copy_from(&self.rotation_matrix());
         m.fixed_view_mut::<3, 1>(0, 3).copy_from(&self.translation);
         m
     }
 
     pub fn transform_point(&self, point: &Point3<f64>) -> Point3<f64> {
-        let transformed = self.rotation * point.coords + self.translation;
-        Point3::from(transformed)
+        let rotated = self.rotation * point;
+        rotated + self.translation
     }
 
     pub fn inverse(&self) -> Self {
-        let r_inv = self.rotation.transpose();
-        let t_inv = -r_inv * self.translation;
+        let inv_rot = self.rotation.inverse();
         Self {
-            rotation: r_inv,
-            translation: t_inv,
+            rotation: inv_rot,
+            translation: -(inv_rot * self.translation),
         }
     }
 
@@ -325,80 +341,30 @@ impl Pose {
 impl Default for Pose {
     fn default() -> Self {
         Self {
-            rotation: Matrix3::identity(),
+            rotation: UnitQuaternion::identity(),
             translation: Vector3::zeros(),
         }
     }
 }
 
-pub type PoseF32 = PoseF32Struct;
-
-/// A 3D rigid body transformation (Rotation + Translation) using `f32`.
-#[derive(Debug, Clone, Copy)]
-pub struct PoseF32Struct {
-    pub rotation: Matrix3<f32>,
-    pub translation: Vector3<f32>,
-}
-
-impl PoseF32Struct {
-    pub fn new(rotation: Matrix3<f32>, translation: Vector3<f32>) -> Self {
+impl From<Isometry3<f64>> for Pose {
+    fn from(iso: Isometry3<f64>) -> Self {
         Self {
-            rotation,
-            translation,
-        }
-    }
-
-    pub fn from_pose(e: &Pose) -> Self {
-        Self {
-            rotation: Matrix3::new(
-                e.rotation.m11 as f32,
-                e.rotation.m12 as f32,
-                e.rotation.m13 as f32,
-                e.rotation.m21 as f32,
-                e.rotation.m22 as f32,
-                e.rotation.m23 as f32,
-                e.rotation.m31 as f32,
-                e.rotation.m32 as f32,
-                e.rotation.m33 as f32,
-            ),
-            translation: Vector3::new(
-                e.translation[0] as f32,
-                e.translation[1] as f32,
-                e.translation[2] as f32,
-            ),
-        }
-    }
-
-    pub fn matrix(&self) -> Matrix4<f32> {
-        let mut m = Matrix4::identity();
-        m.fixed_view_mut::<3, 3>(0, 0).copy_from(&self.rotation);
-        m.fixed_view_mut::<3, 1>(0, 3).copy_from(&self.translation);
-        m
-    }
-
-    pub fn transform_point(&self, point: &Point3<f32>) -> Point3<f32> {
-        let transformed = self.rotation * point.coords + self.translation;
-        Point3::from(transformed)
-    }
-
-    pub fn inverse(&self) -> Self {
-        let r_inv = self.rotation.transpose();
-        let t_inv = -r_inv * self.translation;
-        Self {
-            rotation: r_inv,
-            translation: t_inv,
+            rotation: iso.rotation,
+            translation: iso.translation.vector,
         }
     }
 }
 
-impl Default for PoseF32Struct {
-    fn default() -> Self {
-        Self {
-            rotation: Matrix3::identity(),
-            translation: Vector3::zeros(),
-        }
+impl From<Pose> for Isometry3<f64> {
+    fn from(pose: Pose) -> Self {
+        Isometry3::from_parts(
+            nalgebra::Translation3::from(pose.translation),
+            pose.rotation,
+        )
     }
 }
+
 
 pub fn twist_to_se3(twist: &Vector6<f64>) -> (Matrix3<f64>, Vector3<f64>) {
     let omega = Vector3::new(twist[0], twist[1], twist[2]);
@@ -999,7 +965,7 @@ mod tests {
         #[test]
         fn test_pose_identity() {
             let pose = Pose::identity();
-            assert!(pose.rotation.is_identity(1e-10));
+            assert!((pose.rotation.as_ref() - UnitQuaternion::identity().as_ref()).norm() < 1e-10);
             assert_eq!(pose.translation, Vector3::zeros());
         }
 
@@ -1021,7 +987,7 @@ mod tests {
             let pose = Pose::new(rotation, translation);
 
             let result = pose.compose(&pose.inverse());
-            assert!(result.rotation.is_identity(1e-10));
+            assert!((result.rotation.as_ref() - UnitQuaternion::identity().as_ref()).norm() < 1e-10);
             assert!(result.translation.norm() < 1e-10);
         }
 
@@ -1057,7 +1023,7 @@ mod tests {
         #[test]
         fn test_pose_default() {
             let pose = Pose::default();
-            assert!(pose.rotation.is_identity(1e-10));
+            assert!((pose.rotation.as_ref() - UnitQuaternion::identity().as_ref()).norm() < 1e-10);
             assert_eq!(pose.translation, Vector3::zeros());
         }
     }

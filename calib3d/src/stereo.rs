@@ -302,8 +302,9 @@ pub fn stereo_rectify_matrices(
     left_extrinsics: &Pose,
     right_extrinsics: &Pose,
 ) -> Result<StereoRectifyMatrices> {
-    let rel_r = left_extrinsics.rotation.transpose() * right_extrinsics.rotation;
-    let rel_t = left_extrinsics.rotation.transpose()
+    let left_rot_mat = left_extrinsics.rotation_matrix();
+    let rel_r = left_rot_mat.transpose() * right_extrinsics.rotation_matrix();
+    let rel_t = left_rot_mat.transpose()
         * (right_extrinsics.translation - left_extrinsics.translation);
     let baseline = rel_t.norm();
     if baseline <= 1e-12 {

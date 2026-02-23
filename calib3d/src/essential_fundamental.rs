@@ -8,7 +8,7 @@ use nalgebra::{DMatrix, Matrix3, Point2, Vector3};
 /// where [t]_x is the skew-symmetric matrix of the translation vector.
 pub fn essential_from_extrinsics(extrinsics: &Pose) -> Matrix3<f64> {
     use cv_core::skew_symmetric;
-    skew_symmetric(&extrinsics.translation) * extrinsics.rotation
+    skew_symmetric(&extrinsics.translation) * extrinsics.rotation_matrix()
 }
 
 /// Compute Fundamental matrix from Essential matrix using camera intrinsics.
