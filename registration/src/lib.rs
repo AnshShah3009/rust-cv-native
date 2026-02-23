@@ -83,5 +83,6 @@ pub use registration::global::{
     FPFHFeature, FastGlobalRegistrationOption, GlobalRegistrationResult,
 };
 pub use registration::gnc::{
-    registration_gnc, GNCOptimizer, GNCResult, RobustLoss, RobustLossType,
+    registration_gnc, GNCOptimizer, GNCResult,
 };
+pub use cv_core::RobustLoss;

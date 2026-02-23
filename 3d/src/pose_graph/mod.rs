@@ -696,21 +696,10 @@ pub struct OptimizationResult {
     pub final_error: f32,
 }
 
-/// Robust loss function types for GNC
-#[derive(Debug, Clone, Copy)]
-pub enum RobustLossType {
-    GemanMcClure,
-    Huber,
-    Tukey,
-    Cauchy,
-    Welsch,
-}
-
 /// GNC (Graduated Non-Convexity) wrapper that makes any optimizer robust against outliers
 pub struct GNCWrapper<O> {
     inner: O,
-    pub robust_loss: RobustLossType,
-    pub mu: f32,
+    pub robust_loss: cv_core::RobustLoss,
     pub mu_decrease: f32,
     pub max_gnc_iterations: usize,
 }
@@ -719,20 +708,19 @@ impl<O> GNCWrapper<O> {
     pub fn new(inner: O) -> Self {
         Self {
             inner,
-            robust_loss: RobustLossType::GemanMcClure,
-            mu: 1.0,
+            robust_loss: cv_core::RobustLoss::GemanMcClure { mu: 1.0 },
             mu_decrease: 0.5,
             max_gnc_iterations: 10,
         }
     }
 
-    pub fn with_robust_loss(mut self, loss: RobustLossType) -> Self {
+    pub fn with_robust_loss(mut self, loss: cv_core::RobustLoss) -> Self {
         self.robust_loss = loss;
         self
     }
 
     pub fn with_mu(mut self, mu: f32) -> Self {
-        self.mu = mu;
+        self.robust_loss.update_param(mu);
         self
     }
 
@@ -742,36 +730,7 @@ impl<O> GNCWrapper<O> {
     }
 
     fn compute_weight(&self, error: f32) -> f32 {
-        let e2 = error * error;
-        let mu2 = self.mu * self.mu;
-
-        match self.robust_loss {
-            RobustLossType::GemanMcClure => {
-                let denom = (e2 + mu2) * (e2 + mu2);
-                if denom > 1e-10 {
-                    mu2 / denom
-                } else {
-                    1.0
-                }
-            }
-            RobustLossType::Huber => {
-                if e2.sqrt() <= self.mu {
-                    1.0
-                } else {
-                    self.mu / e2.sqrt()
-                }
-            }
-            RobustLossType::Tukey => {
-                if e2.sqrt() <= self.mu {
-                    let t = 1.0 - (e2.sqrt() / self.mu).powi(2);
-                    t * t
-                } else {
-                    0.0
-                }
-            }
-            RobustLossType::Cauchy => 1.0 / (1.0 + e2 / mu2),
-            RobustLossType::Welsch => (-e2 / mu2).exp(),
-        }
+        self.robust_loss.compute_weight(error)
     }
 }
 

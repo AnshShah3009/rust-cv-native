@@ -6,102 +6,8 @@
 //!
 //! Based on "Graduated Non-Convexity for Robust Spatial Perception" by Yang et al.
 
+use cv_core::RobustLoss;
 use nalgebra::{Matrix4, Point3};
-
-/// Robust loss functions for GNC
-#[derive(Debug, Clone, Copy)]
-pub enum RobustLoss {
-    /// Geman-McClure: ρ(r) = (μ * r²) / (μ + r²)
-    GemanMcClure { mu: f32 },
-    /// Welsch/Leclerc: ρ(r) = μ * (1 - exp(-r²/μ))
-    Welsch { mu: f32 },
-    /// Huber: ρ(r) = { 0.5*r² if |r|≤μ, μ*(|r| - 0.5*μ) otherwise }
-    Huber { mu: f32 },
-    /// Truncated Least Squares (TLS): ρ(r) = { r² if r² < c², c² otherwise }
-    TruncatedLeastSquares { c: f32 },
-    /// Cauchy: ρ(r) = (μ²/2) * log(1 + (r/μ)²)
-    Cauchy { mu: f32 },
-}
-
-impl RobustLoss {
-    /// Evaluate the loss function
-    pub fn evaluate(&self, residual: f32) -> f32 {
-        let r = residual.abs();
-        match self {
-            RobustLoss::GemanMcClure { mu } => (mu * r * r) / (mu + r * r),
-            RobustLoss::Welsch { mu } => mu * (1.0 - (-r * r / mu).exp()),
-            RobustLoss::Huber { mu } => {
-                if r <= *mu {
-                    0.5 * r * r
-                } else {
-                    mu * (r - 0.5 * mu)
-                }
-            }
-            RobustLoss::TruncatedLeastSquares { c } => {
-                if r < *c {
-                    r * r
-                } else {
-                    c * c
-                }
-            }
-            RobustLoss::Cauchy { mu } => (mu * mu / 2.0) * (1.0 + (r / mu).powi(2)).ln(),
-        }
-    }
-
-    /// Compute weight for reweighted least squares
-    /// weight = ρ'(r) / r
-    pub fn weight(&self, residual: f32) -> f32 {
-        let r = residual.abs();
-        if r < 1e-6 {
-            return 1.0;
-        }
-
-        match self {
-            RobustLoss::GemanMcClure { mu } => {
-                let r2 = r * r;
-                (2.0 * mu * mu) / ((mu + r2) * (mu + r2))
-            }
-            RobustLoss::Welsch { mu } => (-r * r / mu).exp(),
-            RobustLoss::Huber { mu } => {
-                if r <= *mu {
-                    1.0
-                } else {
-                    mu / r
-                }
-            }
-            RobustLoss::TruncatedLeastSquares { c } => {
-                if r < *c {
-                    1.0
-                } else {
-                    0.0 // Zero weight for outliers
-                }
-            }
-            RobustLoss::Cauchy { mu } => 1.0 / (1.0 + (r / mu).powi(2)),
-        }
-    }
-
-    /// Get the convex surrogate parameter
-    pub fn get_param(&self) -> f32 {
-        match self {
-            RobustLoss::GemanMcClure { mu } => *mu,
-            RobustLoss::Welsch { mu } => *mu,
-            RobustLoss::Huber { mu } => *mu,
-            RobustLoss::TruncatedLeastSquares { c } => *c,
-            RobustLoss::Cauchy { mu } => *mu,
-        }
-    }
-
-    /// Update the parameter for GNC
-    pub fn update_param(&mut self, new_param: f32) {
-        match self {
-            RobustLoss::GemanMcClure { mu } => *mu = new_param,
-            RobustLoss::Welsch { mu } => *mu = new_param,
-            RobustLoss::Huber { mu } => *mu = new_param,
-            RobustLoss::TruncatedLeastSquares { c } => *c = new_param,
-            RobustLoss::Cauchy { mu } => *mu = new_param,
-        }
-    }
-}
 
 /// GNC optimizer for robust registration
 pub struct GNCOptimizer {
@@ -279,6 +185,11 @@ impl GNCOptimizer {
                 max_mu * (1.0 - alpha) + min_mu * alpha
             }
             RobustLoss::Cauchy { mu } => {
+                let max_mu = mu * 100.0;
+                let min_mu = *mu;
+                max_mu * (1.0 - alpha) + min_mu * alpha
+            }
+            RobustLoss::Tukey { mu } => {
                 let max_mu = mu * 100.0;
                 let min_mu = *mu;
                 max_mu * (1.0 - alpha) + min_mu * alpha
