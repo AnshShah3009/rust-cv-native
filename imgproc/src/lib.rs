@@ -26,26 +26,12 @@ pub use resize::*;
 pub use template_matching::*;
 pub use threshold::*;
 
-pub type Result<T> = std::result::Result<T, ImgprocError>;
-
-#[derive(Debug, thiserror::Error)]
-pub enum ImgprocError {
-    #[error("Image error: {0}")]
-    ImageError(String),
-
-    #[error("Algorithm error: {0}")]
-    AlgorithmError(String),
-
-    #[error("Unsupported format: {0}")]
-    UnsupportedFormat(String),
-
-    #[error("Dimension mismatch: {0}")]
-    DimensionMismatch(String),
-}
+pub type ImgprocError = cv_core::Error;
+pub type Result<T> = cv_core::Result<T>;
 
 pub fn validate_image_size(width: u32, height: u32) -> Result<()> {
     if width == 0 || height == 0 {
-        return Err(ImgprocError::DimensionMismatch(
+        return Err(cv_core::Error::DimensionMismatch(
             "Image dimensions must be non-zero".into(),
         ));
     }

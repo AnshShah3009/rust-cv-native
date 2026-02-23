@@ -1,4 +1,4 @@
-use crate::{CalibError, Result};
+use crate::Result;
 use cv_core::{CameraIntrinsics, Pose};
 use nalgebra::{DMatrix, Matrix3, Point2, Vector3};
 
@@ -35,7 +35,7 @@ pub fn find_essential_mat(
     intrinsics: &CameraIntrinsics,
 ) -> Result<Matrix3<f64>> {
     if pts1.len() != pts2.len() || pts1.len() < 8 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "find_essential_mat needs >=8 paired points".to_string(),
         ));
     }
@@ -49,7 +49,7 @@ pub fn find_essential_mat(
 /// Requires at least 8 point pairs.
 pub fn find_fundamental_mat(pts1: &[Point2<f64>], pts2: &[Point2<f64>]) -> Result<Matrix3<f64>> {
     if pts1.len() != pts2.len() || pts1.len() < 8 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "find_fundamental_mat needs >=8 paired points".to_string(),
         ));
     }
@@ -118,7 +118,7 @@ pub fn find_essential_mat_ransac(
 
     let model = res
         .model
-        .ok_or_else(|| CalibError::InvalidParameters("RANSAC failed".into()))?;
+        .ok_or_else(|| cv_core::Error::CalibrationError("RANSAC failed".into()))?;
     Ok((model, res.inliers))
 }
 
@@ -144,7 +144,7 @@ pub fn find_fundamental_mat_ransac(
 
     let model = res
         .model
-        .ok_or_else(|| CalibError::InvalidParameters("RANSAC failed".into()))?;
+        .ok_or_else(|| cv_core::Error::CalibrationError("RANSAC failed".into()))?;
     Ok((model, res.inliers))
 }
 
@@ -183,7 +183,7 @@ fn normalize_with_intrinsics(
 /// (two equal singular values, third is zero).
 fn estimate_essential_8_point(pts1: &[Point2<f64>], pts2: &[Point2<f64>]) -> Result<Matrix3<f64>> {
     if pts1.len() != pts2.len() || pts1.len() < 8 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "estimate_essential_8_point needs >=8 paired points".to_string(),
         ));
     }
@@ -208,7 +208,7 @@ fn estimate_essential_8_point(pts1: &[Point2<f64>], pts2: &[Point2<f64>]) -> Res
 
     let svd = a.svd(true, true);
     let vt = svd.v_t.ok_or_else(|| {
-        CalibError::InvalidParameters("SVD failed in estimate_essential_8_point".to_string())
+        cv_core::Error::CalibrationError("SVD failed in estimate_essential_8_point".to_string())
     })?;
     let evec = vt.row(vt.nrows() - 1);
     let e = Matrix3::new(
@@ -232,10 +232,10 @@ fn estimate_essential_8_point(pts1: &[Point2<f64>], pts2: &[Point2<f64>]) -> Res
 fn enforce_essential_constraints(e: &Matrix3<f64>) -> Result<Matrix3<f64>> {
     let svd = e.svd(true, true);
     let u = svd.u.ok_or_else(|| {
-        CalibError::InvalidParameters("SVD U missing in essential constraints".to_string())
+        cv_core::Error::CalibrationError("SVD U missing in essential constraints".to_string())
     })?;
     let vt = svd.v_t.ok_or_else(|| {
-        CalibError::InvalidParameters("SVD V^T missing in essential constraints".to_string())
+        cv_core::Error::CalibrationError("SVD V^T missing in essential constraints".to_string())
     })?;
     let s = 0.5 * (svd.singular_values[0] + svd.singular_values[1]);
     let sigma = Matrix3::new(s, 0.0, 0.0, 0.0, s, 0.0, 0.0, 0.0, 0.0);
@@ -272,7 +272,7 @@ fn estimate_fundamental_8_point(
 
     let svd = a.svd(true, true);
     let vt = svd.v_t.ok_or_else(|| {
-        CalibError::InvalidParameters("SVD failed in estimate_fundamental_8_point".to_string())
+        cv_core::Error::CalibrationError("SVD failed in estimate_fundamental_8_point".to_string())
     })?;
     let fvec = vt.row(vt.nrows() - 1);
     let f0 = Matrix3::new(
@@ -297,7 +297,7 @@ fn estimate_fundamental_8_point(
 /// at the origin and scaling so that the mean distance is sqrt(2).
 fn normalize_points_hartley(pts: &[Point2<f64>]) -> Result<(Vec<Point2<f64>>, Matrix3<f64>)> {
     if pts.len() < 2 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "normalize_points_hartley requires at least 2 points".to_string(),
         ));
     }
@@ -310,7 +310,7 @@ fn normalize_points_hartley(pts: &[Point2<f64>]) -> Result<(Vec<Point2<f64>>, Ma
         .sum::<f64>()
         / pts.len() as f64;
     if mean_dist <= 1e-12 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "degenerate points in normalize_points_hartley".to_string(),
         ));
     }
@@ -334,10 +334,10 @@ fn normalize_points_hartley(pts: &[Point2<f64>]) -> Result<(Vec<Point2<f64>>, Ma
 fn enforce_rank2(m: &Matrix3<f64>) -> Result<Matrix3<f64>> {
     let svd = m.svd(true, true);
     let u = svd.u.ok_or_else(|| {
-        CalibError::InvalidParameters("SVD U missing in enforce_rank2".to_string())
+        cv_core::Error::CalibrationError("SVD U missing in enforce_rank2".to_string())
     })?;
     let vt = svd.v_t.ok_or_else(|| {
-        CalibError::InvalidParameters("SVD V^T missing in enforce_rank2".to_string())
+        cv_core::Error::CalibrationError("SVD V^T missing in enforce_rank2".to_string())
     })?;
     let sigma = Matrix3::new(
         svd.singular_values[0],

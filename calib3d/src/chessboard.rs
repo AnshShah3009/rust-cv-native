@@ -1,4 +1,4 @@
-use crate::{CalibError, Result};
+use crate::Result;
 use cv_core::Point2;
 use cv_imgproc::{
     adaptive_threshold, approx_poly_dp, contour_area, find_external_contours, AdaptiveMethod,
@@ -43,7 +43,7 @@ pub fn find_chessboard_corners_robust(
     _image: &GrayImage,
     _pattern_size: (usize, usize),
 ) -> Result<Vec<Point2<f64>>> {
-    Err(CalibError::InvalidParameters(
+    Err(cv_core::Error::CalibrationError(
         "Robust chessboard detection not yet implemented. Grid assembly step requires \
          complex graph matching. Use find_chessboard_corners() instead, which is \
          more reliable in practice."

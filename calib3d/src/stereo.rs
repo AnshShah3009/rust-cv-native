@@ -6,7 +6,7 @@ use image::GrayImage;
 use nalgebra::{Matrix3, Matrix3x4, Matrix4, Point2, Point3, Vector3};
 use std::path::Path;
 
-use crate::{CalibError, Result};
+use crate::Result;
 
 #[derive(Debug, Clone)]
 pub struct StereoRectifyMatrices {
@@ -58,12 +58,12 @@ pub fn stereo_calibrate_planar_with_options(
     if object_points.len() != left_image_points.len()
         || object_points.len() != right_image_points.len()
     {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "stereo_calibrate_planar expects matching batch sizes".to_string(),
         ));
     }
     if object_points.len() < 3 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "stereo_calibrate_planar needs at least 3 views".to_string(),
         ));
     }
@@ -83,7 +83,7 @@ pub fn stereo_calibrate_planar_with_options(
 
     let n = left.extrinsics.len().min(right.extrinsics.len());
     if n == 0 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "stereo_calibrate_planar: no usable extrinsics".to_string(),
         ));
     }
@@ -105,10 +105,10 @@ pub fn stereo_calibrate_planar_with_options(
 
     let svd = r_sum.svd(true, true);
     let u = svd.u.ok_or_else(|| {
-        CalibError::InvalidParameters("SVD U missing in stereo_calibrate_planar".to_string())
+        cv_core::Error::CalibrationError("SVD U missing in stereo_calibrate_planar".to_string())
     })?;
     let vt = svd.v_t.ok_or_else(|| {
-        CalibError::InvalidParameters("SVD V^T missing in stereo_calibrate_planar".to_string())
+        cv_core::Error::CalibrationError("SVD V^T missing in stereo_calibrate_planar".to_string())
     })?;
     let mut r = u * vt;
     if r.determinant() < 0.0 {
@@ -152,7 +152,7 @@ pub fn stereo_calibrate_from_chessboard_images_with_options(
     options: CameraCalibrationOptions,
 ) -> Result<StereoCalibrationResult> {
     if left_images.len() != right_images.len() || left_images.is_empty() {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "left/right image lists must be non-empty and equal-sized".to_string(),
         ));
     }
@@ -161,7 +161,7 @@ pub fn stereo_calibrate_from_chessboard_images_with_options(
     if left_images.iter().any(|i| i.dimensions() != (w, h))
         || right_images.iter().any(|i| i.dimensions() != (w, h))
     {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "all stereo calibration images must share the same dimensions".to_string(),
         ));
     }
@@ -182,7 +182,7 @@ pub fn stereo_calibrate_from_chessboard_images_with_options(
     }
 
     if object_points.len() < 3 {
-        return Err(CalibError::InvalidParameters(format!(
+        return Err(cv_core::Error::CalibrationError(format!(
             "need at least 3 valid stereo chessboard pairs, found {}",
             object_points.len()
         )));
@@ -220,7 +220,7 @@ pub fn stereo_calibrate_from_chessboard_files_with_options<P: AsRef<Path>>(
     options: CameraCalibrationOptions,
 ) -> Result<(StereoCalibrationResult, StereoCalibrationFileReport)> {
     if left_paths.len() != right_paths.len() || left_paths.is_empty() {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "left/right file lists must be non-empty and equal-sized".to_string(),
         ));
     }
@@ -264,13 +264,13 @@ pub fn stereo_calibrate_from_chessboard_files_with_options<P: AsRef<Path>>(
     }
 
     if object_points.len() < 3 {
-        return Err(CalibError::InvalidParameters(format!(
+        return Err(cv_core::Error::CalibrationError(format!(
             "need at least 3 valid stereo pairs, found {}",
             object_points.len()
         )));
     }
     let dims = expected_dims.ok_or_else(|| {
-        CalibError::InvalidParameters("no readable stereo pairs in provided file lists".to_string())
+        cv_core::Error::CalibrationError("no readable stereo pairs in provided file lists".to_string())
     })?;
 
     let calib = stereo_calibrate_planar_with_options(
@@ -281,7 +281,7 @@ pub fn stereo_calibrate_from_chessboard_files_with_options<P: AsRef<Path>>(
         options,
     )
     .map_err(|e| {
-        CalibError::InvalidParameters(format!(
+        cv_core::Error::CalibrationError(format!(
             "stereo calibration failed for file subset (used {} / {} pairs): {}",
             object_points.len(),
             left_paths.len(),
@@ -307,7 +307,7 @@ pub fn stereo_rectify_matrices(
         * (right_extrinsics.translation - left_extrinsics.translation);
     let baseline = rel_t.norm();
     if baseline <= 1e-12 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "stereo_rectify_matrices requires non-zero baseline".to_string(),
         ));
     }

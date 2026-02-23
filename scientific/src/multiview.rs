@@ -18,7 +18,7 @@ impl EssentialSolver {
         pts2: &[[f64; 2]],
     ) -> crate::Result<Vec<Matrix3<f64>>> {
         if pts1.len() < 5 || pts1.len() != pts2.len() {
-            return Err(crate::Error::InvalidInput(
+            return Err(cv_core::Error::InvalidInput(
                 "Exactly 5 points required for 5-point algorithm".into(),
             ));
         }
@@ -46,7 +46,7 @@ impl EssentialSolver {
         let svd = SVD::new(a, false, true);
         let v_t = svd
             .v_t
-            .ok_or_else(|| crate::Error::DecompositionError("SVD failed to compute V_t".into()))?;
+            .ok_or_else(|| cv_core::Error::AlgorithmError("SVD failed to compute V_t".into()))?;
         let rows = v_t.nrows();
 
         // The nullspace is spanned by the last 4 rows of V^T (columns of V)
@@ -395,7 +395,7 @@ impl HomographySolver {
     /// Points should be in (x, y) coordinates.
     pub fn estimate(pts1: &[[f64; 2]], pts2: &[[f64; 2]]) -> crate::Result<Matrix3<f64>> {
         if pts1.len() < 4 || pts1.len() != pts2.len() {
-            return Err(crate::Error::InvalidInput(
+            return Err(cv_core::Error::InvalidInput(
                 "At least 4 point correspondences required".into(),
             ));
         }
@@ -433,7 +433,7 @@ impl HomographySolver {
         let svd = SVD::new(a, false, true);
         let v_t = svd
             .v_t
-            .ok_or_else(|| crate::Error::DecompositionError("SVD failed to compute V_t".into()))?;
+            .ok_or_else(|| cv_core::Error::AlgorithmError("SVD failed to compute V_t".into()))?;
         let h_vec = v_t.row(v_t.nrows() - 1);
 
         let h_norm = Matrix3::new(
@@ -444,7 +444,7 @@ impl HomographySolver {
         // 3. Denormalization: H = T2^-1 * H_norm * T1
         let t2_inv = t2
             .try_inverse()
-            .ok_or_else(|| crate::Error::MathError("Singular normalization matrix".into()))?;
+            .ok_or_else(|| cv_core::Error::AlgorithmError("Singular normalization matrix".into()))?;
         let h = t2_inv * h_norm * t1;
 
         // Normalize such that h[2,2] = 1
@@ -623,7 +623,7 @@ impl PnpSolver {
     ) -> crate::Result<Pose> {
         let n = object_points.len();
         if n < 4 {
-            return Err(crate::Error::InvalidInput(
+            return Err(cv_core::Error::InvalidInput(
                 "At least 4 points required for EPnP".into(),
             ));
         }
@@ -648,7 +648,7 @@ impl PnpSolver {
         let svd = cov.svd(true, true);
         let v_t = svd
             .v_t
-            .ok_or_else(|| crate::Error::DecompositionError("SVD failed in EPnP".into()))?;
+            .ok_or_else(|| cv_core::Error::AlgorithmError("SVD failed in EPnP".into()))?;
 
         for i in 0..3 {
             let scale = (svd.singular_values[i] / n as f64).sqrt();
@@ -663,7 +663,7 @@ impl PnpSolver {
         }
         let m_alphas_inv = m_alphas
             .try_inverse()
-            .ok_or_else(|| crate::Error::MathError("Singular control points".into()))?;
+            .ok_or_else(|| cv_core::Error::AlgorithmError("Singular control points".into()))?;
 
         let mut alphas = Vec::with_capacity(n);
         for p in object_points {
@@ -699,7 +699,7 @@ impl PnpSolver {
         let svd_m = m.svd(false, true);
         let v_t_m = svd_m
             .v_t
-            .ok_or_else(|| crate::Error::DecompositionError("SVD failed for M matrix".into()))?;
+            .ok_or_else(|| cv_core::Error::AlgorithmError("SVD failed for M matrix".into()))?;
 
         // The solution is a linear combination of the last few columns of V (rows of V^T)
         // For simplicity, we use the 1D nullspace solution (best for non-planar)
@@ -754,10 +754,10 @@ impl PnpSolver {
         let svd_h = h.svd(true, true);
         let u = svd_h
             .u
-            .ok_or_else(|| crate::Error::DecompositionError("Procrustes SVD failed".into()))?;
+            .ok_or_else(|| cv_core::Error::AlgorithmError("Procrustes SVD failed".into()))?;
         let v_t = svd_h
             .v_t
-            .ok_or_else(|| crate::Error::DecompositionError("Procrustes SVD failed".into()))?;
+            .ok_or_else(|| cv_core::Error::AlgorithmError("Procrustes SVD failed".into()))?;
 
         let mut r = u * v_t;
         if r.determinant() < 0.0 {
@@ -777,7 +777,7 @@ impl FundamentalSolver {
     /// Points should be in (x, y) pixel coordinates.
     pub fn estimate(pts1: &[[f64; 2]], pts2: &[[f64; 2]]) -> crate::Result<Matrix3<f64>> {
         if pts1.len() < 8 || pts1.len() != pts2.len() {
-            return Err(crate::Error::InvalidInput(
+            return Err(cv_core::Error::InvalidInput(
                 "At least 8 point correspondences required".into(),
             ));
         }
@@ -810,7 +810,7 @@ impl FundamentalSolver {
         let svd = SVD::new(a, false, true);
         let v_t = svd
             .v_t
-            .ok_or_else(|| crate::Error::DecompositionError("SVD failed to compute V_t".into()))?;
+            .ok_or_else(|| cv_core::Error::AlgorithmError("SVD failed to compute V_t".into()))?;
         let f_vec = v_t.row(v_t.nrows() - 1); // Last row of V^T (singular vector for smallest singular value)
 
         let mut f = Matrix3::new(
@@ -823,7 +823,7 @@ impl FundamentalSolver {
         f_svd.singular_values[2] = 0.0;
         f = f_svd
             .recompose()
-            .map_err(|e| crate::Error::DecompositionError(e.to_string()))?;
+            .map_err(|e| cv_core::Error::AlgorithmError(e.to_string()))?;
 
         // 5. Denormalization: F = T2^T * F_norm * T1
         Ok(t2.transpose() * f * t1)
@@ -908,11 +908,11 @@ impl Triangulator {
         let svd = SVD::new(a, false, true);
         let v_t = svd
             .v_t
-            .ok_or_else(|| crate::Error::DecompositionError("SVD failed to compute V_t".into()))?;
+            .ok_or_else(|| cv_core::Error::AlgorithmError("SVD failed to compute V_t".into()))?;
 
         // Check for degeneracy: the smallest singular value should be significantly smaller than the second smallest
         if svd.singular_values[3] > 0.1 * svd.singular_values[2] {
-            return Err(crate::Error::MathError(
+            return Err(cv_core::Error::AlgorithmError(
                 "Degenerate triangulation configuration".into(),
             ));
         }
@@ -920,7 +920,7 @@ impl Triangulator {
         let x_h = v_t.row(3); // Last row of V^T
 
         if x_h[3].abs() < 1e-9 {
-            return Err(crate::Error::MathError(
+            return Err(cv_core::Error::AlgorithmError(
                 "Point at infinity or degenerate".into(),
             ));
         }

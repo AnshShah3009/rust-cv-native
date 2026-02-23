@@ -2,7 +2,7 @@ use image::GrayImage;
 use nalgebra::{Matrix2, Point2, SymmetricEigen, Vector2};
 use rayon::prelude::*;
 
-use crate::{CalibError, Result};
+use crate::Result;
 
 /// Detect chessboard corners in an image.
 ///
@@ -25,12 +25,12 @@ pub fn find_chessboard_corners(
     let (cols, rows) = pattern_size;
     let need = cols * rows;
     if cols < 2 || rows < 2 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "pattern_size must be at least (2,2)".to_string(),
         ));
     }
     if image.width() < 8 || image.height() < 8 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "image too small for chessboard detection".to_string(),
         ));
     }
@@ -42,14 +42,14 @@ pub fn find_chessboard_corners(
         .fold(f64::NEG_INFINITY, f64::max)
         .max(0.0);
     if max_r <= 0.0 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "no chessboard-like corners found".to_string(),
         ));
     }
     let threshold = max_r * 0.01;
     let mut cands = non_max_suppression_response(&response, width, height, threshold);
     if cands.len() < need {
-        return Err(CalibError::InvalidParameters(format!(
+        return Err(cv_core::Error::CalibrationError(format!(
             "insufficient corner candidates: found {}, need {need}",
             cands.len()
         )));
@@ -86,7 +86,7 @@ pub fn corner_subpix(
     eps: f64,
 ) -> Result<()> {
     if win_radius == 0 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "win_radius must be >= 1".to_string(),
         ));
     }
@@ -239,7 +239,7 @@ fn assign_grid_points(
         .map(|(x, y, _)| Vector2::new(*x, *y))
         .collect();
     if points.len() < cols * rows {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "not enough candidates to assign grid".to_string(),
         ));
     }
@@ -291,7 +291,7 @@ fn assign_grid_points(
                 }
             }
             let idx = best.ok_or_else(|| {
-                CalibError::InvalidParameters("failed to assign all chessboard corners".to_string())
+                cv_core::Error::CalibrationError("failed to assign all chessboard corners".to_string())
             })?;
             used[idx] = true;
             out.push(Point2::new(points[idx][0], points[idx][1]));

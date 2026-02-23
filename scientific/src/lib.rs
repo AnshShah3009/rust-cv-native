@@ -42,25 +42,8 @@ pub mod multiview;
 pub mod point_cloud;
 pub mod special;
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Decomposition failed: {0}")]
-    DecompositionError(String),
-
-    #[error("Invalid input: {0}")]
-    InvalidInput(String),
-
-    #[error("Mathematical error: {0}")]
-    MathError(String),
-
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
-
-    #[error("Core error: {0}")]
-    CoreError(#[from] cv_core::Error),
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Error = cv_core::Error;
+pub type Result<T> = cv_core::Result<T>;
 
 pub use geometry::*;
 pub use integrate::*;

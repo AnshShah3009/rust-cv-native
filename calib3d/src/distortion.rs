@@ -2,7 +2,7 @@
 //!
 //! This module provides functions to correct lens distortion in images and points.
 
-use crate::{CalibError, Result};
+use crate::Result;
 use cv_core::{CameraIntrinsics, Distortion, FisheyeDistortion};
 use cv_imgproc::{remap, BorderMode, Interpolation};
 use image::GrayImage;
@@ -16,7 +16,7 @@ pub fn undistort_points(
     distortion: &Distortion,
 ) -> Result<Vec<nalgebra::Point2<f64>>> {
     if intrinsics.fx.abs() <= 1e-12 || intrinsics.fy.abs() <= 1e-12 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "undistort_points requires non-zero focal lengths".to_string(),
         ));
     }
@@ -62,7 +62,7 @@ pub fn init_undistort_rectify_map(
     new_intrinsics: &CameraIntrinsics,
 ) -> Result<(Vec<f32>, Vec<f32>)> {
     if image_size.0 == 0 || image_size.1 == 0 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "init_undistort_rectify_map requires non-zero image size".to_string(),
         ));
     }

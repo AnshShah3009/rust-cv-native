@@ -1,22 +1,5 @@
-pub type Result<T> = std::result::Result<T, CalibError>;
-
-#[derive(Debug, thiserror::Error)]
-pub enum CalibError {
-    #[error("Invalid parameters: {0}")]
-    InvalidParameters(String),
-
-    #[error("SVD failed: {0}")]
-    SvdFailed(String),
-
-    #[error("Numerical error: {0}")]
-    NumericalError(String),
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("Image error: {0}")]
-    Image(#[from] image::ImageError),
-}
+pub type CalibError = cv_core::Error;
+pub type Result<T> = cv_core::Result<T>;
 
 // Module declarations
 pub mod distortion;

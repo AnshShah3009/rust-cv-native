@@ -21,6 +21,9 @@ pub enum VideoError {
 
     #[error("Capture failed: {0}")]
     CaptureFailed(String),
+
+    #[error("Core error: {0}")]
+    CoreError(#[from] cv_core::Error),
 }
 
 /// Generic interface for video capture devices

@@ -1,4 +1,4 @@
-use crate::{CalibError, Result};
+use crate::Result;
 use cv_core::{CameraIntrinsics, Pose};
 use nalgebra::{Matrix3, Matrix3x4, Matrix4, Point2, Point3, Vector3};
 
@@ -22,7 +22,7 @@ pub fn triangulate_points(
     pts2: &[Point2<f64>],
 ) -> Result<Vec<Point3<f64>>> {
     if pts1.len() != pts2.len() {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "triangulate_points requires equal point counts".to_string(),
         ));
     }
@@ -38,7 +38,7 @@ pub fn triangulate_points(
         }
         let svd = m.svd(true, true);
         let vt = svd.v_t.ok_or_else(|| {
-            CalibError::InvalidParameters("SVD failed in triangulate_points".to_string())
+            cv_core::Error::CalibrationError("SVD failed in triangulate_points".to_string())
         })?;
         let xh = vt.row(3);
         let w = xh[(0, 3)];
@@ -74,17 +74,17 @@ pub fn recover_pose_from_essential(
     intrinsics: &CameraIntrinsics,
 ) -> Result<Pose> {
     if pts1.len() != pts2.len() || pts1.len() < 5 {
-        return Err(CalibError::InvalidParameters(
+        return Err(cv_core::Error::CalibrationError(
             "recover_pose_from_essential needs >=5 paired points".to_string(),
         ));
     }
 
     let svd = essential.svd(true, true);
     let mut u = svd.u.ok_or_else(|| {
-        CalibError::InvalidParameters("SVD U missing in recover_pose_from_essential".to_string())
+        cv_core::Error::CalibrationError("SVD U missing in recover_pose_from_essential".to_string())
     })?;
     let mut vt = svd.v_t.ok_or_else(|| {
-        CalibError::InvalidParameters("SVD V^T missing in recover_pose_from_essential".to_string())
+        cv_core::Error::CalibrationError("SVD V^T missing in recover_pose_from_essential".to_string())
     })?;
 
     if u.determinant() < 0.0 {
@@ -162,5 +162,5 @@ pub fn recover_pose_from_essential(
         }
     }
 
-    best.ok_or_else(|| CalibError::InvalidParameters("No valid pose candidate found".to_string()))
+    best.ok_or_else(|| cv_core::Error::CalibrationError("No valid pose candidate found".to_string()))
 }

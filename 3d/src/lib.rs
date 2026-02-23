@@ -126,6 +126,9 @@ pub enum Error {
 
     #[error("Internal error: {0}")]
     InternalError(String),
+
+    #[error("Core error: {0}")]
+    CoreError(#[from] cv_core::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
