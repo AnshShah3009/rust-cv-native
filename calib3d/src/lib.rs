@@ -757,7 +757,7 @@ mod tests {
 
         let out = stereo_calibrate_planar(&obj_sets, &left_sets, &right_sets, (640, 480)).unwrap();
         let t_err = (out.relative_extrinsics.translation - t_lr).norm();
-        let r_err = (out.relative_extrinsics.rotation - r_lr).norm();
+        let r_err = (out.relative_extrinsics.rotation_matrix() - r_lr).norm();
         assert!(t_err < 1e-2);
         assert!(r_err < 1e-2);
     }
