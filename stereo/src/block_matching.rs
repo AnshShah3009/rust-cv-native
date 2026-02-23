@@ -1,6 +1,6 @@
 #![allow(deprecated)]
 
-use crate::{DisparityMap, Result, StereoError, StereoMatcher, StereoMatcherCtx};
+use crate::{DisparityMap, Result, StereoMatcher, StereoMatcherCtx};
 use image::GrayImage;
 use rayon::prelude::*;
 use wide::*;

@@ -116,6 +116,7 @@ pub fn estimate_fundamental(
 }
 
 /// Compute homography from 4 point correspondences using DLT
+#[allow(dead_code)]
 fn compute_homography_4pt(
     matches: &Matches,
     src_points: &[(f64, f64)],
@@ -192,6 +193,7 @@ fn solve_dlt_homography(a: &[f64], n_rows: usize) -> Option<Matrix3<f64>> {
 }
 
 /// Compute fundamental matrix from 8 point correspondences
+#[allow(dead_code)]
 fn compute_fundamental_8pt(
     matches: &Matches,
     src_points: &[(f64, f64)],
@@ -263,6 +265,7 @@ fn solve_dlt_fundamental(a: &[f64], n_rows: usize) -> Option<Matrix3<f64>> {
 }
 
 /// Count inliers for homography
+#[allow(dead_code)]
 fn count_inliers(
     matches: &Matches,
     src_points: &[(f64, f64)],
@@ -312,6 +315,7 @@ fn count_inliers(
 }
 
 /// Count inliers for fundamental matrix using Sampson distance
+#[allow(dead_code)]
 fn count_inliers_fundamental(
     matches: &Matches,
     src_points: &[(f64, f64)],
@@ -366,6 +370,7 @@ fn count_inliers_fundamental(
 }
 
 /// Generate random sample of n unique indices
+#[allow(dead_code)]
 fn random_sample(max_val: usize, n: usize, rng: &mut impl rand::Rng) -> Vec<usize> {
     use rand::seq::SliceRandom;
 

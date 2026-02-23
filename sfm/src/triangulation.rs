@@ -106,7 +106,6 @@ pub fn triangulate_points_ctx(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nalgebra::{Matrix3, Rotation3, Vector3};
 
     #[test]
     fn test_triangulation_simple() {

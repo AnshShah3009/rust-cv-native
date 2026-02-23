@@ -98,8 +98,8 @@ pub fn alpha_shapes(cloud: &PointCloud, alpha: f32) -> TriangleMesh {
 
 /// Create a simple sphere point cloud for testing
 pub fn create_sphere_point_cloud(center: Point3<f32>, radius: f32, num_points: usize) -> PointCloud {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
+    
+    let _rng = rand::thread_rng();
     
     let mut points = Vec::with_capacity(num_points);
     let mut normals = Vec::with_capacity(num_points);
@@ -430,7 +430,8 @@ mod tests {
     fn test_alpha_shapes() {
         let cloud = create_sphere_point_cloud(Point3::new(0.0, 0.0, 0.0), 1.0, 100);
         let mesh = alpha_shapes(&cloud, 0.1);
-        assert!(mesh.num_vertices() >= 0);
+        // alpha_shapes should return a valid mesh (vertex count is non-negative by type)
+        let _ = mesh.num_vertices();
     }
 
     #[test]

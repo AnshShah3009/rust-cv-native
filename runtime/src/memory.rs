@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_host_view() {
-        let mut buf: UnifiedBuffer<i32> = UnifiedBuffer::new(5);
+        let buf: UnifiedBuffer<i32> = UnifiedBuffer::new(5);
         
         {
             let mut view = buf.host_view_mut();

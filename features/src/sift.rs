@@ -1,6 +1,5 @@
 #![allow(deprecated)]
 
-use crate::Result;
 use cv_core::{storage::Storage, Descriptors, KeyPoint, KeyPoints, Tensor, Error};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::context::ComputeContext;
@@ -649,7 +648,7 @@ pub fn sift_detect_ctx<S: Storage<u8> + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cv_core::{storage::CpuStorage, TensorShape};
+    use cv_core::{storage::CpuStorage, Result, TensorShape};
     use cv_hal::cpu::CpuBackend;
 
     fn create_test_image() -> Result<Tensor<u8, CpuStorage<u8>>> {

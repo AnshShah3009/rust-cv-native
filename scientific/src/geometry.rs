@@ -178,7 +178,7 @@ pub fn vectorized_polygon_iou(polys1: &[Polygon<f64>], polys2: &[Polygon<f64>]) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{Coord, LineString};
+    use geo::LineString;
 
     fn make_square(x: f64, y: f64, size: f64) -> Polygon<f64> {
         let coords = vec![

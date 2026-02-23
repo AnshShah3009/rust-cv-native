@@ -1,10 +1,10 @@
-use cv_3d::mesh::{reconstruction, TriangleMesh};
+use cv_3d::mesh::reconstruction;
 use cv_core::point_cloud::PointCloud;
-use cv_core::{storage::CpuStorage, CameraIntrinsics, KeyPoint, KeyPoints, Tensor, TensorShape};
-use cv_dnn::{DnnError, DnnNet};
-use cv_features::{akaze, brief, fast, gftt, harris, hog, sift};
+use cv_core::{CameraIntrinsics, KeyPoint};
+use cv_dnn::DnnNet;
+use cv_features::{fast, gftt, harris};
 use cv_optimize::isam2::Isam2;
-use cv_runtime::orchestrator::{scheduler, RuntimeRunner, WorkloadHint};
+use cv_runtime::orchestrator::{scheduler, WorkloadHint};
 use cv_slam::Slam as RustSlam;
 use cv_videoio::{open_video, VideoCapture};
 use nalgebra::{Point3, Vector3};
@@ -142,7 +142,7 @@ impl PySlam {
         width: usize,
         height: usize,
     ) -> PyResult<(Vec<f32>, Vec<usize>)> {
-        let mut gray = image::GrayImage::from_raw(width as u32, height as u32, image)
+        let gray = image::GrayImage::from_raw(width as u32, height as u32, image)
             .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid image"))?;
 
         let (pose, tracked) = self

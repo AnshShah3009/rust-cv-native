@@ -6,7 +6,7 @@
 #![allow(deprecated)]
 
 use crate::descriptor::{Descriptor, Descriptors};
-use crate::{FeatureError, Result};
+use crate::Result;
 use cv_core::{storage::Storage, CpuTensor, KeyPoint, KeyPoints, Tensor, Error};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::context::ComputeContext;
@@ -483,6 +483,7 @@ struct EvolutionLevel {
     pub octave: usize,
 }
 
+#[allow(dead_code)]
 fn to_cpu_f32<S: Storage<f32> + 'static>(
     ctx: &ComputeDevice,
     tensor: &Tensor<f32, S>,

@@ -1,6 +1,6 @@
 #![allow(deprecated)]
 
-use crate::{FeatureError, Result};
+use crate::Result;
 use cv_core::Error;
 use image::{GrayImage, Luma};
 use nalgebra::{DMatrix, Matrix3, Point2, Vector3};
@@ -908,7 +908,7 @@ mod tests {
         // Draw 3 markers at different positions
         for (i, &id) in ids.iter().enumerate() {
             let marker = draw_apriltag(AprilTagFamily::Tag16h5, id, 8).unwrap();
-            let x = ((i as i64) * 130 + 20);
+            let x = (i as i64) * 130 + 20;
             let y = 50i64;
             replace(&mut canvas, &marker, x, y);
         }
@@ -935,7 +935,7 @@ mod tests {
 
         for (i, &id) in ids.iter().enumerate() {
             let marker = draw_aruco_marker(ArucoDictionary::Dict4x4_50, id, 10).unwrap();
-            let x = ((i as i64) * 130 + 20);
+            let x = (i as i64) * 130 + 20;
             let y = 50i64;
             replace(&mut canvas, &marker, x, y);
         }
@@ -971,7 +971,7 @@ mod tests {
 
         for (i, &id) in ids.iter().enumerate() {
             let marker = draw_apriltag(AprilTagFamily::Tag16h5, id, 8).unwrap();
-            let x = ((i as i64) * 150 + 20);
+            let x = (i as i64) * 150 + 20;
             let y = 50i64;
             replace(&mut canvas, &marker, x, y);
         }

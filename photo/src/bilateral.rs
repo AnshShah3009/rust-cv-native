@@ -93,10 +93,8 @@ mod tests {
 
         let filtered = bilateral_filter(&img, 5, 10.0, 10.0);
 
-        // Output values should be in valid range [0, 255]
-        for pixel in filtered.iter() {
-            assert!(*pixel <= 255);
-        }
+        // Output image has same dimensions (values are u8, guaranteed 0..=255)
+        assert_eq!(filtered.len(), (5 * 5) as usize);
     }
 
     #[test]

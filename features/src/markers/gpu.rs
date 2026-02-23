@@ -10,7 +10,7 @@
 
 #![allow(deprecated)]
 
-use crate::{FeatureError, Result};
+use crate::Result;
 use cv_core::Error;
 use bytemuck::{Pod, Zeroable};
 use cv_hal::gpu_utils;
@@ -421,7 +421,7 @@ impl MarkerGpuContext {
             tx.send(result).unwrap();
         });
 
-        self.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
+        let _ = self.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
 
         rx.recv()
             .map_err(|e| Error::FeatureError(format!("GPU sync failed: {}", e)))?

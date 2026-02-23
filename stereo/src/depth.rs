@@ -6,7 +6,7 @@
 
 use crate::{DisparityMap, StereoParams};
 use nalgebra::{Point2, Point3};
-use cv_core::{PointCloudf64 as PointCloud, Error};
+use cv_core::PointCloudf64 as PointCloud;
 
 /// Compute depth map from disparity map
 pub fn disparity_to_depth(disparity: &DisparityMap, params: &StereoParams) -> Vec<Option<f64>> {

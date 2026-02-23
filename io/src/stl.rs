@@ -6,7 +6,7 @@ use crate::mesh::TriangleMesh;
 use crate::Result;
 use cv_core::Error;
 use nalgebra::Point3;
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 
 /// Read an STL file (ASCII or Binary)
 pub fn read_stl<R: BufRead>(mut reader: R) -> Result<TriangleMesh> {
@@ -19,7 +19,7 @@ pub fn read_stl<R: BufRead>(mut reader: R) -> Result<TriangleMesh> {
     if header_str.trim_start().starts_with("solid ") {
         // ASCII format
         // Re-read from start
-        drop(header);
+        let _ = header;
         drop(header_str);
         let mut content = String::new();
         reader.read_to_string(&mut content)?;

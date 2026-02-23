@@ -66,6 +66,7 @@ pub fn compute_fpfh_features(
 }
 
 /// Compute Simple Point Feature Histogram
+#[allow(dead_code)]
 fn compute_spfh(
     _point: &Point3<f32>,
     normal: Option<&Vector3<f32>>,
@@ -127,6 +128,7 @@ fn compute_spfh(
 }
 
 /// Weight SPFH with neighbors to get FPFH
+#[allow(dead_code)]
 fn weight_spfh(
     _point_idx: usize,
     spfh: &[f32; 33],
@@ -399,6 +401,7 @@ fn evaluate_registration(
 }
 
 /// Random sample without replacement
+#[allow(dead_code)]
 fn random_sample(n: usize, max: usize) -> Vec<usize> {
     use std::collections::HashSet;
     let mut rng = std::time::SystemTime::now()

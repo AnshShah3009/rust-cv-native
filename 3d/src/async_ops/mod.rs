@@ -195,7 +195,7 @@ pub mod mesh {
     ) -> crate::Result<Vec<Point3<f32>>> {
         Ok(task::spawn_blocking(move || {
             let mut verts = vertices;
-            gpu::mesh::laplacian_smooth(&mut verts, &faces, iterations, lambda);
+            let _ = gpu::mesh::laplacian_smooth(&mut verts, &faces, iterations, lambda);
             verts
         })
         .await?)
@@ -254,7 +254,7 @@ pub mod tsdf {
         truncation: f32,
     ) -> crate::Result<(Vec<f32>, Vec<f32>)> {
         Ok(task::spawn_blocking(move || {
-            gpu::tsdf::integrate_depth(
+            let _ = gpu::tsdf::integrate_depth(
                 &depth_image,
                 width,
                 height,

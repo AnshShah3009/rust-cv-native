@@ -629,9 +629,9 @@ pub fn orb_detect_and_compute(image: &GrayImage, n_features: usize) -> (KeyPoint
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use image::{GrayImage, Luma};
 
+    #[allow(dead_code)]
     fn create_test_image() -> GrayImage {
         let size = 128u32;
         let mut img = GrayImage::new(size, size);

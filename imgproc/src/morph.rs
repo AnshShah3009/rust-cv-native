@@ -592,7 +592,7 @@ mod tests {
         let k = create_morph_kernel(MorphShape::Rectangle, 3, 3);
         let out = dilate(&img, &k, 1);
 
-        // Output values should be in valid byte range
-        assert!(out.as_raw().iter().all(|&v| v <= 255));
+        // Output values are always valid byte range (u8 is 0..=255 by definition)
+        assert!(!out.as_raw().is_empty());
     }
 }

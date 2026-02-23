@@ -483,12 +483,11 @@ pub mod buffer_utils {
 #[cfg(test)]
 mod tests {
     use super::buffer_utils::*;
-    use wgpu::BufferUsages;
 
     #[test]
     fn test_buffer_pool_buckets() {
-        let pool = GpuBufferPool::new();
-        
+        let _pool = GpuBufferPool::new();
+
         // Test size bucket logic
         assert_eq!(GpuBufferPool::get_size_bucket(100), 256);
         assert_eq!(GpuBufferPool::get_size_bucket(1024), 1024);

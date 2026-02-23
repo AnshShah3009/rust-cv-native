@@ -9,7 +9,7 @@ use cv_core::{storage::CpuStorage, storage::Storage, CpuTensor, Tensor, TensorSh
 use cv_hal::compute::ComputeDevice;
 use cv_hal::context::{ComputeContext, Mog2Params};
 use cv_hal::tensor_ext::{TensorCast, TensorToCpu, TensorToGpu};
-use crate::{Result, VideoError};
+use crate::Result;
 
 /// MOG2 (Mixture of Gaussians) background subtraction model
 ///

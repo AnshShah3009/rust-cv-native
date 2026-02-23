@@ -1186,13 +1186,8 @@ impl Triangulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nalgebra::Rotation3;
-
     #[test]
     fn test_8point_basic() {
-        // Identity rotation and some translation
-        let f_true = Matrix3::new(0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0);
-
         // Generate 8 points
         let mut pts1 = Vec::new();
         let mut pts2 = Vec::new();

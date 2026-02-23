@@ -112,7 +112,7 @@ impl DnnNet {
         
         // Inspect input facts to determine shape
         // model.model() returns reference to Graph
-        let input_shape = if let Some(input_node_idx) = model.model().inputs.first() {
+        let input_shape = if let Some(_input_node_idx) = model.model().inputs.first() {
              // Basic heuristic: check if shape is fixed
              // For now, default to standard image net
              vec![1, 3, 224, 224] 

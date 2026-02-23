@@ -1,5 +1,5 @@
 use crate::{CalibError, Result};
-use cv_core::{CameraIntrinsics, Pose, Error};
+use cv_core::{CameraIntrinsics, Pose};
 use nalgebra::{Matrix3, Matrix3x4, Matrix4, Point2, Point3, Vector3};
 
 /// Linear triangulation from two views.

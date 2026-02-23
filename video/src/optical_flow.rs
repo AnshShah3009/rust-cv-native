@@ -7,7 +7,7 @@
 
 #![allow(deprecated)]
 
-use crate::{MotionField, Result, VideoError};
+use crate::{MotionField, Result};
 use cv_core::{KeyPoint, Error};
 use image::GrayImage;
 use nalgebra::{Matrix2, Vector2};

@@ -21,11 +21,11 @@ pub fn read_pcd<R: BufRead>(reader: R) -> Result<PointCloud> {
     let mut lines = reader.lines();
 
     // Parse header
-    let mut version = String::new();
+    let mut _version = String::new();
     let mut fields: Vec<String> = Vec::new();
-    let mut sizes: Vec<usize> = Vec::new();
-    let mut types: Vec<char> = Vec::new();
-    let mut counts: Vec<usize> = Vec::new();
+    let mut _sizes: Vec<usize> = Vec::new();
+    let mut _types: Vec<char> = Vec::new();
+    let mut _counts: Vec<usize> = Vec::new();
     let mut width = 0;
     let mut height = 0;
     let mut viewpoint = [0.0f32; 7]; // tx, ty, tz, qw, qx, qy, qz
@@ -51,19 +51,19 @@ pub fn read_pcd<R: BufRead>(reader: R) -> Result<PointCloud> {
 
         match parts[0] {
             "VERSION" => {
-                version = parts.get(1).unwrap_or(&"0.7").to_string();
+                _version = parts.get(1).unwrap_or(&"0.7").to_string();
             }
             "FIELDS" => {
                 fields = parts[1..].iter().map(|s| s.to_string()).collect();
             }
             "SIZE" => {
-                sizes = parts[1..].iter().map(|s| s.parse().unwrap_or(4)).collect();
+                _sizes = parts[1..].iter().map(|s| s.parse().unwrap_or(4)).collect();
             }
             "TYPE" => {
-                types = parts[1..].iter().filter_map(|s| s.chars().next()).collect();
+                _types = parts[1..].iter().filter_map(|s| s.chars().next()).collect();
             }
             "COUNT" => {
-                counts = parts[1..].iter().map(|s| s.parse().unwrap_or(1)).collect();
+                _counts = parts[1..].iter().map(|s| s.parse().unwrap_or(1)).collect();
             }
             "WIDTH" => {
                 width = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);

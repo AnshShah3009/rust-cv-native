@@ -190,7 +190,7 @@ pub mod mesh {
             .par_iter_mut()
             .zip(faces_list.par_iter())
             .for_each(|(vertices, faces)| {
-                gpu::mesh::laplacian_smooth(vertices, faces, iterations, lambda);
+                let _ = gpu::mesh::laplacian_smooth(vertices, faces, iterations, lambda);
             });
     }
 
