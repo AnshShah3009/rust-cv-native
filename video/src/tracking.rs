@@ -2,7 +2,10 @@
 //!
 //! Various tracking methods for following objects in video sequences
 
+#![allow(deprecated)]
+
 use crate::Result;
+use cv_core::Error;
 use image::GrayImage;
 
 /// Tracker interface
@@ -112,7 +115,7 @@ impl Tracker for TemplateTracker {
             }
         }
 
-        Err(crate::VideoError::TrackingError(
+        Err(crate::Error::RuntimeError(
             "Failed to track object".to_string(),
         ))
     }
@@ -237,7 +240,7 @@ impl Tracker for MeanShiftTracker {
 
     fn update(&mut self, frame: &GrayImage) -> Result<(u32, u32, u32, u32)> {
         let (mut cx, mut cy) = self.last_position.ok_or_else(|| {
-            crate::VideoError::TrackingError("Tracker not initialized".to_string())
+            Error::RuntimeError("Tracker not initialized".to_string())
         })?;
 
         for _ in 0..self.max_iterations {

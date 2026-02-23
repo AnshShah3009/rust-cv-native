@@ -594,6 +594,7 @@ impl Plot3D {
 }
 
 /// Get bounding box of combined point clouds
+#[allow(dead_code)]
 fn bounding_box_all(point_clouds: &[PointCloud3D]) -> (f64, f64, f64, f64, f64, f64) {
     if point_clouds.is_empty() {
         return (0.0, 1.0, 0.0, 1.0, 0.0, 1.0);

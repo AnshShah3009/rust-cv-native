@@ -2,7 +2,8 @@
 //!
 //! PLY is a flexible format for storing 3D data with arbitrary properties.
 
-use crate::{IoError, Result};
+use crate::Result;
+use cv_core::Error;
 use cv_core::point_cloud::PointCloud;
 use nalgebra::{Point3, Vector3};
 use std::io::{BufRead, Write};
@@ -21,7 +22,7 @@ pub fn read_ply<R: BufRead>(reader: R) -> Result<PointCloud> {
     while in_header {
         let line = lines
             .next()
-            .ok_or_else(|| IoError::Parse("Unexpected EOF in header".to_string()))??;
+            .ok_or_else(|| Error::ParseError("Unexpected EOF in header".to_string()))??;
 
         let line = line.trim();
 
@@ -29,15 +30,15 @@ pub fn read_ply<R: BufRead>(reader: R) -> Result<PointCloud> {
             format = line
                 .split_whitespace()
                 .nth(1)
-                .ok_or_else(|| IoError::Parse("Invalid format line".to_string()))?
+                .ok_or_else(|| Error::ParseError("Invalid format line".to_string()))?
                 .to_string();
         } else if line.starts_with("element vertex ") {
             num_vertices = line
                 .split_whitespace()
                 .nth(2)
-                .ok_or_else(|| IoError::Parse("Invalid vertex count".to_string()))?
+                .ok_or_else(|| Error::ParseError("Invalid vertex count".to_string()))?
                 .parse()
-                .map_err(|_| IoError::Parse("Invalid vertex count number".to_string()))?;
+                .map_err(|_| Error::ParseError("Invalid vertex count number".to_string()))?;
         } else if line.contains("property") && line.contains("red") {
             has_colors = true;
         } else if line.contains("property") && line.contains("nx") {
@@ -48,7 +49,7 @@ pub fn read_ply<R: BufRead>(reader: R) -> Result<PointCloud> {
     }
 
     if format != "ascii" {
-        return Err(IoError::UnsupportedFormat(format!(
+        return Err(Error::InvalidInput(format!(
             "PLY format '{}' not supported, only ASCII",
             format
         )));
@@ -70,18 +71,18 @@ pub fn read_ply<R: BufRead>(reader: R) -> Result<PointCloud> {
     for _ in 0..num_vertices {
         let line = lines
             .next()
-            .ok_or_else(|| IoError::Parse("Unexpected EOF in data".to_string()))??;
+            .ok_or_else(|| Error::ParseError("Unexpected EOF in data".to_string()))??;
 
         let values: Vec<f32> = line
             .split_whitespace()
             .map(|s| {
                 s.parse()
-                    .map_err(|_| IoError::Parse(format!("Invalid number: {}", s)))
+                    .map_err(|_| Error::ParseError(format!("Invalid number: {}", s)))
             })
             .collect::<Result<Vec<_>>>()?;
 
         if values.len() < 3 {
-            return Err(IoError::InvalidData(
+            return Err(Error::InvalidInput(
                 "Not enough values for vertex".to_string(),
             ));
         }

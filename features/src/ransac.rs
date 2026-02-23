@@ -176,7 +176,7 @@ fn solve_dlt_homography(a: &[f64], n_rows: usize) -> Option<Matrix3<f64>> {
     // If underdetermined, pad with zeros to ensure we get 9 singular vectors
     if n_rows < 9 {
         let mut padded = nalgebra::DMatrix::zeros(9, 9);
-        padded.slice_mut((0, 0), (n_rows, 9)).copy_from(&matrix);
+        padded.view_mut((0, 0), (n_rows, 9)).copy_from(&matrix);
         matrix = padded;
     }
     
@@ -241,7 +241,7 @@ fn solve_dlt_fundamental(a: &[f64], n_rows: usize) -> Option<Matrix3<f64>> {
     // If underdetermined, pad with zeros to ensure we get 9 singular vectors
     if n_rows < 9 {
         let mut padded = nalgebra::DMatrix::zeros(9, 9);
-        padded.slice_mut((0, 0), (n_rows, 9)).copy_from(&matrix);
+        padded.view_mut((0, 0), (n_rows, 9)).copy_from(&matrix);
         matrix = padded;
     }
     

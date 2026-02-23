@@ -1,7 +1,7 @@
 use crate::calibration::*;
 use crate::essential_fundamental::*;
 use crate::pattern::find_chessboard_corners;
-use cv_core::{CameraIntrinsics, Pose};
+use cv_core::{CameraIntrinsics, Pose, Error};
 use image::GrayImage;
 use nalgebra::{Matrix3, Matrix3x4, Matrix4, Point2, Point3, Vector3};
 use std::path::Path;

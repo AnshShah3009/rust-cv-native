@@ -5,6 +5,7 @@
 use crate::CalibError;
 use cv_core::{CameraIntrinsics, Pose};
 use cv_runtime::RuntimeRunner;
+use cv_hal;
 use nalgebra::{DMatrix, Matrix3, Matrix3x4, Point2, Point3, Rotation3, Vector3};
 use rayon::prelude::*;
 
@@ -226,7 +227,10 @@ pub fn solve_pnp_refine(
     distortion: Option<&cv_core::Distortion>,
     max_iters: usize,
 ) -> Result<Pose> {
-    let runner = cv_runtime::default_runner();
+    let runner = cv_runtime::default_runner().unwrap_or_else(|_| {
+        // Fallback to CPU registry on error
+        cv_runtime::orchestrator::RuntimeRunner::Sync(cv_hal::DeviceId(0))
+    });
     solve_pnp_refine_ctx(
         initial,
         object_points,

@@ -8,6 +8,7 @@ description = "Camera calibration and 3D reconstruction for Rust Computer Vision
 cv-core = { path = "../core" }
 cv-imgproc = { path = "../imgproc" }
 cv-runtime = { path = "../runtime" }
+cv-hal = { path = "../hal" }
 nalgebra = { workspace = true }
 image = { workspace = true }
 thiserror = { workspace = true }

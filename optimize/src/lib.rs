@@ -5,7 +5,7 @@ pub mod sparse;
 
 use cv_hal::compute::ComputeDevice;
 use nalgebra::DVector;
-use sparse::{CgSolver, LinearSolver, SparseMatrix, Triplet};
+use sparse::{CgSolver, LinearSolver, SparseMatrix};
 
 pub trait CostFunction {
     fn dimensions(&self) -> (usize, usize); // (residuals, parameters)

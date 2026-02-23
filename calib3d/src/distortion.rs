@@ -3,7 +3,7 @@
 //! This module provides functions to correct lens distortion in images and points.
 
 use crate::{CalibError, Result};
-use cv_core::{CameraIntrinsics, Distortion, FisheyeDistortion};
+use cv_core::{CameraIntrinsics, Distortion, FisheyeDistortion, Error};
 use cv_imgproc::{remap, BorderMode, Interpolation};
 use image::GrayImage;
 use nalgebra::{Matrix3, Vector3};

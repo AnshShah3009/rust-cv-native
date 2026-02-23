@@ -372,6 +372,7 @@ fn sampson_error(e: &Matrix3<f64>, p1: &Point2<f64>, p2: &Point2<f64>) -> f64 {
 }
 
 /// Sample unique random indices for RANSAC.
+#[allow(dead_code)]
 fn sample_unique_indices(n: usize, k: usize, seed: u64) -> Vec<usize> {
     let mut out = Vec::with_capacity(k);
     let mut used = vec![false; n];

@@ -143,7 +143,7 @@ pub mod registration {
         max_distance: f32,
         max_iterations: usize,
     ) -> crate::Result<Option<Matrix4<f32>>> {
-        Ok(task::spawn_blocking(move || {
+        let result = task::spawn_blocking(move || {
             gpu::registration::icp_point_to_plane(
                 &source,
                 &target,
@@ -152,7 +152,13 @@ pub mod registration {
                 max_iterations,
             )
         })
-        .await?)
+        .await;
+
+        match result {
+            Ok(Ok(matrix)) => Ok(Some(matrix)),
+            Ok(Err(_)) => Ok(None),
+            Err(e) => Err(crate::Error::RuntimeError(format!("Async task error: {}", e))),
+        }
     }
 
     /// Async batch ICP
@@ -200,10 +206,13 @@ pub mod mesh {
         vertices: Vec<Point3<f32>>,
         faces: Vec<[usize; 3]>,
     ) -> crate::Result<Vec<Vector3<f32>>> {
-        Ok(task::spawn_blocking(move || {
+        match task::spawn_blocking(move || {
             gpu::mesh::compute_vertex_normals(&vertices, &faces)
         })
-        .await?)
+        .await {
+            Ok(result) => result.map_err(|e| crate::Error::RuntimeError(format!("GPU compute failed: {}", e))),
+            Err(e) => Err(crate::Error::RuntimeError(format!("Async task error: {}", e))),
+        }
     }
 }
 
@@ -218,10 +227,13 @@ pub mod raycasting {
         mesh_vertices: Vec<Point3<f32>>,
         mesh_faces: Vec<[usize; 3]>,
     ) -> crate::Result<Vec<Option<(f32, Point3<f32>, Vector3<f32>)>>> {
-        Ok(task::spawn_blocking(move || {
+        match task::spawn_blocking(move || {
             gpu::raycasting::cast_rays(&ray_origins, &ray_directions, &mesh_vertices, &mesh_faces)
         })
-        .await?)
+        .await {
+            Ok(result) => result.map_err(|e| crate::Error::RuntimeError(format!("GPU compute failed: {}", e))),
+            Err(e) => Err(crate::Error::RuntimeError(format!("Async task error: {}", e))),
+        }
     }
 }
 

@@ -66,6 +66,10 @@
 //! - [`evaluate_registration`]: Evaluate registration quality
 //! - [`get_information_matrix_from_point_clouds`]: Compute information matrix for uncertainty
 
+/// Use cv_core::Error as the standard error type
+pub use cv_core::Error as RegistrationError;
+pub use cv_core::Result;
+
 pub mod registration;
 
 pub use registration::{

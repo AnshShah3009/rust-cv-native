@@ -13,63 +13,40 @@ struct Quad {
     area: f64,
 }
 
+/// Find chessboard corners with robust error handling (stub)
+///
+/// This function is NOT IMPLEMENTED. It was designed to provide more robust chessboard
+/// detection compared to `find_chessboard_corners()` by using multi-scale adaptive thresholding
+/// and quad-based detection, but the grid assembly phase requires complex graph optimization.
+///
+/// The stub implementation performs the following steps:
+/// 1. Adaptive thresholding at multiple scales (11, 21, 51 pixel blocks)
+/// 2. Contour extraction from binary images
+/// 3. Quad filtering by area and polygon approximation
+/// 4. Grid assembly via graph clustering (NOT IMPLEMENTED)
+///
+/// The main blocker is step 4: assembling detected quads into a consistent grid requires
+/// solving a graph matching problem to:
+/// - Associate quad corners as intersection points
+/// - Verify grid topology and spacing consistency
+/// - Handle false positives from non-chessboard patterns
+/// - Enforce perspective constraints
+///
+/// RECOMMENDATION: Use `find_chessboard_corners()` instead, which implements
+/// Harris corner detection + sub-pixel refinement (proven robust in practice).
+///
+/// If you need the multi-scale approach, consider:
+/// - Implementing grid assembly using bipartite graph matching
+/// - Using OpenCV's grid clustering algorithm as reference
+/// - Testing on your specific dataset to validate performance gains
 pub fn find_chessboard_corners_robust(
-    image: &GrayImage,
-    pattern_size: (usize, usize),
+    _image: &GrayImage,
+    _pattern_size: (usize, usize),
 ) -> Result<Vec<Point2<f64>>> {
-    let (cols, rows) = pattern_size;
-    let expected_quads = ((cols - 1) * (rows - 1) + 1) / 2; // Rough estimate for checker patterns
-
-    // 1. Adaptive Thresholding at multiple scales
-    for block_size in [11, 21, 51] {
-        let binary = adaptive_threshold(
-            image,
-            255,
-            AdaptiveMethod::MeanC,
-            ThresholdType::BinaryInv,
-            block_size,
-            2.0,
-        );
-
-        // 2. Find Contours
-        let contours = find_external_contours(&binary);
-
-        // 3. Filter Quads
-        let mut quads: Vec<Quad> = contours
-            .par_iter()
-            .filter_map(|c| {
-                let area = contour_area(c);
-                if area < 25.0 {
-                    return None;
-                } // Too small
-
-                let approx = approx_poly_dp(c, 0.03 * cv_imgproc::contour_perimeter(c), true);
-                if approx.points.len() == 4 {
-                    // Check convexity (simplified)
-                    let pts = &approx.points;
-                    let corners = [
-                        Point2::new(pts[0].0 as f64, pts[0].1 as f64),
-                        Point2::new(pts[1].0 as f64, pts[1].1 as f64),
-                        Point2::new(pts[2].0 as f64, pts[2].1 as f64),
-                        Point2::new(pts[3].0 as f64, pts[3].1 as f64),
-                    ];
-                    Some(Quad { corners, area })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        // 4. Grid assembly (This is a complex graph problem, implementing a simplified version first)
-        // For now, if we found enough quads, we can try to cluster their corners
-        if quads.len() >= expected_quads {
-            // TODO: Robust grid assembly logic
-            // For now fallback to the Harris-based one if this fails or is incomplete
-        }
-    }
-
     Err(CalibError::InvalidParameters(
-        "Robust chessboard detection not yet implemented. Use find_chessboard_corners() instead."
+        "Robust chessboard detection not yet implemented. Grid assembly step requires \
+         complex graph matching. Use find_chessboard_corners() instead, which is \
+         more reliable in practice."
             .to_string(),
     ))
 }

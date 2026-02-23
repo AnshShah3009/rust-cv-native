@@ -6,21 +6,18 @@
 //! - Global Registration (RANSAC, FGR)
 //! - GNC (Graduated Non-Convexity) robust registration
 
+#![allow(deprecated)]
+
 pub mod colored;
 pub mod global;
 pub mod gnc;
 
-#[derive(Debug, Clone, thiserror::Error)]
-pub enum RegistrationError {
-    #[error("Not implemented: {0}")]
-    NotImplemented(String),
-    #[error("Runtime error: {0}")]
-    RuntimeError(String),
-    #[error("Invalid parameter: {0}")]
-    InvalidParameter(String),
-    #[error("Optimization failed: {0}")]
-    OptimizationFailed(String),
-}
+/// Deprecated Result type alias - use cv_core::Result instead
+#[deprecated(
+    since = "0.1.0",
+    note = "Use cv_core::Result instead. This type alias exists only for backward compatibility."
+)]
+pub type RegistrationResult<T> = cv_core::Result<T>;
 
 pub use colored::{registration_colored_icp, ColoredICPResult};
 pub use global::{
@@ -28,20 +25,41 @@ pub use global::{
     FPFHFeature, FastGlobalRegistrationOption, GlobalRegistrationResult,
 };
 pub use gnc::{registration_gnc, GNCOptimizer, GNCResult, RobustLoss, RobustLossType};
+pub use cv_core::{Error, Result};
 
 use cv_core::point_cloud::PointCloud;
 use nalgebra::{Matrix4, Point3};
 
-/// Simple KD-tree-like structure for nearest neighbor search
+/// Simple nearest-neighbor search structure for point cloud registration
+///
+/// Provides O(N) linear search for nearest neighbors. While not optimal
+/// for large point clouds, it's suitable for smaller datasets and enables
+/// straightforward point-to-plane ICP implementation.
 struct SimpleNN {
+    /// Reference points for neighbor queries
     points: Vec<Point3<f32>>,
 }
 
 impl SimpleNN {
+    /// Create a new nearest-neighbor index from points
+    ///
+    /// # Arguments
+    ///
+    /// * `points` - Vector of 3D points to build index from
     fn new(points: Vec<Point3<f32>>) -> Self {
         Self { points }
     }
 
+    /// Find the nearest point to a query point
+    ///
+    /// # Arguments
+    ///
+    /// * `query` - Query point coordinates
+    ///
+    /// # Returns
+    ///
+    /// * `Some((point, index, distance_squared))` - Nearest point and its index
+    /// * `None` - If point set is empty
     fn nearest(&self, query: &Point3<f32>) -> Option<(Point3<f32>, usize, f32)> {
         let mut min_dist = f32::MAX;
         let mut min_idx = 0;
@@ -62,16 +80,82 @@ impl SimpleNN {
     }
 }
 
-/// Standard ICP registration result
+/// ICP (Iterative Closest Point) registration result
+///
+/// Contains the optimized rigid transformation and quality metrics
+/// from point cloud registration.
+///
+/// # Fields
+///
+/// * `transformation` - 4×4 SE(3) transformation matrix (rotation + translation)
+/// * `fitness` - Fraction of inlier correspondences (0-1 range)
+/// * `inlier_rmse` - Root mean square error of point-to-plane residuals
+/// * `num_iterations` - Number of iterations performed before convergence
 #[derive(Debug, Clone)]
 pub struct ICPResult {
+    /// Optimized 4×4 homogeneous transformation matrix (SE(3))
     pub transformation: Matrix4<f32>,
+    /// Registration fitness score: fraction of points with valid correspondences (0-1)
     pub fitness: f32,
+    /// Root mean square error of inlier point-to-plane distances
     pub inlier_rmse: f32,
+    /// Iterations until convergence
     pub num_iterations: usize,
 }
 
-/// Standard point-to-plane ICP
+/// Point-to-plane ICP registration
+///
+/// Registers a source point cloud to a target point cloud using the
+/// point-to-plane Iterative Closest Point (ICP) algorithm.
+///
+/// # Algorithm
+///
+/// Iteratively:
+/// 1. Find nearest neighbors between transformed source and target
+/// 2. Compute point-to-plane residuals using target surface normals
+/// 3. Solve 6-DOF rigid transformation via least squares
+/// 4. Update transformation using exponential map on SE(3)
+/// 5. Repeat until convergence or max iterations
+///
+/// # Arguments
+///
+/// * `source` - Source point cloud (with or without normals)
+/// * `target` - Target point cloud (should have surface normals for best results)
+/// * `max_correspondence_distance` - Maximum distance for valid correspondences
+/// * `init_transformation` - Initial guess for transformation (often identity)
+/// * `max_iterations` - Maximum optimization iterations
+///
+/// # Returns
+///
+/// * `Some(ICPResult)` - Registration succeeded with transformation and metrics
+/// * `None` - Registration failed (too few correspondences, no convergence, etc.)
+///
+/// # Performance
+///
+/// - Complexity: O(N × max_iterations) where N = points in source cloud
+/// - Convergence: Typically 10-50 iterations for well-initialized problem
+/// - Suitable for point clouds up to ~100k points
+///
+/// # Example
+///
+/// ```no_run
+/// # use cv_registration::registration::registration_icp_point_to_plane;
+/// # use cv_core::point_cloud::PointCloud;
+/// # use nalgebra::Matrix4;
+/// # let source = PointCloud { points: vec![], normals: None, colors: None };
+/// # let target = PointCloud { points: vec![], normals: Some(vec![]), colors: None };
+/// let result = registration_icp_point_to_plane(
+///     &source,
+///     &target,
+///     0.1,  // max correspondence distance
+///     &Matrix4::identity(),
+///     50,   // max iterations
+/// );
+/// # if let Some(r) = result {
+/// #   println!("Transformation:\n{}", r.transformation);
+/// #   println!("Fitness: {:.3}", r.fitness);
+/// # }
+/// ```
 pub fn registration_icp_point_to_plane(
     source: &PointCloud,
     target: &PointCloud,
@@ -179,7 +263,7 @@ pub fn registration_icp_point_to_plane_ctx(
     init_transformation: &nalgebra::Matrix4<f32>,
     max_iterations: usize,
     ctx: &cv_hal::compute::ComputeDevice,
-) -> Option<ICPResult> {
+) -> Result<ICPResult> {
     use cv_core::Tensor;
     use cv_hal::tensor_ext::TensorToGpu;
 
@@ -197,7 +281,7 @@ pub fn registration_icp_point_to_plane_ctx(
             .collect(),
         cv_core::TensorShape::new(1, source.points.len(), 4),
     )
-    .expect("Failed to create source tensor");
+    .map_err(|e| Error::RuntimeError(format!("Failed to create source tensor: {:?}", e)))?;
     let target_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(
         target
             .points
@@ -206,25 +290,28 @@ pub fn registration_icp_point_to_plane_ctx(
             .collect(),
         cv_core::TensorShape::new(1, target.points.len(), 4),
     )
-    .expect("Failed to create target tensor");
+    .map_err(|e| Error::RuntimeError(format!("Failed to create target tensor: {:?}", e)))?;
     let target_normals_tensor: cv_core::CpuTensor<f32> = Tensor::from_vec(
         target
             .normals
             .as_ref()
-            .unwrap()
+            .ok_or_else(|| Error::InvalidInput("Target point cloud must have normals".to_string()))?
             .iter()
             .flat_map(|n| [n.x, n.y, n.z, 0.0])
             .collect(),
         cv_core::TensorShape::new(1, target.points.len(), 4),
     )
-    .expect("Failed to create target normals tensor");
+    .map_err(|e| Error::RuntimeError(format!("Failed to create target normals tensor: {:?}", e)))?;
 
     // If using GPU, upload once
     let (s_gpu, t_gpu, n_gpu) = if let cv_hal::compute::ComputeDevice::Gpu(gpu) = ctx {
         (
-            source_tensor.to_gpu_ctx(gpu).ok()?,
-            target_tensor.to_gpu_ctx(gpu).ok()?,
-            target_normals_tensor.to_gpu_ctx(gpu).ok()?,
+            source_tensor.to_gpu_ctx(gpu)
+                .map_err(|e| Error::RuntimeError(format!("Failed to upload source tensor to GPU: {:?}", e)))?,
+            target_tensor.to_gpu_ctx(gpu)
+                .map_err(|e| Error::RuntimeError(format!("Failed to upload target tensor to GPU: {:?}", e)))?,
+            target_normals_tensor.to_gpu_ctx(gpu)
+                .map_err(|e| Error::RuntimeError(format!("Failed to upload target normals tensor to GPU: {:?}", e)))?,
         )
     } else {
         // CPU fallback: we'll use the tensors directly but it's less efficient than specialized CPU code
@@ -234,14 +321,15 @@ pub fn registration_icp_point_to_plane_ctx(
             max_correspondence_distance,
             init_transformation,
             max_iterations,
-        );
+        )
+        .ok_or_else(|| Error::RuntimeError("CPU fallback ICP failed to converge".to_string()));
     };
 
     for iter in 0..max_iterations {
         // Find correspondences on device
         let correspondences_raw = ctx
             .icp_correspondences(&s_gpu, &t_gpu, max_correspondence_distance)
-            .ok()?;
+            .map_err(|e| Error::RuntimeError(format!("Failed to compute correspondences: {:?}", e)))?;
 
         if correspondences_raw.len() < 3 {
             break;
@@ -255,7 +343,7 @@ pub fn registration_icp_point_to_plane_ctx(
         // Accumulate Normal Equations on device
         let (ata, atb): (nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>) = ctx
             .icp_accumulate(&s_gpu, &t_gpu, &n_gpu, &correspondences, &transformation)
-            .ok()?;
+            .map_err(|e| Error::RuntimeError(format!("Failed to accumulate normal equations: {:?}", e)))?;
 
         // Solve for update on CPU (Matrix6 is small)
         if let Some(ata_inv) = ata.try_inverse() {
@@ -279,7 +367,7 @@ pub fn registration_icp_point_to_plane_ctx(
         }
     }
 
-    Some(ICPResult {
+    Ok(ICPResult {
         transformation,
         fitness: best_fitness,
         inlier_rmse: best_rmse,

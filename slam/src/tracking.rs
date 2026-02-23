@@ -39,7 +39,8 @@ impl Tracker {
         map: &mut WorldMap,
     ) -> Result<(Pose, Vec<usize>), String> {
         use cv_core::storage::CpuStorage;
-        let device = self.group.device();
+        let device = self.group.device()
+            .map_err(|e| format!("Failed to get compute device: {}", e))?;
 
         let (keypoints, descriptors) =
             detect_and_compute_ctx(&self.detector, &device, &self.group, image);

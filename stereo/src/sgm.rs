@@ -1,10 +1,12 @@
+#![allow(deprecated)]
+
 use crate::{DisparityMap, Result, StereoError, StereoMatcher, StereoMatcherCtx};
 use image::GrayImage;
 use rayon::prelude::*;
 use cv_runtime::orchestrator::RuntimeRunner;
 use cv_hal::compute::ComputeDevice;
 use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
-use cv_core::{Tensor, storage::Storage};
+use cv_core::{Tensor, storage::Storage, Error};
 
 /// SGM stereo matcher
 pub struct SgmMatcher {
@@ -41,7 +43,10 @@ impl Default for SgmMatcher {
 
 impl StereoMatcher for SgmMatcher {
     fn compute(&self, left: &GrayImage, right: &GrayImage) -> Result<DisparityMap> {
-        let runner = cv_runtime::best_runner();
+        let runner = cv_runtime::best_runner().unwrap_or_else(|_| {
+            // Fallback to CPU registry on error
+            cv_runtime::orchestrator::RuntimeRunner::Sync(cv_hal::DeviceId(0))
+        });
         self.compute_ctx(left, right, &runner)
     }
 }
@@ -49,7 +54,7 @@ impl StereoMatcher for SgmMatcher {
 impl StereoMatcherCtx for SgmMatcher {
     fn compute_ctx(&self, left: &GrayImage, right: &GrayImage, group: &RuntimeRunner) -> Result<DisparityMap> {
         if left.width() != right.width() || left.height() != right.height() {
-            return Err(StereoError::SizeMismatch(
+            return Err(Error::DimensionMismatch(
                 "Left and right images must have the same dimensions".to_string(),
             ));
         }
@@ -59,7 +64,7 @@ impl StereoMatcherCtx for SgmMatcher {
         let num_disparities = (self.max_disparity - self.min_disparity + 1) as usize;
 
         // Check for GPU acceleration
-        if let ComputeDevice::Gpu(gpu) = group.device() {
+        if let Ok(ComputeDevice::Gpu(gpu)) = group.device() {
             if let Ok(res) = self.compute_gpu(gpu, left, right) {
                 return Ok(res);
             }

@@ -127,7 +127,15 @@ pub fn warp_perspective_ex(
     interpolation: Interpolation,
     border: BorderMode,
 ) -> GrayImage {
-    let runner = cv_runtime::best_runner();
+    let runner = cv_runtime::best_runner().unwrap_or_else(|_| {
+        // Fallback: use CPU registry if available
+        cv_runtime::registry()
+            .ok()
+            .and_then(|reg| {
+                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+            })
+            .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+    });
     warp_perspective_ex_ctx(src, matrix, width, height, interpolation, border, &runner)
 }
 
@@ -140,15 +148,16 @@ pub fn warp_perspective_ex_ctx(
     border: BorderMode,
     group: &RuntimeRunner,
 ) -> GrayImage {
-    let device = group.device();
-
     // Check for GPU acceleration
-    if let ComputeDevice::Gpu(gpu) = device {
-        if interpolation == Interpolation::Linear && border == BorderMode::Constant(0) {
-            if let Ok(result) = warp_gpu(gpu, src, matrix, width, height, cv_hal::context::WarpType::Perspective) {
-                return result;
+    match group.device() {
+        Ok(ComputeDevice::Gpu(gpu)) => {
+            if interpolation == Interpolation::Linear && border == BorderMode::Constant(0) {
+                if let Ok(result) = warp_gpu(gpu, src, matrix, width, height, cv_hal::context::WarpType::Perspective) {
+                    return result;
+                }
             }
         }
+        _ => {}
     }
 
     let mut dst = GrayImage::new(width, height);
@@ -225,7 +234,15 @@ pub fn warp_affine(
     width: u32,
     height: u32,
 ) -> GrayImage {
-    let runner = cv_runtime::best_runner();
+    let runner = cv_runtime::best_runner().unwrap_or_else(|_| {
+        // Fallback: use CPU registry if available
+        cv_runtime::registry()
+            .ok()
+            .and_then(|reg| {
+                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+            })
+            .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+    });
     warp_affine_ctx(src, matrix_2x3, width, height, &runner)
 }
 
@@ -255,7 +272,15 @@ pub fn warp_affine_ex(
     interpolation: Interpolation,
     border: BorderMode,
 ) -> GrayImage {
-    let runner = cv_runtime::best_runner();
+    let runner = cv_runtime::best_runner().unwrap_or_else(|_| {
+        // Fallback: use CPU registry if available
+        cv_runtime::registry()
+            .ok()
+            .and_then(|reg| {
+                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+            })
+            .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+    });
     warp_affine_ex_ctx(src, matrix_2x3, width, height, interpolation, border, &runner)
 }
 
@@ -281,7 +306,7 @@ pub fn warp_affine_ex_ctx(
     );
 
     // Check for GPU acceleration
-    if let ComputeDevice::Gpu(gpu) = group.device() {
+    if let Ok(ComputeDevice::Gpu(gpu)) = group.device() {
         if interpolation == Interpolation::Linear && border == BorderMode::Constant(0) {
             if let Ok(result) = warp_gpu(gpu, src, &matrix, width, height, cv_hal::context::WarpType::Affine) {
                 return result;

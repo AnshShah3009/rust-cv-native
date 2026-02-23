@@ -54,8 +54,13 @@ pub fn sobel_ex(
     delta: f32,
     border: BorderMode,
 ) -> GrayImage {
-    let runner = cv_runtime::best_runner();
-    sobel_ex_ctx(src, dx, dy, ksize, scale, delta, border, &runner)
+    match cv_runtime::best_runner() {
+        Ok(runner) => sobel_ex_ctx(src, dx, dy, ksize, scale, delta, border, &runner),
+        Err(_) => {
+            // Fallback: compute on CPU
+            sobel_ex_ctx(src, dx, dy, ksize, scale, delta, border, &cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+        }
+    }
 }
 
 pub fn sobel_ex_ctx(
@@ -68,9 +73,7 @@ pub fn sobel_ex_ctx(
     border: BorderMode,
     group: &RuntimeRunner,
 ) -> GrayImage {
-    let device = group.device();
-    
-    if let ComputeDevice::Gpu(gpu) = device {
+    if let Ok(ComputeDevice::Gpu(gpu)) = group.device() {
         if dx == 1 && dy == 1 && ksize == 3 {
             if let Ok(result) = sobel_gpu(gpu, src, ksize) {
                 let (gx, gy) = result;
@@ -127,8 +130,13 @@ pub fn scharr_ex(
     delta: f32,
     border: BorderMode,
 ) -> GrayImage {
-    let runner = cv_runtime::best_runner();
-    scharr_ex_ctx(src, dx, dy, scale, delta, border, &runner)
+    match cv_runtime::best_runner() {
+        Ok(runner) => scharr_ex_ctx(src, dx, dy, scale, delta, border, &runner),
+        Err(_) => {
+            // Fallback: compute on CPU
+            scharr_ex_ctx(src, dx, dy, scale, delta, border, &cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+        }
+    }
 }
 
 pub fn scharr_ex_ctx(
@@ -151,7 +159,15 @@ pub fn scharr_ex_ctx(
 }
 
 pub fn sobel_with_border(src: &GrayImage, border: BorderMode) -> (GrayImage, GrayImage) {
-    let runner = cv_runtime::default_runner();
+    let runner = cv_runtime::default_runner().unwrap_or_else(|_| {
+        // Fallback: use CPU registry if available
+        cv_runtime::registry()
+            .ok()
+            .and_then(|reg| {
+                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+            })
+            .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+    });
     let gx = sobel_ex_ctx(src, 1, 0, 3, 1.0, 0.0, border, &runner);
     let gy = sobel_ex_ctx(src, 0, 1, 3, 1.0, 0.0, border, &runner);
     (gx, gy)
@@ -162,7 +178,15 @@ pub fn sobel(src: &GrayImage) -> (GrayImage, GrayImage) {
 }
 
 pub fn scharr_with_border(src: &GrayImage, border: BorderMode) -> (GrayImage, GrayImage) {
-    let runner = cv_runtime::default_runner();
+    let runner = cv_runtime::default_runner().unwrap_or_else(|_| {
+        // Fallback: use CPU registry if available
+        cv_runtime::registry()
+            .ok()
+            .and_then(|reg| {
+                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+            })
+            .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+    });
     let gx = scharr_ex_ctx(src, 1, 0, 1.0, 0.0, border, &runner);
     let gy = scharr_ex_ctx(src, 0, 1, 1.0, 0.0, border, &runner);
     (gx, gy)
@@ -173,7 +197,15 @@ pub fn scharr(src: &GrayImage) -> (GrayImage, GrayImage) {
 }
 
 pub fn sobel_magnitude(gx: &GrayImage, gy: &GrayImage) -> GrayImage {
-    let runner = cv_runtime::default_runner();
+    let runner = cv_runtime::default_runner().unwrap_or_else(|_| {
+        // Fallback: use CPU registry if available
+        cv_runtime::registry()
+            .ok()
+            .and_then(|reg| {
+                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+            })
+            .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+    });
     sobel_magnitude_ctx(gx, gy, &runner)
 }
 
@@ -200,7 +232,15 @@ pub fn sobel_magnitude_ctx(gx: &GrayImage, gy: &GrayImage, group: &RuntimeRunner
 }
 
 pub fn laplacian(src: &GrayImage) -> GrayImage {
-    let runner = cv_runtime::default_runner();
+    let runner = cv_runtime::default_runner().unwrap_or_else(|_| {
+        // Fallback: use CPU registry if available
+        cv_runtime::registry()
+            .ok()
+            .and_then(|reg| {
+                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+            })
+            .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+    });
     laplacian_ctx(src, &runner)
 }
 
@@ -420,17 +460,26 @@ fn hysteresis(width: usize, height: usize, nms: &[f32], low: f32, high: f32) -> 
 }
 
 pub fn canny(src: &GrayImage, low_threshold: u8, high_threshold: u8) -> GrayImage {
-    let runner = cv_runtime::default_runner();
+    let runner = cv_runtime::default_runner().unwrap_or_else(|_| {
+        // Fallback: use CPU registry if available
+        cv_runtime::registry()
+            .ok()
+            .and_then(|reg| {
+                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+            })
+            .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+    });
     canny_ctx(src, low_threshold, high_threshold, &runner)
 }
 
 pub fn canny_ctx(src: &GrayImage, low_threshold: u8, high_threshold: u8, group: &RuntimeRunner) -> GrayImage {
-    let device = group.device();
-    
-    if let ComputeDevice::Gpu(gpu) = device {
-        if let Ok(res) = canny_gpu(gpu, src, low_threshold as f32, high_threshold as f32) {
-            return res;
+    match group.device() {
+        Ok(ComputeDevice::Gpu(gpu)) => {
+            if let Ok(res) = canny_gpu(gpu, src, low_threshold as f32, high_threshold as f32) {
+                return res;
+            }
         }
+        _ => {}
     }
 
     let blurred = gaussian_blur_ctx(src, 1.0, BorderMode::Reflect101, group);

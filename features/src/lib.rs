@@ -79,32 +79,19 @@ pub use lbd::*;
 pub use line_matcher::*;
 pub use cv_imgproc::hough;
 
-pub use cv_core::{KeyPoint, KeyPoints};
+pub use cv_core::{KeyPoint, KeyPoints, Error, Result};
 
-/// Result type for feature detection and extraction operations.
-///
-/// Used throughout the crate to handle feature detection and processing errors.
-pub type Result<T> = std::result::Result<T, FeatureError>;
+/// Backward compatibility alias for deprecated custom error type
+#[deprecated(
+    since = "0.1.0",
+    note = "Use cv_core::Error instead. This type exists only for backward compatibility."
+)]
+pub type FeatureError = cv_core::Error;
 
-/// Error type for feature detection, extraction, and matching operations.
-///
-/// # Variants
-///
-/// - `DetectionError`: Errors that occur during feature keypoint detection
-/// - `DescriptorError`: Errors that occur during descriptor extraction
-/// - `MatchingError`: Errors that occur during feature matching
-#[derive(Debug, thiserror::Error)]
-pub enum FeatureError {
-    /// Error during feature detection phase
-    #[error("Detection error: {0}")]
-    DetectionError(String),
-
-    /// Error during descriptor extraction phase
-    #[error("Descriptor error: {0}")]
-    DescriptorError(String),
-
-    /// Error during feature matching phase
-    #[error("Matching error: {0}")]
-    MatchingError(String),
-}
+/// Deprecated Result type alias - use cv_core::Result instead
+#[deprecated(
+    since = "0.1.0",
+    note = "Use cv_core::Result instead. This type alias exists only for backward compatibility."
+)]
+pub type FeatureResult<T> = cv_core::Result<T>;
 

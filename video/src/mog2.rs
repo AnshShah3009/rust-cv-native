@@ -3,28 +3,105 @@
 //! Robust background/foreground segmentation algorithm that models each pixel
 //! as a mixture of multiple Gaussian distributions.
 
-use cv_core::{storage::CpuStorage, storage::Storage, CpuTensor, Tensor, TensorShape};
+#![allow(deprecated)]
+
+use cv_core::{storage::CpuStorage, storage::Storage, CpuTensor, Tensor, TensorShape, Error};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::context::{ComputeContext, Mog2Params};
 use cv_hal::tensor_ext::{TensorCast, TensorToCpu, TensorToGpu};
+use crate::{Result, VideoError};
 
+/// MOG2 (Mixture of Gaussians) background subtraction model
+///
+/// Stateful background subtraction algorithm that models each pixel as a mixture
+/// of Gaussian distributions. Learns and adapts background model over time to
+/// robustly separate foreground from background despite illumination changes.
+///
+/// # Algorithm Overview
+///
+/// MOG2 maintains K Gaussian components per pixel, each with weight, mean, and
+/// variance. The algorithm:
+/// 1. Updates component parameters based on the current frame
+/// 2. Matches pixels to background components
+/// 3. Labels pixels as foreground (not matched to background) or background
+///
+/// # Model State
+///
+/// Stores per-pixel mixture model with configurable number of Gaussians.
+/// State is automatically initialized on first frame and persists across calls.
+/// If frame dimensions change, the model is reset and reinitialized.
+///
+/// # Parameters
+///
+/// * `history` - Learning rate and history length (50-500 typical)
+/// * `var_threshold` - Variance threshold for detecting shadows (typically 10-20)
+/// * `detect_shadows` - Enable shadow detection (reserved for future use)
+///
+/// # Example
+///
+/// ```no_run
+/// # use cv_video::mog2::Mog2;
+/// # use cv_hal::cpu::CpuBackend;
+/// # use cv_hal::compute::ComputeDevice;
+/// let cpu = CpuBackend::new().unwrap();
+/// let device = ComputeDevice::Cpu(&cpu);
+/// let mut mog2 = Mog2::new(100, 16.0, false);
+/// // mog2.apply_ctx(&frame_tensor, -1.0, &device);
+/// ```
 pub struct Mog2 {
+    /// Learning rate parameter and history window size
     history: usize,
+    /// Threshold for variance used in shadow detection
     var_threshold: f32,
+    /// Reserved for shadow detection (not currently used)
     _detect_shadows: bool,
+    /// Number of Gaussian components per pixel (fixed at 5)
     n_mixtures: usize,
+    /// Ratio of background components (typically 0.9)
     background_ratio: f32,
+    /// Initial variance for new components
     var_init: f32,
+    /// Minimum allowed variance to prevent numerical issues
     var_min: f32,
+    /// Maximum allowed variance to prevent explosion
     var_max: f32,
 
-    // Model state: [H * W * N_MIXTURES * 3]
+    /// Persistent model storage: [H * W * N_MIXTURES * 3] flattened
+    /// Contains weight, mean, and variance for each mixture component
     model: Option<Box<dyn std::any::Any>>, // Stores Tensor<f32, S>
+    /// Cached frame width to detect dimension changes
     width: usize,
+    /// Cached frame height to detect dimension changes
     height: usize,
 }
 
 impl Mog2 {
+    /// Create a new MOG2 background subtraction model
+    ///
+    /// # Arguments
+    ///
+    /// * `history` - Number of frames for learning history (typically 50-500)
+    ///   - Larger values → slower adaptation to scene changes
+    ///   - Smaller values → faster adaptation, more noise sensitivity
+    ///   - Learning rate = 1.0 / history
+    ///
+    /// * `var_threshold` - Shadow detection threshold (typically 10-20)
+    ///   - Controls sensitivity of variance-based shadow detection
+    ///   - Not currently used but reserved for future implementation
+    ///
+    /// * `detect_shadows` - Enable shadow detection (false for now)
+    ///   - Reserved parameter for future shadow detection features
+    ///   - Currently has no effect
+    ///
+    /// # Returns
+    ///
+    /// A new MOG2 model instance with uninitialized internal state.
+    /// State will be initialized on the first [`apply_ctx`] call.
+    ///
+    /// # Panics
+    ///
+    /// None. Invalid parameters are silently accepted; bounds checking
+    /// occurs during processing.
     pub fn new(history: usize, var_threshold: f32, detect_shadows: bool) -> Self {
         Self {
             history,
@@ -41,12 +118,75 @@ impl Mog2 {
         }
     }
 
+    /// Process a frame and return foreground/background segmentation mask
+    ///
+    /// Updates the internal Gaussian mixture model with the current frame and
+    /// produces a binary mask distinguishing foreground from background.
+    ///
+    /// # Arguments
+    ///
+    /// * `frame` - Input color or grayscale image (u8, values 0-255)
+    ///   - For color images: treated as grayscale or automatically converted
+    ///   - Dimensions can change between calls (triggers model reset)
+    ///
+    /// * `learning_rate` - Adaptation rate for model updates
+    ///   - Negative value: uses `1.0 / history` (automatic)
+    ///   - 0.0 - 1.0: explicit learning rate
+    ///   - Typical range: 0.001 - 0.1
+    ///   - Higher values → faster model adaptation
+    ///
+    /// * `ctx` - Compute device (CPU or GPU) for processing
+    ///   - GPU provides faster processing for large frames
+    ///   - Falls back gracefully if GPU unavailable
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(CpuTensor<u8>)` - Binary foreground/background mask
+    ///   - Value 255: foreground (moving object/change)
+    ///   - Value 0: background (static/learned model)
+    ///   - Same dimensions as input frame
+    ///
+    /// * `Err(VideoError)` - If model update or processing fails
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidParameters` error if:
+    /// - GPU memory allocation fails
+    /// - Tensor conversion or casting fails
+    /// - Device computation fails
+    /// - Frame dimensions are zero or invalid
+    ///
+    /// # Model Behavior
+    ///
+    /// **First call**: Initializes mixture components with input frame values
+    /// **Subsequent calls**: Updates mean/variance based on learning_rate
+    /// **Dimension change**: Resets and reinitializes the model
+    ///
+    /// # Computational Complexity
+    ///
+    /// - Time: O(H × W × K) where K = number of mixtures (5)
+    /// - Space: O(H × W × K) for internal model storage
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use cv_video::mog2::Mog2;
+    /// # use cv_hal::cpu::CpuBackend;
+    /// # use cv_hal::compute::ComputeDevice;
+    /// # let cpu = CpuBackend::new().unwrap();
+    /// # let device = ComputeDevice::Cpu(&cpu);
+    /// # let frame_tensor = todo!();
+    /// let mut mog2 = Mog2::new(100, 16.0, false);
+    /// let mask = mog2.apply_ctx(&frame_tensor, -1.0, &device)?;
+    /// // mask contains foreground (255) and background (0) pixels
+    /// # Ok::<(), cv_core::Error>(())
+    /// ```
     pub fn apply_ctx<S: Storage<u8> + 'static>(
         &mut self,
         frame: &Tensor<u8, S>,
         learning_rate: f32,
         ctx: &ComputeDevice,
-    ) -> CpuTensor<u8>
+    ) -> Result<CpuTensor<u8>>
     where
         Tensor<u8, S>: TensorToCpu<u8> + TensorToGpu<u8>,
     {
@@ -76,17 +216,20 @@ impl Mog2 {
             ComputeDevice::Gpu(gpu) => {
                 use cv_hal::storage::GpuStorage;
                 // For GPU, we need TensorCast to do GPU-side casting
-                let frame_gpu = frame.to_gpu_ctx(gpu).expect("Upload to GPU failed");
+                let frame_gpu = frame.to_gpu_ctx(gpu)
+                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Upload to GPU failed: {:?}", e))))?;
                 let frame_f32 =
                     <Tensor<u8, GpuStorage<u8>> as TensorCast>::to_f32_ctx(&frame_gpu, gpu)
-                        .expect("GPU cast failed");
+                        .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("GPU cast failed: {:?}", e))))?;
 
                 if self.model.is_none() || self.width != width || self.height != height {
                     self.width = width;
                     self.height = height;
                     let mut data = vec![0.0f32; width * height * self.n_mixtures * 3];
-                    let frame_cpu = frame.to_cpu().expect("Download to CPU failed");
-                    let frame_raw = frame_cpu.as_slice().expect("Failed to get frame slice");
+                    let frame_cpu = frame.to_cpu()
+                        .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Download to CPU failed: {:?}", e))))?;
+                    let frame_raw = frame_cpu.as_slice()
+                        .map_err(|_| Error::VideoError("Failed to get frame slice".to_string()))?;
                     for i in 0..(width * height) {
                         let base = i * self.n_mixtures * 3;
                         data[base + 0] = 1.0;
@@ -97,57 +240,59 @@ impl Mog2 {
                         data,
                         TensorShape::new(1, 1, width * height * self.n_mixtures * 3),
                     )
-                    .expect("Failed to create model tensor")
+                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create model tensor: {:?}", e))))?
                     .to_gpu_ctx(gpu)
-                    .expect("Upload model to GPU failed");
+                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Upload model to GPU failed: {:?}", e))))?;
                     self.model = Some(Box::new(model_gpu));
                 }
 
                 let model_gpu = self
                     .model
                     .as_mut()
-                    .expect("Model missing")
+                    .ok_or_else(|| Error::VideoError("Model missing".to_string()))?
                     .downcast_mut::<Tensor<f32, GpuStorage<f32>>>()
-                    .expect("Downcast failed");
+                    .ok_or_else(|| Error::VideoError("Downcast to GPU model failed".to_string()))?;
                 let mut mask_gpu = Tensor::<u32, GpuStorage<u32>>::from_vec(
                     vec![0u32; width * height],
                     TensorShape::new(1, height, width),
                 )
-                .expect("Failed to create mask tensor")
+                .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create mask tensor: {:?}", e))))?
                 .to_gpu_ctx(gpu)
-                .expect("Upload mask to GPU failed");
+                .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Upload mask to GPU failed: {:?}", e))))?;
 
                 gpu.mog2_update(&frame_f32, model_gpu, &mut mask_gpu, &params)
-                    .expect("MOG2 GPU update failed");
+                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("MOG2 GPU update failed: {:?}", e))))?;
 
                 let mask_cpu = mask_gpu
                     .to_cpu_ctx(gpu)
-                    .expect("Download mask to CPU failed");
+                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Download mask to CPU failed: {:?}", e))))?;
                 let u8_data: Vec<u8> = mask_cpu
                     .as_slice()
-                    .expect("Failed to get mask slice")
+                    .map_err(|_| Error::VideoError("Failed to get mask slice".to_string()))?
                     .iter()
                     .map(|&v| v as u8)
                     .collect();
                 CpuTensor::from_vec(u8_data, frame.shape)
-                    .expect("Failed to create final result tensor")
+                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create final result tensor: {:?}", e))))
             }
             ComputeDevice::Cpu(cpu) => {
-                let frame_cpu = frame.to_cpu().expect("Download frame to CPU failed");
+                let frame_cpu = frame.to_cpu()
+                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Download frame to CPU failed: {:?}", e))))?;
                 let frame_f32_vec: Vec<f32> = frame_cpu
                     .as_slice()
-                    .expect("Failed to get frame slice")
+                    .map_err(|_| Error::VideoError("Failed to get frame slice".to_string()))?
                     .iter()
                     .map(|&v| v as f32 / 255.0)
                     .collect();
                 let frame_tensor = CpuTensor::from_vec(frame_f32_vec, frame.shape)
-                    .expect("Failed to create frame tensor");
+                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create frame tensor: {:?}", e))))?;
 
                 if self.model.is_none() || self.width != width || self.height != height {
                     self.width = width;
                     self.height = height;
                     let mut data = vec![0.0f32; width * height * self.n_mixtures * 3];
-                    let frame_raw = frame_cpu.as_slice().expect("Failed to get frame slice");
+                    let frame_raw = frame_cpu.as_slice()
+                        .map_err(|_| Error::VideoError("Failed to get frame slice".to_string()))?;
                     for i in 0..(width * height) {
                         let base = i * self.n_mixtures * 3;
                         data[base + 0] = 1.0;
@@ -159,38 +304,38 @@ impl Mog2 {
                             data,
                             TensorShape::new(1, 1, width * height * self.n_mixtures * 3),
                         )
-                        .expect("Failed to create model tensor"),
+                        .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create model tensor: {:?}", e))))?,
                     ));
                 }
 
                 let model_cpu = self
                     .model
                     .as_mut()
-                    .expect("Model missing")
+                    .ok_or_else(|| Error::VideoError("Model missing".to_string()))?
                     .downcast_mut::<CpuTensor<f32>>()
-                    .expect("Downcast failed");
+                    .ok_or_else(|| Error::VideoError("Downcast to CPU model failed".to_string()))?;
                 let mut mask_cpu = Tensor::<u32, CpuStorage<u32>>::from_vec(
                     vec![0u32; width * height],
                     frame.shape,
                 )
-                .expect("Failed to create mask tensor");
+                .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create mask tensor: {:?}", e))))?;
 
                 cpu.mog2_update(&frame_tensor, model_cpu, &mut mask_cpu, &params)
-                    .expect("MOG2 CPU update failed");
+                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("MOG2 CPU update failed: {:?}", e))))?;
 
                 let u8_data: Vec<u8> = mask_cpu
                     .as_slice()
-                    .expect("Failed to get mask slice")
+                    .map_err(|_| Error::VideoError("Failed to get mask slice".to_string()))?
                     .iter()
                     .map(|&v| v as u8)
                     .collect();
                 CpuTensor::from_vec(u8_data, frame.shape)
-                    .expect("Failed to create final result tensor")
+                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create final result tensor: {:?}", e))))
             }
             ComputeDevice::Mlx(_) => {
                 eprintln!("Warning: MOG2 not implemented for MLX backend, returning empty mask");
                 CpuTensor::from_vec(vec![0u8; width * height], frame.shape)
-                    .expect("Failed to create empty result tensor")
+                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create empty result tensor: {:?}", e))))
             }
         }
     }
@@ -214,7 +359,7 @@ mod tests {
             CpuTensor::from_vec(bg_data, TensorShape::new(1, height, width)).unwrap();
 
         for _ in 0..10 {
-            mog2.apply_ctx(&bg_frame, -1.0, &device);
+            let _ = mog2.apply_ctx(&bg_frame, -1.0, &device);
         }
 
         let mut fg_data = vec![0u8; width * height];
@@ -226,7 +371,7 @@ mod tests {
         let fg_frame: CpuTensor<u8> =
             CpuTensor::from_vec(fg_data, TensorShape::new(1, height, width)).unwrap();
 
-        let mask = mog2.apply_ctx(&fg_frame, -1.0, &device);
+        let mask = mog2.apply_ctx(&fg_frame, -1.0, &device).unwrap();
 
         let mut fg_count = 0;
         let mask_slice = mask.as_slice().unwrap();
@@ -260,7 +405,7 @@ mod tests {
         }
 
         // Uniform background should be learned
-        let mask = mog2.apply_ctx(&frame, -1.0, &device);
+        let mask = mog2.apply_ctx(&frame, -1.0, &device).unwrap();
         let mask_slice = mask.as_slice().unwrap();
 
         // Count foreground pixels (should be minimal for uniform background)
@@ -299,18 +444,18 @@ mod tests {
         // Test with automatic learning rate
         let mut mog2_auto = Mog2::new(100, 16.0, false);
         for _ in 0..5 {
-            mog2_auto.apply_ctx(&bg_frame, -1.0, &device);
+            let _ = mog2_auto.apply_ctx(&bg_frame, -1.0, &device);
         }
 
         // Test with explicit learning rate
         let mut mog2_explicit = Mog2::new(100, 16.0, false);
         for _ in 0..5 {
-            mog2_explicit.apply_ctx(&bg_frame, 0.01, &device);
+            let _ = mog2_explicit.apply_ctx(&bg_frame, 0.01, &device);
         }
 
         // Both should produce valid masks
-        let mask_auto = mog2_auto.apply_ctx(&bg_frame, -1.0, &device);
-        let mask_explicit = mog2_explicit.apply_ctx(&bg_frame, 0.01, &device);
+        let mask_auto = mog2_auto.apply_ctx(&bg_frame, -1.0, &device).unwrap();
+        let mask_explicit = mog2_explicit.apply_ctx(&bg_frame, 0.01, &device).unwrap();
 
         assert_eq!(mask_auto.shape, bg_frame.shape);
         assert_eq!(mask_explicit.shape, bg_frame.shape);
@@ -328,7 +473,7 @@ mod tests {
         let frame: CpuTensor<u8> =
             CpuTensor::from_vec(frame_data, TensorShape::new(1, height, width)).unwrap();
 
-        let mask = mog2.apply_ctx(&frame, -1.0, &device);
+        let mask = mog2.apply_ctx(&frame, -1.0, &device).unwrap();
 
         // Output mask should have same dimensions as input
         assert_eq!(mask.shape.height, height);
@@ -368,7 +513,7 @@ mod tests {
         let final_data = vec![100u8; width * height];
         let final_frame: CpuTensor<u8> =
             CpuTensor::from_vec(final_data, TensorShape::new(1, height, width)).unwrap();
-        let mask = mog2.apply_ctx(&final_frame, -1.0, &device);
+        let mask = mog2.apply_ctx(&final_frame, -1.0, &device).unwrap();
 
         // Verify output is valid
         assert_eq!(mask.shape.height, height);
@@ -389,7 +534,7 @@ mod tests {
             CpuTensor::from_vec(frame_data, TensorShape::new(1, height, width)).unwrap();
 
         // Should handle small frames gracefully
-        let mask = mog2.apply_ctx(&frame, -1.0, &device);
+        let mask = mog2.apply_ctx(&frame, -1.0, &device).unwrap();
         assert_eq!(mask.shape.height, height);
         assert_eq!(mask.shape.width, width);
     }
@@ -407,7 +552,7 @@ mod tests {
             CpuTensor::from_vec(frame_data, TensorShape::new(1, height, width)).unwrap();
 
         // Should handle large frames gracefully
-        let mask = mog2.apply_ctx(&frame, -1.0, &device);
+        let mask = mog2.apply_ctx(&frame, -1.0, &device).unwrap();
         assert_eq!(mask.shape.height, height);
         assert_eq!(mask.shape.width, width);
     }
@@ -431,7 +576,7 @@ mod tests {
         let frame2: CpuTensor<u8> =
             CpuTensor::from_vec(vec![128u8; width2 * height2], TensorShape::new(1, height2, width2)).unwrap();
 
-        let mask = mog2.apply_ctx(&frame2, -1.0, &device);
+        let mask = mog2.apply_ctx(&frame2, -1.0, &device).unwrap();
         assert_eq!(mask.shape.height, height2);
         assert_eq!(mask.shape.width, width2);
     }

@@ -36,7 +36,7 @@ pub fn compute_rgbd_odometry(
     height: usize,
     method: OdometryMethod,
 ) -> Option<OdometryResult> {
-    let runner = cv_runtime::best_runner();
+    let runner = cv_runtime::best_runner().ok()?;
     compute_rgbd_odometry_ctx(source_depth, target_depth, source_color, target_color, intrinsics, width, height, method, &runner)
 }
 
@@ -52,10 +52,8 @@ pub fn compute_rgbd_odometry_ctx(
     method: OdometryMethod,
     group: &RuntimeRunner,
 ) -> Option<OdometryResult> {
-    let device = group.device();
-    
     // GPU Path
-    if let ComputeDevice::Gpu(_gpu) = device {
+    if let Ok(ComputeDevice::Gpu(_gpu)) = group.device() {
         // TODO: Dispatch to HAL odometry kernels
     }
 

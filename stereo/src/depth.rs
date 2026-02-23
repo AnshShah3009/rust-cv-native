@@ -2,9 +2,11 @@
 //!
 //! Convert disparity values to 3D depth and point clouds.
 
+#![allow(deprecated)]
+
 use crate::{DisparityMap, StereoParams};
-use nalgebra::{Point2, Point3, Vector3};
-use cv_core::PointCloudf64 as PointCloud;
+use nalgebra::{Point2, Point3};
+use cv_core::{PointCloudf64 as PointCloud, Error};
 
 /// Compute depth map from disparity map
 pub fn disparity_to_depth(disparity: &DisparityMap, params: &StereoParams) -> Vec<Option<f64>> {
@@ -69,15 +71,17 @@ pub fn disparity_to_pointcloud(
 }
 
 /// Reproject 3D point to image coordinates
-pub fn project_point_to_image(point: &Point3<f64>, params: &StereoParams) -> Option<Point2<f64>> {
+pub fn project_point_to_image(point: &Point3<f64>, params: &StereoParams) -> crate::Result<Point2<f64>> {
     if point.z.abs() < 1e-6 {
-        return None;
+        return Err(crate::Error::InvalidInput(
+            "Point depth (z) must be non-zero to project to image".to_string(),
+        ));
     }
 
     let x = point.x * params.focal_length / point.z + params.cx;
     let y = point.y * params.focal_length / point.z + params.cy;
 
-    Some(Point2::new(x, y))
+    Ok(Point2::new(x, y))
 }
 
 /// Compute 3D coordinates from disparity
@@ -108,7 +112,7 @@ pub fn filter_pointcloud_by_depth(
     pointcloud: &PointCloud,
     min_depth: f64,
     max_depth: f64,
-) -> PointCloud {
+) -> crate::Result<PointCloud> {
     let mut filtered_points = Vec::new();
     let mut filtered_colors = Vec::new();
 
@@ -124,9 +128,11 @@ pub fn filter_pointcloud_by_depth(
 
     let mut filtered = PointCloud::new(filtered_points);
     if !filtered_colors.is_empty() {
-        filtered = filtered.with_colors(filtered_colors).expect("Colors and points must match");
+        filtered = filtered.with_colors(filtered_colors).map_err(|e| {
+            crate::Error::RuntimeError(format!("Core error: {}", e))
+        })?;
     }
-    filtered
+    Ok(filtered)
 }
 
 /// Compute depth statistics
@@ -235,7 +241,7 @@ mod tests {
         pc.points.push(Point3::new(2.0, 3.0, 2.0)); // Valid
         pc.points.push(Point3::new(3.0, 4.0, 5.0)); // Too far
 
-        let filtered = filter_pointcloud_by_depth(&pc, 1.0, 3.0);
+        let filtered = filter_pointcloud_by_depth(&pc, 1.0, 3.0).unwrap();
 
         assert_eq!(filtered.len(), 1);
         assert!((filtered.points[0].z - 2.0).abs() < 1e-6);

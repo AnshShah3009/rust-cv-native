@@ -1271,6 +1271,7 @@ name = "cv-calib3d"
 version = "0.1.0"
 dependencies = [
  "cv-core",
+ "cv-hal",
  "cv-imgproc",
  "cv-runtime",
  "image",

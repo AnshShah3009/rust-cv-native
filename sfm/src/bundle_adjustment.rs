@@ -437,7 +437,10 @@ pub fn bundle_adjust(state: &mut SfMState, config: &BundleAdjustmentConfig) {
 }
 
 pub fn bundle_adjust_ctx(state: &mut SfMState, config: &BundleAdjustmentConfig, group: &ResourceGroup) {
-    let device = group.device();
+    let device = match group.device() {
+        Ok(dev) => dev,
+        Err(_) => return,  // Skip optimization on device error, use CPU fallback
+    };
     let solver = SparseLMSolver {
         ctx: &device,
         config: cv_optimize::LMConfig {

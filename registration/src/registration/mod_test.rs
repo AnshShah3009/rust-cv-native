@@ -32,15 +32,18 @@ mod tests {
         let res_ctx =
             registration_icp_point_to_plane_ctx(&source, &target, 0.2, &init, 20, &device);
 
-        if let Some(res) = res_ctx {
-            println!(
-                "ICP Result: fitness={}, rmse={}, iterations={}",
-                res.fitness, res.inlier_rmse, res.num_iterations
-            );
-            assert!(res.fitness > 0.9);
-            assert!(res.inlier_rmse < 0.05);
-        } else {
-            panic!("ICP failed to return a result");
+        match res_ctx {
+            Ok(res) => {
+                println!(
+                    "ICP Result: fitness={}, rmse={}, iterations={}",
+                    res.fitness, res.inlier_rmse, res.num_iterations
+                );
+                assert!(res.fitness > 0.9);
+                assert!(res.inlier_rmse < 0.05);
+            }
+            Err(e) => {
+                panic!("ICP failed to return a result: {}", e);
+            }
         }
     }
 

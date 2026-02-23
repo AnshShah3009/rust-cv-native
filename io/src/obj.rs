@@ -3,7 +3,8 @@
 //! OBJ is a common format for storing 3D mesh geometry.
 
 use crate::mesh::TriangleMesh;
-use crate::{IoError, Result};
+use crate::Result;
+use cv_core::Error;
 use cv_core::point_cloud::PointCloud;
 use nalgebra::Point3;
 use std::io::{BufRead, Write};
@@ -27,13 +28,13 @@ pub fn read_obj<R: BufRead>(reader: R) -> Result<PointCloud> {
             if parts.len() >= 4 {
                 let x: f32 = parts[1]
                     .parse()
-                    .map_err(|_| IoError::Parse(format!("Invalid x coordinate: {}", parts[1])))?;
+                    .map_err(|_| Error::ParseError(format!("Invalid x coordinate: {}", parts[1])))?;
                 let y: f32 = parts[2]
                     .parse()
-                    .map_err(|_| IoError::Parse(format!("Invalid y coordinate: {}", parts[2])))?;
+                    .map_err(|_| Error::ParseError(format!("Invalid y coordinate: {}", parts[2])))?;
                 let z: f32 = parts[3]
                     .parse()
-                    .map_err(|_| IoError::Parse(format!("Invalid z coordinate: {}", parts[3])))?;
+                    .map_err(|_| Error::ParseError(format!("Invalid z coordinate: {}", parts[3])))?;
 
                 points.push(Point3::new(x, y, z));
             }
@@ -99,13 +100,13 @@ impl ObjMesh {
                 if parts.len() >= 4 {
                     let x: f32 = parts[1]
                         .parse()
-                        .map_err(|_| IoError::Parse(format!("Invalid x: {}", parts[1])))?;
+                        .map_err(|_| Error::ParseError(format!("Invalid x: {}", parts[1])))?;
                     let y: f32 = parts[2]
                         .parse()
-                        .map_err(|_| IoError::Parse(format!("Invalid y: {}", parts[2])))?;
+                        .map_err(|_| Error::ParseError(format!("Invalid y: {}", parts[2])))?;
                     let z: f32 = parts[3]
                         .parse()
-                        .map_err(|_| IoError::Parse(format!("Invalid z: {}", parts[3])))?;
+                        .map_err(|_| Error::ParseError(format!("Invalid z: {}", parts[3])))?;
                     mesh.vertices.push(Point3::new(x, y, z));
                 }
             } else if line.starts_with("f ") {
@@ -119,7 +120,7 @@ impl ObjMesh {
                             idx_str
                                 .parse::<usize>()
                                 .map(|i| if i > 0 { i - 1 } else { 0 }) // OBJ uses 1-based indexing
-                                .map_err(|_| IoError::Parse(format!("Invalid face index: {}", p)))
+                                .map_err(|_| Error::ParseError(format!("Invalid face index: {}", p)))
                         })
                         .collect::<Result<Vec<_>>>()?;
                     mesh.faces.push(face);

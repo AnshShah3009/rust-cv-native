@@ -23,22 +23,21 @@ pub use calib3d::*;
 #[cfg(feature = "gpu")]
 pub use gpu::*;
 
-pub type Result<T> = std::result::Result<T, StereoError>;
+pub use cv_core::{Error, Result};
 
-#[derive(Debug, thiserror::Error)]
-pub enum StereoError {
-    #[error("Image size mismatch: {0}")]
-    SizeMismatch(String),
+/// Backward compatibility alias for deprecated custom error type
+#[deprecated(
+    since = "0.1.0",
+    note = "Use cv_core::Error instead. This type exists only for backward compatibility."
+)]
+pub type StereoError = cv_core::Error;
 
-    #[error("Invalid parameters: {0}")]
-    InvalidParameters(String),
-
-    #[error("Rectification error: {0}")]
-    RectificationError(String),
-
-    #[error("Core error: {0}")]
-    CoreError(#[from] cv_core::Error),
-}
+/// Deprecated Result type alias - use cv_core::Result instead
+#[deprecated(
+    since = "0.1.0",
+    note = "Use cv_core::Result instead. This type alias exists only for backward compatibility."
+)]
+pub type StereoResult<T> = cv_core::Result<T>;
 
 use cv_runtime::orchestrator::RuntimeRunner;
 

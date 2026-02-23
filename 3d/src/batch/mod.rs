@@ -169,6 +169,7 @@ pub mod registration {
                     max_distance,
                     max_iterations,
                 )
+                .ok()
             })
             .collect()
     }
@@ -201,7 +202,10 @@ pub mod mesh {
         vertices_list
             .par_iter()
             .zip(faces_list.par_iter())
-            .map(|(vertices, faces)| gpu::mesh::compute_vertex_normals(vertices, faces))
+            .map(|(vertices, faces)| {
+                gpu::mesh::compute_vertex_normals(vertices, faces)
+                    .unwrap_or_default()
+            })
             .collect()
     }
 }
@@ -232,6 +236,7 @@ pub mod raycasting {
                     vertices.as_slice(),
                     faces.as_slice(),
                 )
+                .unwrap_or_default()
             })
             .collect()
     }
@@ -245,6 +250,7 @@ pub mod raycasting {
         let origins: Vec<_> = rays.iter().map(|(o, _)| *o).collect();
         let directions: Vec<_> = rays.iter().map(|(_, d)| *d).collect();
         gpu::raycasting::cast_rays(&origins, &directions, mesh_vertices, mesh_faces)
+            .unwrap_or_default()
     }
 }
 

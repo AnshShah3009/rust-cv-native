@@ -42,12 +42,13 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T> for Tenso
 }
 
 /// Extension trait for transferring data back to the CPU.
+#[allow(async_fn_in_trait)]
 pub trait TensorToCpu<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> {
     /// Downloads the tensor from the GPU using the global context.
     fn to_cpu(&self) -> crate::Result<Tensor<T, CpuStorage<T>>>;
     /// Downloads the tensor from the GPU using a specific context.
     fn to_cpu_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>>;
-    
+
     /// ASYNC: Downloads the tensor from the GPU using the global context.
     async fn to_cpu_async(&self) -> crate::Result<Tensor<T, CpuStorage<T>>>;
     /// ASYNC: Downloads the tensor from the GPU using a specific context.

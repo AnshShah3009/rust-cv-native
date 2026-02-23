@@ -143,9 +143,10 @@ impl ResourceGroup {
         })
     }
 
-    pub fn device(&self) -> cv_hal::compute::ComputeDevice<'static> {
+    /// Get the compute device for this resource group
+    /// Returns a Result instead of panicking on error
+    pub fn device(&self) -> Result<cv_hal::compute::ComputeDevice<'static>> {
         self.try_device()
-            .unwrap_or_else(|e| panic!("Failed to get compute device {:?}: {}", self.device_id, e))
     }
 
     pub fn try_device(&self) -> Result<cv_hal::compute::ComputeDevice<'static>> {
@@ -234,10 +235,10 @@ impl RuntimeRunner {
         })
     }
 
-    pub fn device(&self) -> cv_hal::compute::ComputeDevice<'static> {
-        self.try_device().unwrap_or_else(|e| {
-            panic!("Failed to get compute device {:?}: {}", self.device_id(), e)
-        })
+    /// Get the compute device for this runner
+    /// Returns a Result instead of panicking on error
+    pub fn device(&self) -> Result<cv_hal::compute::ComputeDevice<'static>> {
+        self.try_device()
     }
 
     pub fn try_device(&self) -> Result<cv_hal::compute::ComputeDevice<'static>> {
@@ -251,9 +252,10 @@ impl RuntimeRunner {
     }
 }
 
-pub fn best_runner() -> RuntimeRunner {
+/// Get the best available runtime runner (GPU if available, else CPU)
+/// Returns a Result instead of panicking on error
+pub fn best_runner() -> Result<RuntimeRunner> {
     try_best_runner()
-        .unwrap_or_else(|e| panic!("Critical failure: Could not initialize runtime: {}", e))
 }
 
 pub fn try_best_runner() -> Result<RuntimeRunner> {
@@ -272,9 +274,10 @@ pub fn try_best_runner() -> Result<RuntimeRunner> {
     ))
 }
 
-pub fn default_runner() -> RuntimeRunner {
+/// Get the default runtime runner (from configured default group or CPU fallback)
+/// Returns a Result instead of panicking on error
+pub fn default_runner() -> Result<RuntimeRunner> {
     try_default_runner()
-        .unwrap_or_else(|e| panic!("Critical failure: Could not initialize runtime: {}", e))
 }
 
 pub fn try_default_runner() -> Result<RuntimeRunner> {

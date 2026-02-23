@@ -5,8 +5,10 @@
 //! - Farneback: Dense optical flow using polynomial expansion
 //! - Horn-Schunck: Global smoothness constraint
 
+#![allow(deprecated)]
+
 use crate::{MotionField, Result, VideoError};
-use cv_core::KeyPoint;
+use cv_core::{KeyPoint, Error};
 use image::GrayImage;
 use nalgebra::{Matrix2, Vector2};
 
@@ -198,7 +200,7 @@ impl Farneback {
     /// Compute dense optical flow
     pub fn compute(&self, prev_frame: &GrayImage, next_frame: &GrayImage) -> Result<MotionField> {
         if prev_frame.width() != next_frame.width() || prev_frame.height() != next_frame.height() {
-            return Err(VideoError::SizeMismatch(
+            return Err(Error::DimensionMismatch(
                 "Frames must have the same dimensions".to_string(),
             ));
         }

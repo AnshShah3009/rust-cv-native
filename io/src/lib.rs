@@ -19,18 +19,18 @@ pub use pcd::{read_pcd, write_pcd, PcdData};
 // TriangleMesh is now the authoritative definition from cv-3d, re-exported here for convenience
 pub use mesh::TriangleMesh;
 
-use thiserror::Error;
+pub use cv_core::{Error, Result};
 
-#[derive(Error, Debug)]
-pub enum IoError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Parse error: {0}")]
-    Parse(String),
-    #[error("Unsupported format: {0}")]
-    UnsupportedFormat(String),
-    #[error("Invalid data: {0}")]
-    InvalidData(String),
-}
+/// Backward compatibility alias for deprecated custom error type
+#[deprecated(
+    since = "0.1.0",
+    note = "Use cv_core::Error instead. This type exists only for backward compatibility."
+)]
+pub type IoError = cv_core::Error;
 
-pub type Result<T> = std::result::Result<T, IoError>;
+/// Deprecated Result type alias - use cv_core::Result instead
+#[deprecated(
+    since = "0.1.0",
+    note = "Use cv_core::Result instead. This type alias exists only for backward compatibility."
+)]
+pub type IoResult<T> = cv_core::Result<T>;

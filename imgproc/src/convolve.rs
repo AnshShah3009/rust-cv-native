@@ -180,7 +180,16 @@ pub fn convolve(image: &GrayImage, kernel: &Kernel) -> GrayImage {
 }
 
 pub fn convolve_with_border(image: &GrayImage, kernel: &Kernel, border: BorderMode) -> GrayImage {
-    let runner = cv_runtime::best_runner();
+    let runner = cv_runtime::best_runner()
+        .unwrap_or_else(|_| {
+            // Fallback: use CPU registry if available
+            cv_runtime::registry()
+                .ok()
+                .and_then(|reg| {
+                    Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+                })
+                .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+        });
     convolve_ctx(image, kernel, border, &runner)
 }
 
@@ -202,8 +211,7 @@ pub fn convolve_into_ctx(
     border: BorderMode,
     group: &RuntimeRunner,
 ) {
-    let device = group.device();
-    if let ComputeDevice::Gpu(gpu) = device {
+    if let Ok(ComputeDevice::Gpu(gpu)) = group.device() {
         if let Ok(result) = convolve_gpu(gpu, image, kernel, border) {
             output.copy_from_slice(result.as_raw());
             return;
@@ -219,13 +227,27 @@ pub fn convolve_with_border_into(
     kernel: &Kernel,
     border: BorderMode,
 ) {
-    let runner = cv_runtime::default_runner();
+    let runner = cv_runtime::default_runner()
+        .unwrap_or_else(|_| {
+            // Fallback: use CPU registry if available
+            cv_runtime::registry()
+                .ok()
+                .and_then(|reg| {
+                    Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+                })
+                .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+        });
     convolve_into_ctx(image, output, kernel, border, &runner);
 }
 
 pub fn gaussian_blur_with_border(image: &GrayImage, sigma: f32, border: BorderMode) -> GrayImage {
-    let runner = cv_runtime::best_runner();
-    gaussian_blur_ctx(image, sigma, border, &runner)
+    match cv_runtime::best_runner() {
+        Ok(runner) => gaussian_blur_ctx(image, sigma, border, &runner),
+        Err(_) => {
+            // Fallback: compute on CPU
+            gaussian_blur_ctx(image, sigma, border, &cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+        }
+    }
 }
 
 pub fn gaussian_blur_ctx(
@@ -234,8 +256,7 @@ pub fn gaussian_blur_ctx(
     border: BorderMode,
     group: &RuntimeRunner,
 ) -> GrayImage {
-    let device = group.device();
-    if let ComputeDevice::Gpu(gpu) = device {
+    if let Ok(ComputeDevice::Gpu(gpu)) = group.device() {
         if let Ok(result) = gaussian_blur_gpu(gpu, image, sigma, border) {
             return result;
         }
@@ -387,8 +408,13 @@ pub fn separable_convolve_into(
     kernel_1d: &[f32],
     border: BorderMode,
 ) {
-    let runner = cv_runtime::default_runner();
-    separable_convolve_into_ctx(image, out, kernel_1d, kernel_1d, border, &runner);
+    match cv_runtime::default_runner() {
+        Ok(runner) => separable_convolve_into_ctx(image, out, kernel_1d, kernel_1d, border, &runner),
+        Err(_) => {
+            // Fallback: compute on CPU
+            separable_convolve_into_ctx(image, out, kernel_1d, kernel_1d, border, &cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)));
+        }
+    }
 }
 
 pub fn separable_convolve_into_ctx(

@@ -3,7 +3,8 @@
 //! STL is a common format for 3D printing and CAD.
 
 use crate::mesh::TriangleMesh;
-use crate::{IoError, Result};
+use crate::Result;
+use cv_core::Error;
 use nalgebra::Point3;
 use std::io::{BufRead, Read, Write};
 
@@ -49,13 +50,13 @@ fn parse_ascii_stl(content: &str) -> Result<TriangleMesh> {
             if parts.len() >= 4 {
                 let x: f32 = parts[1]
                     .parse()
-                    .map_err(|_| IoError::Parse(format!("Invalid x: {}", parts[1])))?;
+                    .map_err(|_| Error::ParseError(format!("Invalid x: {}", parts[1])))?;
                 let y: f32 = parts[2]
                     .parse()
-                    .map_err(|_| IoError::Parse(format!("Invalid y: {}", parts[2])))?;
+                    .map_err(|_| Error::ParseError(format!("Invalid y: {}", parts[2])))?;
                 let z: f32 = parts[3]
                     .parse()
-                    .map_err(|_| IoError::Parse(format!("Invalid z: {}", parts[3])))?;
+                    .map_err(|_| Error::ParseError(format!("Invalid z: {}", parts[3])))?;
                 vertices.push(Point3::new(x, y, z));
             }
         }

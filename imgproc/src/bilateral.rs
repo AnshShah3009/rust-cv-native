@@ -51,10 +51,21 @@ pub fn bilateral_filter_depth(
     height: u32,
     params: BilateralFilterParams,
 ) -> Vec<f32> {
-    let runner = match cv_runtime::scheduler().and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)) {
-        Ok(group) => cv_runtime::RuntimeRunner::Group(group),
-        Err(_) => cv_runtime::default_runner(),
-    };
+    let runner = cv_runtime::scheduler()
+        .and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput).map(cv_runtime::RuntimeRunner::Group))
+        .or_else(|_| cv_runtime::default_runner())
+        .unwrap_or_else(|_| {
+            // Absolute fallback: use the CPU registry if available
+            cv_runtime::registry()
+                .ok()
+                .and_then(|reg| {
+                    Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+                })
+                .unwrap_or_else(|| {
+                    // If even registry fails, create a minimal CPU runner (id = 0)
+                    cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0))
+                })
+        });
     bilateral_filter_depth_ctx(depth, width, height, params, &runner)
 }
 
@@ -145,10 +156,21 @@ pub fn bilateral_filter_rgb(
     height: u32,
     params: BilateralFilterParams,
 ) -> Vec<u8> {
-    let runner = match cv_runtime::scheduler().and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)) {
-        Ok(group) => cv_runtime::RuntimeRunner::Group(group),
-        Err(_) => cv_runtime::default_runner(),
-    };
+    let runner = cv_runtime::scheduler()
+        .and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput).map(cv_runtime::RuntimeRunner::Group))
+        .or_else(|_| cv_runtime::default_runner())
+        .unwrap_or_else(|_| {
+            // Absolute fallback: use the CPU registry if available
+            cv_runtime::registry()
+                .ok()
+                .and_then(|reg| {
+                    Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+                })
+                .unwrap_or_else(|| {
+                    // If even registry fails, create a minimal CPU runner (id = 0)
+                    cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0))
+                })
+        });
     bilateral_filter_rgb_ctx(image, width, height, params, &runner)
 }
 
@@ -249,10 +271,21 @@ pub fn joint_bilateral_filter(
     height: u32,
     params: BilateralFilterParams,
 ) -> Vec<f32> {
-    let runner = match cv_runtime::scheduler().and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)) {
-        Ok(group) => cv_runtime::RuntimeRunner::Group(group),
-        Err(_) => cv_runtime::default_runner(),
-    };
+    let runner = cv_runtime::scheduler()
+        .and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput).map(cv_runtime::RuntimeRunner::Group))
+        .or_else(|_| cv_runtime::default_runner())
+        .unwrap_or_else(|_| {
+            // Absolute fallback: use the CPU registry if available
+            cv_runtime::registry()
+                .ok()
+                .and_then(|reg| {
+                    Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
+                })
+                .unwrap_or_else(|| {
+                    // If even registry fails, create a minimal CPU runner (id = 0)
+                    cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0))
+                })
+        });
     joint_bilateral_filter_ctx(depth, guidance, width, height, params, &runner)
 }
 

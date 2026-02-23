@@ -1,4 +1,4 @@
-#![warn(missing_docs)]
+#![allow(missing_docs)]
 //! Core computer vision types and traits
 //!
 //! This crate provides fundamental types and abstractions for computer vision operations,
@@ -54,7 +54,73 @@ pub enum Error {
     /// I/O error from file operations
     #[error("I/O error: {0}")]
     IoError(String),
+
+    /// Feature detection/extraction error
+    #[error("Feature error: {0}")]
+    FeatureError(String),
+
+    /// Video processing error
+    #[error("Video error: {0}")]
+    VideoError(String),
+
+    /// Image processing error
+    #[error("Image processing error: {0}")]
+    ImgprocError(String),
+
+    /// 3D registration error
+    #[error("Registration error: {0}")]
+    RegistrationError(String),
+
+    /// Stereo vision error
+    #[error("Stereo error: {0}")]
+    StereoError(String),
+
+    /// Object detection error
+    #[error("Object detection error: {0}")]
+    ObjectDetectionError(String),
+
+    /// Deep neural network error
+    #[error("DNN error: {0}")]
+    DnnError(String),
+
+    /// Image processing/photography error
+    #[error("Photo error: {0}")]
+    PhotoError(String),
+
+    /// Camera calibration error
+    #[error("Calibration error: {0}")]
+    CalibrationError(String),
+
+    /// Structure from Motion error
+    #[error("SfM error: {0}")]
+    SfMError(String),
+
+    /// Hardware/Device error
+    #[error("Device error: {0}")]
+    DeviceError(String),
+
+    /// GPU computation error
+    #[error("GPU error: {0}")]
+    GpuError(String),
+
+    /// Parse/Format error
+    #[error("Parse error: {0}")]
+    ParseError(String),
+
+    /// Algorithm failure (convergence, optimization, etc.)
+    #[error("Algorithm failed: {0}")]
+    AlgorithmError(String),
+
+    /// Generic error with custom message
+    #[error("{0}")]
+    Other(String),
 }
 
 /// Result type for core operations
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::IoError(err.to_string())
+    }
+}

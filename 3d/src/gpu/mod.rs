@@ -17,15 +17,18 @@ pub mod point_cloud {
 
     /// Transform point cloud using the best available runner
     pub fn transform(points: &[Point3<f32>], transform: &Matrix4<f32>) -> Vec<Point3<f32>> {
-        let runner = cv_runtime::best_runner();
+        let runner = cv_runtime::best_runner().unwrap_or_else(|_| {
+            // Fallback to CPU registry on error
+            cv_runtime::orchestrator::RuntimeRunner::Sync(cv_hal::DeviceId(0))
+        });
         transform_ctx(points, transform, &runner)
     }
 
     pub fn transform_ctx(points: &[Point3<f32>], transform: &Matrix4<f32>, runner: &RuntimeRunner) -> Vec<Point3<f32>> {
-        if let cv_hal::compute::ComputeDevice::Gpu(_gpu) = runner.device() {
+        if let Ok(cv_hal::compute::ComputeDevice::Gpu(_gpu)) = runner.device() {
              // TODO: Actual GPU implementation in hal
         }
-        
+
         points
             .iter()
             .map(|p| transform.transform_point(p))
@@ -37,7 +40,10 @@ pub mod point_cloud {
         points: &[Point3<f32>],
         k: usize,
     ) -> Vec<Vector3<f32>> {
-        let runner = cv_runtime::best_runner();
+        let runner = cv_runtime::best_runner().unwrap_or_else(|_| {
+            // Fallback to CPU registry on error
+            cv_runtime::orchestrator::RuntimeRunner::Sync(cv_hal::DeviceId(0))
+        });
         compute_normals_ctx(points, k, &runner)
     }
 
@@ -50,7 +56,7 @@ pub mod point_cloud {
             return Vec::new();
         }
 
-        if let cv_hal::compute::ComputeDevice::Gpu(gpu) = runner.device() {
+        if let Ok(cv_hal::compute::ComputeDevice::Gpu(gpu)) = runner.device() {
             return compute_normals_gpu_with_ctx(points, k, gpu);
         }
 
@@ -226,7 +232,7 @@ pub mod stereo {
         right: &::image::GrayImage,
         params: &StereoMatchParams,
     ) -> cv_hal::Result<::image::ImageBuffer<::image::Luma<f32>, Vec<f32>>> {
-        let runner = cv_runtime::best_runner();
+        let runner = cv_runtime::best_runner().map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
         match_stereo_ctx(left, right, params, &runner)
     }
 
@@ -236,7 +242,7 @@ pub mod stereo {
         params: &StereoMatchParams,
         runner: &RuntimeRunner,
     ) -> cv_hal::Result<::image::ImageBuffer<::image::Luma<f32>, Vec<f32>>> {
-        if let cv_hal::compute::ComputeDevice::Gpu(gpu) = runner.device() {
+        if let Ok(cv_hal::compute::ComputeDevice::Gpu(gpu)) = runner.device() {
             let l_tensor = cv_core::CpuTensor::from_vec(left.as_raw().to_vec(), cv_core::TensorShape::new(1, left.height() as usize, left.width() as usize))
                 .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
             let r_tensor = cv_core::CpuTensor::from_vec(right.as_raw().to_vec(), cv_core::TensorShape::new(1, right.height() as usize, right.width() as usize))
@@ -259,25 +265,112 @@ pub mod stereo {
 
 pub mod registration {
     use super::*;
-    pub fn icp_point_to_plane(_s: &[Point3<f32>], _t: &[Point3<f32>], _tn: &[Vector3<f32>], _dist: f32, _iters: usize) -> Option<Matrix4<f32>> {
-        None
+
+    /// ICP point-to-plane registration: NOT IMPLEMENTED
+    ///
+    /// This function is a stub and returns an error indicating that the algorithm
+    /// is not yet implemented in the GPU module. Point-to-plane ICP requires:
+    /// 1. Surface normal computation
+    /// 2. Iterative closest point search with plane distance metrics
+    /// 3. Robust outlier rejection
+    ///
+    /// To use ICP registration, use the `cv-registration` crate instead.
+    pub fn icp_point_to_plane(_s: &[Point3<f32>], _t: &[Point3<f32>], _tn: &[Vector3<f32>], _dist: f32, _iters: usize) -> Result<Matrix4<f32>, String> {
+        Err("ICP point-to-plane registration not yet implemented in GPU module. Use cv-registration crate instead.".to_string())
     }
 }
 
 pub mod mesh {
     use super::*;
-    pub fn laplacian_smooth(_v: &mut [Point3<f32>], _f: &[[usize; 3]], _iters: usize, _l: f32) {}
-    pub fn compute_vertex_normals(_v: &[Point3<f32>], _f: &[[usize; 3]]) -> Vec<Vector3<f32>> { vec![] }
+
+    /// Laplacian mesh smoothing: NOT IMPLEMENTED
+    ///
+    /// This function is a stub. Laplacian smoothing requires:
+    /// 1. Vertex-face adjacency graph construction
+    /// 2. Laplacian matrix computation (uniform or cotangent weights)
+    /// 3. Iterative smoothing with boundary preservation
+    ///
+    /// This operation is expensive on CPU and requires GPU acceleration
+    /// through a custom kernel implementation in cv-hal.
+    pub fn laplacian_smooth(_v: &mut [Point3<f32>], _f: &[[usize; 3]], _iters: usize, _l: f32) -> Result<(), String> {
+        Err("Laplacian mesh smoothing not yet implemented. Requires GPU kernel in cv-hal.".to_string())
+    }
+
+    /// Compute vertex normals from mesh: NOT IMPLEMENTED
+    ///
+    /// Returns vertex normals computed by averaging face normals of adjacent faces.
+    /// This function is a stub that returns an error.
+    ///
+    /// Implementation should:
+    /// 1. For each face, compute normal from vertex positions
+    /// 2. For each vertex, accumulate normals from all adjacent faces
+    /// 3. Normalize per-vertex accumulated normals
+    pub fn compute_vertex_normals(_v: &[Point3<f32>], _f: &[[usize; 3]]) -> Result<Vec<Vector3<f32>>, String> {
+        Err("Vertex normal computation not yet implemented.".to_string())
+    }
 }
 
 pub mod tsdf {
     use super::*;
-    pub fn integrate_depth(_d: &[f32], _w: u32, _h: u32, _p: &Matrix4<f32>, _i: &[f32; 4], _vol: &mut [f32], _weights: &mut [f32], _vs: f32, _tr: f32) {}
+
+    /// TSDF depth integration: NOT IMPLEMENTED
+    ///
+    /// This function is a stub. Truncated Signed Distance Field (TSDF) integration is a core
+    /// component of volumetric 3D reconstruction (KinectFusion-style algorithms).
+    ///
+    /// Parameters:
+    /// - `d`: Depth map (row-major, H×W)
+    /// - `w`, `h`: Image dimensions
+    /// - `p`: Projection matrix (3×4)
+    /// - `i`: Intrinsic matrix flattened (K[0,0], K[1,1], K[0,2], K[1,2])
+    /// - `vol`: TSDF volume (pre-allocated, size = voxel_grid.len())
+    /// - `weights`: Weight accumulation volume
+    /// - `vs`: Voxel size
+    /// - `tr`: TSDF truncation distance
+    ///
+    /// Integration requires:
+    /// 1. Back-project each depth pixel to 3D world coordinates
+    /// 2. For each voxel in the volume, compute signed distance to surface
+    /// 3. Accumulate TSDF values weighted by confidence
+    /// 4. Update weight accumulator for normalization
+    ///
+    /// This is heavily used in real-time reconstruction and MUST be GPU-accelerated
+    /// through a compute kernel in cv-hal.
+    pub fn integrate_depth(_d: &[f32], _w: u32, _h: u32, _p: &Matrix4<f32>, _i: &[f32; 4], _vol: &mut [f32], _weights: &mut [f32], _vs: f32, _tr: f32) -> Result<(), String> {
+        Err("TSDF depth integration not yet implemented. Requires GPU kernel for real-time performance.".to_string())
+    }
 }
 
 pub mod raycasting {
     use super::*;
-    pub fn cast_rays(_ro: &[Point3<f32>], _rd: &[Vector3<f32>], _v: &[Point3<f32>], _f: &[[usize; 3]]) -> Vec<Option<(f32, Point3<f32>, Vector3<f32>)>> { vec![] }
+
+    /// Ray-mesh intersection raycasting: NOT IMPLEMENTED
+    ///
+    /// This function is a stub. Raycasting is essential for:
+    /// 1. Rendering: Visibility queries against mesh geometry
+    /// 2. Reconstruction: Point cloud alignment and normal estimation
+    /// 3. Simulation: Collision detection and occlusion queries
+    ///
+    /// Parameters:
+    /// - `ro`: Array of ray origins (Point3<f32>)
+    /// - `rd`: Array of ray directions (Vector3<f32>, assumed normalized)
+    /// - `v`: Mesh vertices
+    /// - `f`: Mesh triangle faces (indices into vertex array)
+    ///
+    /// Returns for each ray: (t, intersection_point, surface_normal) or None if no intersection
+    ///
+    /// Implementation should:
+    /// 1. Build BVH or spatial acceleration structure from mesh
+    /// 2. For each ray, traverse acceleration structure
+    /// 3. Perform triangle-ray intersection tests (Möller-Trumbore algorithm)
+    /// 4. Return closest intersection
+    ///
+    /// This is a performance-critical operation best implemented with:
+    /// - Spatial hashing or BVH
+    /// - SIMD vectorization or GPU acceleration
+    pub fn cast_rays(_ro: &[Point3<f32>], _rd: &[Vector3<f32>], _v: &[Point3<f32>], _f: &[[usize; 3]]) -> Result<Vec<Option<(f32, Point3<f32>, Vector3<f32>)>>, String> {
+        Err("Ray-mesh intersection not yet implemented. Requires BVH acceleration structure.".to_string())
+    }
 }
 
 /// Voxel downsample

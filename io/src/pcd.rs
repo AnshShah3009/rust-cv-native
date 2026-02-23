@@ -2,7 +2,8 @@
 //!
 //! PCD is the native format for Point Cloud Library (PCL).
 
-use crate::{IoError, Result};
+use crate::Result;
+use cv_core::Error;
 use cv_core::point_cloud::PointCloud;
 use nalgebra::{Point3, Vector3};
 use std::io::{BufRead, Write};
@@ -36,7 +37,7 @@ pub fn read_pcd<R: BufRead>(reader: R) -> Result<PointCloud> {
     while in_header {
         let line = lines
             .next()
-            .ok_or_else(|| IoError::Parse("Unexpected EOF in header".to_string()))??;
+            .ok_or_else(|| Error::ParseError("Unexpected EOF in header".to_string()))??;
         let line = line.trim();
 
         if line.is_empty() || line.starts_with('#') {
@@ -97,10 +98,10 @@ pub fn read_pcd<R: BufRead>(reader: R) -> Result<PointCloud> {
     // Parse data
     match data_format {
         PcdData::Ascii => parse_pcd_ascii(lines, points_count, &fields),
-        PcdData::Binary => Err(IoError::UnsupportedFormat(
+        PcdData::Binary => Err(Error::InvalidInput(
             "Binary PCD not yet implemented".to_string(),
         )),
-        PcdData::BinaryCompressed => Err(IoError::UnsupportedFormat(
+        PcdData::BinaryCompressed => Err(Error::InvalidInput(
             "Binary compressed PCD not yet implemented".to_string(),
         )),
     }

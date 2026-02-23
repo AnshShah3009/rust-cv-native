@@ -3,9 +3,11 @@
 //! ORB combines the FAST keypoint detector with a modified BRIEF descriptor
 //! that includes orientation information for rotation invariance.
 
+#![allow(deprecated)]
+
 use crate::descriptor::{Descriptor, DescriptorExtractor, Descriptors};
 use crate::fast::fast_detect;
-use cv_core::{storage::Storage, KeyPoint, KeyPoints, Tensor};
+use cv_core::{storage::Storage, KeyPoint, KeyPoints, Tensor, Error};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::tensor_ext::TensorToCpu;
 use image::GrayImage;
@@ -220,13 +222,13 @@ fn extract_keypoints_from_score_map<S: Storage<u8> + 'static>(
         let gpu_ctx = match ctx {
             ComputeDevice::Gpu(g) => g,
             _ => {
-                return Err(crate::FeatureError::DetectionError(
+                return Err(Error::FeatureError(
                     "GpuStorage requires GPU context".into(),
                 ))
             }
         };
         input_gpu.to_cpu_ctx(gpu_ctx).map_err(|e| {
-            crate::FeatureError::DetectionError(format!("GPU download failed: {}", e))
+            Error::FeatureError(format!("GPU download failed: {}", e))
         })?
     } else if let Some(cpu_storage) = score_map.storage.as_any().downcast_ref::<CpuStorage<u8>>() {
         let input_cpu = Tensor {
@@ -237,7 +239,7 @@ fn extract_keypoints_from_score_map<S: Storage<u8> + 'static>(
         };
         input_cpu.clone()
     } else {
-        return Err(crate::FeatureError::DetectionError(
+        return Err(Error::FeatureError(
             "Unsupported storage type".into(),
         ));
     };
@@ -245,7 +247,7 @@ fn extract_keypoints_from_score_map<S: Storage<u8> + 'static>(
     let slice = cpu_tensor
         .storage
         .as_slice()
-        .ok_or_else(|| crate::FeatureError::DetectionError("Failed to get CPU slice".into()))?;
+        .ok_or_else(|| Error::FeatureError("Failed to get CPU slice".into()))?;
     let (h, w) = cpu_tensor.shape.hw();
 
     let mut kps = Vec::new();

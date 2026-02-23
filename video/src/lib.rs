@@ -1,42 +1,86 @@
-//! Video processing and optical flow
+//! Video processing algorithms for motion estimation and object tracking
 //!
-//! This module provides algorithms for motion estimation and tracking
-//! in video sequences.
+//! This crate provides comprehensive video processing capabilities:
+//! - **Optical Flow**: Motion estimation (Lucas-Kanade, dense methods)
+//! - **Background Subtraction**: Foreground/background segmentation (MOG2)
+//! - **Tracking**: Single and multi-object tracking
+//! - **Kalman Filtering**: State estimation and prediction
+//!
+//! # Key Types
+//!
+//! - [`VideoFrame`]: Container for video frames with timing information
+//! - [`MotionField`]: Dense optical flow representation
+//! - [`mog2::Mog2`]: Mixture of Gaussians background model
+//!
+//! # Example: Background Subtraction
+//!
+//! ```no_run
+//! # use cv_video::mog2::Mog2;
+//! # use cv_hal::cpu::CpuBackend;
+//! # use cv_hal::compute::ComputeDevice;
+//! let cpu = CpuBackend::new().unwrap();
+//! let mut mog2 = Mog2::new(100, 16.0, false);
+//! // Process video frames to extract foreground
+//! ```
 
 use image::GrayImage;
 
+/// Optical flow computation algorithms
 pub mod optical_flow;
+/// Object tracking algorithms
 pub mod tracking;
+/// Kalman filter implementations
 pub mod kalman;
+/// Mixture of Gaussians background subtraction
 pub mod mog2;
 
 pub use optical_flow::*;
 pub use tracking::*;
 pub use kalman::*;
+pub use cv_core::{Error, Result};
 
-pub type Result<T> = std::result::Result<T, VideoError>;
+/// Backward compatibility alias for deprecated custom error type
+#[deprecated(
+    since = "0.1.0",
+    note = "Use cv_core::Error instead. This type exists only for backward compatibility."
+)]
+pub type VideoError = cv_core::Error;
 
-#[derive(Debug, thiserror::Error)]
-pub enum VideoError {
-    #[error("Image size mismatch: {0}")]
-    SizeMismatch(String),
+/// Deprecated Result type alias - use cv_core::Result instead
+#[deprecated(
+    since = "0.1.0",
+    note = "Use cv_core::Result instead. This type alias exists only for backward compatibility."
+)]
+pub type VideoResult<T> = cv_core::Result<T>;
 
-    #[error("Invalid parameters: {0}")]
-    InvalidParameters(String),
-
-    #[error("Tracking error: {0}")]
-    TrackingError(String),
-}
-
-/// Video frame representation
+/// Single video frame with timing information
+///
+/// Container for a video frame with associated metadata
+/// including timestamp and sequence number for temporal tracking.
+///
+/// # Fields
+///
+/// * `image` - Grayscale frame data (8-bit unsigned)
+/// * `timestamp` - Frame capture time in seconds (e.g., from video codec)
+/// * `frame_number` - Sequence number (0-indexed)
 #[derive(Debug, Clone)]
 pub struct VideoFrame {
+    /// Grayscale frame image data
     pub image: GrayImage,
+    /// Frame timestamp in seconds (from video source)
     pub timestamp: f64,
+    /// Sequence frame number (0-indexed from stream start)
     pub frame_number: usize,
 }
 
 impl VideoFrame {
+    /// Create a new video frame
+    ///
+    /// # Arguments
+    ///
+    /// * `image` - Grayscale frame image
+    /// * `timestamp` - Frame time in seconds
+    /// * `frame_number` - Sequence index
     pub fn new(image: GrayImage, timestamp: f64, frame_number: usize) -> Self {
         Self {
             image,
@@ -46,16 +90,48 @@ impl VideoFrame {
     }
 }
 
-/// Motion vector field
+/// Dense motion field representation
+///
+/// Stores horizontal (u) and vertical (v) motion components at each pixel
+/// as computed by optical flow algorithms. Provides efficient lookup and
+/// visualization utilities.
+///
+/// # Storage Format
+///
+/// Motion vectors are stored in row-major order: `index = y * width + x`
+/// Both u and v components use the same indexing scheme.
+///
+/// # Example
+///
+/// ```
+/// # use cv_video::MotionField;
+/// let mut field = MotionField::new(640, 480);
+/// field.set_motion(100, 100, 1.5, -2.0);  // (u=1.5, v=-2.0) at (100,100)
+/// let (u, v) = field.get_motion(100, 100);
+/// assert_eq!(u, 1.5);
+/// assert_eq!(v, -2.0);
+/// ```
 #[derive(Debug, Clone)]
 pub struct MotionField {
-    pub u: Vec<f32>,  // Horizontal motion
-    pub v: Vec<f32>,  // Vertical motion
+    /// Horizontal motion component (u) at each pixel
+    pub u: Vec<f32>,
+    /// Vertical motion component (v) at each pixel
+    pub v: Vec<f32>,
+    /// Motion field width in pixels
     pub width: u32,
+    /// Motion field height in pixels
     pub height: u32,
 }
 
 impl MotionField {
+    /// Create a new motion field
+    ///
+    /// Initializes u and v components to zero.
+    ///
+    /// # Arguments
+    ///
+    /// * `width` - Field width in pixels
+    /// * `height` - Field height in pixels
     pub fn new(width: u32, height: u32) -> Self {
         let size = (width * height) as usize;
         Self {
@@ -66,18 +142,47 @@ impl MotionField {
         }
     }
 
+    /// Get motion vector at pixel location
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - Pixel x-coordinate (0 to width-1)
+    /// * `y` - Pixel y-coordinate (0 to height-1)
+    ///
+    /// # Returns
+    ///
+    /// (u, v) horizontal and vertical motion components (in pixels per frame)
+    ///
+    /// # Panics
+    ///
+    /// If coordinates are out of bounds
     pub fn get_motion(&self, x: u32, y: u32) -> (f32, f32) {
         let idx = (y * self.width + x) as usize;
         (self.u[idx], self.v[idx])
     }
 
+    /// Set motion vector at pixel location
+    ///
+    /// # Arguments
+    ///
+    /// * `x`, `y` - Pixel coordinates
+    /// * `u` - Horizontal motion component
+    /// * `v` - Vertical motion component
+    ///
+    /// # Panics
+    ///
+    /// If coordinates are out of bounds
     pub fn set_motion(&mut self, x: u32, y: u32, u: f32, v: f32) {
         let idx = (y * self.width + x) as usize;
         self.u[idx] = u;
         self.v[idx] = v;
     }
 
-    /// Compute magnitude of motion at each pixel
+    /// Compute motion magnitude (speed) at each pixel
+    ///
+    /// # Returns
+    ///
+    /// Vector of magnitude values: `sqrt(u^2 + v^2)` at each pixel
     pub fn magnitude(&self) -> Vec<f32> {
         self.u.iter()
             .zip(self.v.iter())
@@ -85,7 +190,23 @@ impl MotionField {
             .collect()
     }
 
-    /// Visualize motion field as HSV image (converted to RGB)
+    /// Visualize motion field as RGB image
+    ///
+    /// Creates a color-coded visualization where:
+    /// - **Hue**: Direction of motion (0-360 degrees)
+    /// - **Saturation**: Always maximum (fully saturated color)
+    /// - **Value**: Magnitude of motion (normalized to max)
+    ///
+    /// # Returns
+    ///
+    /// RGB image with motion encoded in HSV color space
+    ///
+    /// # Visualization
+    ///
+    /// - Red/Yellow: Rightward motion
+    /// - Green/Cyan: Upward motion
+    /// - Blue/Magenta: Leftward/downward motion
+    /// - Brightness: Strength of motion
     pub fn visualize(&self) -> image::RgbImage {
         use image::Rgb;
         

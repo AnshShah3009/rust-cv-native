@@ -4,7 +4,7 @@
 //! Based on "iSAM2: Incremental Smoothing and Mapping with the Fast Incremental cholmod" by Kaess et al.
 
 use nalgebra::{DMatrix, DVector, Matrix3, Point3, Vector3};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::RwLock;
 
 #[derive(Debug)]
@@ -12,20 +12,24 @@ pub struct Isam2 {
     nodes: RwLock<HashMap<usize, Node>>,
     factors: RwLock<Vec<Factor>>,
     optimize_on_update: bool,
+    #[allow(dead_code)]
     batch_optimize: bool,
 }
 
 #[derive(Debug, Clone)]
 struct Node {
+    #[allow(dead_code)]
     id: usize,
     kind: NodeKind,
     estimate: DVector<f64>,
+    #[allow(dead_code)]
     fixed: bool,
 }
 
 #[derive(Debug, Clone)]
 enum NodeKind {
     Pose(Vector3<f64>),
+    #[allow(dead_code)]
     Rotation(Matrix3<f64>),
     Point(Point3<f64>),
 }
@@ -36,6 +40,7 @@ struct Factor {
     to: usize,
     measurement: DVector<f64>,
     information: DMatrix<f64>,
+    #[allow(dead_code)]
     noise: f64,
 }
 

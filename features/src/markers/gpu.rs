@@ -8,7 +8,10 @@
 //! The CPU candidate finder still runs on the host; only the grid sampling
 //! and bit decoding runs on the GPU.
 
+#![allow(deprecated)]
+
 use crate::{FeatureError, Result};
+use cv_core::Error;
 use bytemuck::{Pod, Zeroable};
 use cv_hal::gpu_utils;
 use image::GrayImage;
@@ -249,7 +252,7 @@ impl MarkerGpuContext {
 
         // Check GPU memory budget from environment
         let gpu_budget = gpu_utils::read_gpu_max_bytes_from_env()
-            .map_err(|e| FeatureError::DetectionError(format!("GPU memory config error: {}", e)))?;
+            .map_err(|e| Error::FeatureError(format!("GPU memory config error: {}", e)))?;
 
         // Estimate memory usage for this operation
         // Image texture (f32): width * height * 4 bytes
@@ -265,7 +268,7 @@ impl MarkerGpuContext {
 
         // Check if operation fits in budget
         if !gpu_utils::fits_in_budget(total_memory, gpu_budget) {
-            return Err(FeatureError::DetectionError(format!(
+            return Err(Error::FeatureError(format!(
                 "GPU marker detection requires {}MB but budget is {}MB (set RUSTCV_GPU_MAX_BYTES to increase)",
                 total_memory / 1024 / 1024,
                 gpu_budget.unwrap_or(0) / 1024 / 1024
@@ -421,8 +424,8 @@ impl MarkerGpuContext {
         self.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
 
         rx.recv()
-            .map_err(|e| FeatureError::DetectionError(format!("GPU sync failed: {}", e)))?
-            .map_err(|e| FeatureError::DetectionError(format!("GPU buffer map failed: {:?}", e)))?;
+            .map_err(|e| Error::FeatureError(format!("GPU sync failed: {}", e)))?
+            .map_err(|e| Error::FeatureError(format!("GPU buffer map failed: {:?}", e)))?;
 
         let data = buffer_slice.get_mapped_range();
         let results: Vec<GpuMarkerResult> = bytemuck::cast_slice(&data).to_vec();

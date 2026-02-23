@@ -158,20 +158,18 @@ impl EssentialSolver {
 
         // Row 0: det(E) = 0
         for (idx, &(i, j, k)) in monomials.iter().enumerate() {
-            let mut sum_coeff = 0.0;
-            if i == j && j == k {
-                sum_coeff = get_det_coeff(i, j, k);
+            let sum_coeff = if i == j && j == k {
+                get_det_coeff(i, j, k)
             } else if i == j || j == k || i == k {
-                sum_coeff =
-                    get_det_coeff(i, j, k) + get_det_coeff(j, k, i) + get_det_coeff(k, i, j);
+                get_det_coeff(i, j, k) + get_det_coeff(j, k, i) + get_det_coeff(k, i, j)
             } else {
-                sum_coeff = get_det_coeff(0, 1, 2)
+                get_det_coeff(0, 1, 2)
                     + get_det_coeff(0, 2, 1)
                     + get_det_coeff(1, 0, 2)
                     + get_det_coeff(1, 2, 0)
                     + get_det_coeff(2, 0, 1)
-                    + get_det_coeff(2, 1, 0);
-            }
+                    + get_det_coeff(2, 1, 0)
+            };
             m[(0, idx)] = sum_coeff;
         }
 

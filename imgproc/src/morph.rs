@@ -226,12 +226,13 @@ pub fn morphology_ctx(
     _border: BorderMode,
     group: &ResourceGroup,
 ) -> GrayImage {
-    let device = group.device();
-    
-    if let ComputeDevice::Gpu(gpu) = device {
-        if let Ok(result) = morphology_gpu(gpu, src, typ, kernel, iterations) {
-            return result;
+    match group.device() {
+        Ok(ComputeDevice::Gpu(gpu)) => {
+            if let Ok(result) = morphology_gpu(gpu, src, typ, kernel, iterations) {
+                return result;
+            }
         }
+        _ => {}
     }
     
     // CPU fallback

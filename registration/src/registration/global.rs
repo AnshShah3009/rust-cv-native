@@ -3,7 +3,10 @@
 //! RANSAC-based global registration that doesn't require initial alignment.
 //! Uses FPFH (Fast Point Feature Histograms) for feature matching.
 
+#![allow(deprecated)]
+
 use cv_core::point_cloud::PointCloud;
+use cv_core::{Error, Result};
 use nalgebra::{Matrix4, Point3, Vector3};
 
 /// Simple nearest neighbor
@@ -51,14 +54,13 @@ pub struct FPFHFeature {
     pub histogram: [f32; 33], // 33-dimensional histogram
 }
 
-use crate::registration::RegistrationError;
 
 /// Compute FPFH features for point cloud
 pub fn compute_fpfh_features(
     _cloud: &PointCloud,
     _radius: f32,
-) -> Result<Vec<FPFHFeature>, RegistrationError> {
-    Err(RegistrationError::NotImplemented(
+) -> Result<Vec<FPFHFeature>> {
+    Err(Error::RuntimeError(
         "FPFH features are currently stubbed".to_string(),
     ))
 }
@@ -184,7 +186,7 @@ pub fn registration_ransac_based_on_feature_matching(
     max_correspondence_distance: f32,
     ransac_n: usize,
     max_iterations: usize,
-) -> Result<GlobalRegistrationResult, RegistrationError> {
+) -> Result<GlobalRegistrationResult> {
     // Find correspondences (Brute force)
     let mut correspondences: Vec<(usize, usize, f32)> = Vec::new();
     for (i, source_feature) in source_features.iter().enumerate() {
@@ -212,7 +214,7 @@ pub fn registration_ransac_based_on_feature_matching(
     let top_correspondences: Vec<_> = correspondences.into_iter().take(1000).collect();
 
     if top_correspondences.len() < ransac_n {
-        return Err(RegistrationError::OptimizationFailed(
+        return Err(Error::RuntimeError(
             "Insufficient correspondences".to_string(),
         ));
     }
@@ -229,7 +231,7 @@ pub fn registration_ransac_based_on_feature_matching(
     let res = ransac.run(&estimator, &top_correspondences);
 
     let final_transformation = res.model.ok_or_else(|| {
-        RegistrationError::OptimizationFailed("RANSAC failed to find model".to_string())
+        Error::RuntimeError("RANSAC failed to find model".to_string())
     })?;
 
     // Compute fitness and RMSE
@@ -262,7 +264,7 @@ pub fn registration_fgr_based_on_feature_matching(
     source_features: &[FPFHFeature],
     target_features: &[FPFHFeature],
     _option: FastGlobalRegistrationOption,
-) -> Result<GlobalRegistrationResult, RegistrationError> {
+) -> Result<GlobalRegistrationResult> {
     // FGR uses line process optimization instead of RANSAC
     // Placeholder - full implementation would optimize line process weights
     registration_ransac_based_on_feature_matching(

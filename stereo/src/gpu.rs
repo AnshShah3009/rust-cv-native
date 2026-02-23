@@ -2,7 +2,10 @@
 //!
 //! Provides GPU implementations of stereo matching algorithms using wgpu.
 
+#![allow(deprecated)]
+
 use crate::{DisparityMap, StereoError, Result};
+use cv_core::Error;
 use image::GrayImage;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -27,7 +30,7 @@ pub enum GpuStereoAlgorithm {
 impl GpuStereoMatcher {
     pub async fn new(algorithm: GpuStereoAlgorithm) -> Result<Self> {
         let global_ctx = GpuContext::global().map_err(|_| {
-            StereoError::InvalidParameters("GPU not available or not initialized".to_string())
+            Error::InvalidInput("GPU not available or not initialized".to_string())
         })?;
         
         let ctx = Arc::new(global_ctx.clone());
@@ -124,7 +127,7 @@ impl GpuStereoMatcher {
         max_disparity: i32,
     ) -> Result<DisparityMap> {
         if left.width() != right.width() || left.height() != right.height() {
-            return Err(StereoError::SizeMismatch(
+            return Err(Error::DimensionMismatch(
                 "Left and right images must have the same dimensions".to_string(),
             ));
         }
@@ -306,7 +309,7 @@ impl GpuStereoMatcher {
         let per_row_bytes = estimate_gpu_bytes(width, 1);
 
         if max_bytes < per_row_bytes {
-            return Err(StereoError::InvalidParameters(format!(
+            return Err(Error::InvalidInput(format!(
                 "RUSTCV_GPU_MAX_BYTES={} is too small; need at least {} bytes for one row",
                 max_bytes, per_row_bytes
             )));
@@ -314,7 +317,7 @@ impl GpuStereoMatcher {
 
         let max_input_rows = (max_bytes / per_row_bytes) as u32;
         if max_input_rows < (2 * half_block + 1) {
-            return Err(StereoError::InvalidParameters(format!(
+            return Err(Error::InvalidInput(format!(
                 "RUSTCV_GPU_MAX_BYTES={} too small for block_size={} (requires at least {} rows)",
                 max_bytes,
                 self.block_size(),
@@ -412,7 +415,7 @@ fn estimate_gpu_bytes(width: u32, height: u32) -> usize {
 
 fn extract_rows(image: &GrayImage, start_row: u32, end_row: u32) -> Result<GrayImage> {
     if start_row >= end_row || end_row > image.height() {
-        return Err(StereoError::InvalidParameters(format!(
+        return Err(Error::InvalidInput(format!(
             "Invalid row range [{start_row}, {end_row}) for image height {}",
             image.height()
         )));
@@ -423,7 +426,7 @@ fn extract_rows(image: &GrayImage, start_row: u32, end_row: u32) -> Result<GrayI
     let end_idx = end_row as usize * width;
     let data = image.as_raw()[start_idx..end_idx].to_vec();
     GrayImage::from_raw(image.width(), end_row - start_row, data).ok_or_else(|| {
-        StereoError::InvalidParameters("Failed to build temporary image tile".to_string())
+        Error::InvalidInput("Failed to build temporary image tile".to_string())
     })
 }
 

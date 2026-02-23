@@ -101,8 +101,9 @@ impl TSDFVolume {
         width: usize,
         height: usize,
     ) {
-        let runner = cv_runtime::best_runner();
-        self.integrate_ctx(depth_image, color_image, intrinsics, extrinsics, width, height, &runner);
+        if let Ok(runner) = cv_runtime::best_runner() {
+            self.integrate_ctx(depth_image, color_image, intrinsics, extrinsics, width, height, &runner);
+        }
     }
 
     /// Integrate a single RGBD frame with explicit context
@@ -116,10 +117,8 @@ impl TSDFVolume {
         height: usize,
         group: &RuntimeRunner,
     ) {
-        let device = group.device();
-        
         // GPU Path
-        if let ComputeDevice::Gpu(_gpu) = device {
+        if let Ok(ComputeDevice::Gpu(_gpu)) = group.device() {
             // TODO: Dispatch to HAL tsdf_integrate
             // Note: This requires converting blocks to a GPU-friendly format
         }
