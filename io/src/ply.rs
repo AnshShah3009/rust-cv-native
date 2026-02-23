@@ -171,3 +171,77 @@ pub fn write_ply<W: Write>(writer: &mut W, cloud: &PointCloud) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_ply_round_trip_basic() {
+        let cloud = PointCloud::new(vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 2.0, 3.0),
+            Point3::new(-1.0, -2.0, -3.0),
+        ]);
+
+        let mut buffer = Vec::new();
+        write_ply(&mut buffer, &cloud).expect("write failed");
+
+        let reader = Cursor::new(buffer);
+        let read_cloud = read_ply(reader).expect("read failed");
+
+        assert_eq!(read_cloud.len(), 3);
+        assert!((read_cloud.points[1].y - 2.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_ply_round_trip_with_normals() {
+        let mut cloud = PointCloud::new(vec![
+            Point3::new(1.0, 2.0, 3.0),
+            Point3::new(4.0, 5.0, 6.0),
+        ]);
+        cloud.normals = Some(vec![
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        ]);
+
+        let mut buffer = Vec::new();
+        write_ply(&mut buffer, &cloud).expect("write failed");
+
+        let reader = Cursor::new(buffer);
+        let read_cloud = read_ply(reader).expect("read failed");
+
+        assert!(read_cloud.normals.is_some());
+    }
+
+    #[test]
+    fn test_ply_empty_cloud() {
+        let cloud = PointCloud::new(vec![]);
+
+        let mut buffer = Vec::new();
+        write_ply(&mut buffer, &cloud).expect("write failed");
+
+        let reader = Cursor::new(buffer);
+        let read_cloud = read_ply(reader).expect("read failed");
+
+        assert_eq!(read_cloud.len(), 0);
+    }
+
+    #[test]
+    fn test_ply_large_point_cloud() {
+        let n = 300;
+        let points: Vec<_> = (0..n)
+            .map(|i| Point3::new(i as f32, i as f32 * 2.0, i as f32 * 3.0))
+            .collect();
+        let cloud = PointCloud::new(points);
+
+        let mut buffer = Vec::new();
+        write_ply(&mut buffer, &cloud).expect("write failed");
+
+        let reader = Cursor::new(buffer);
+        let read_cloud = read_ply(reader).expect("read failed");
+
+        assert_eq!(read_cloud.len(), n);
+    }
+}

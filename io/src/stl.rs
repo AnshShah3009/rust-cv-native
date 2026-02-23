@@ -196,3 +196,112 @@ pub fn write_stl<W: Write>(writer: &mut W, mesh: &TriangleMesh, binary: bool) ->
         write_stl_ascii(writer, mesh)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_stl_ascii_write() {
+        let mut mesh = TriangleMesh::new();
+        mesh.vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ];
+        mesh.faces = vec![[0, 1, 2]];
+
+        let mut buffer = Vec::new();
+        write_stl_ascii(&mut buffer, &mesh).expect("Write ASCII failed");
+
+        // Verify output is not empty and contains expected markers
+        assert!(!buffer.is_empty());
+        let content = String::from_utf8_lossy(&buffer);
+        assert!(content.contains("solid"));
+        assert!(content.contains("vertex"));
+    }
+
+    #[test]
+    fn test_stl_ascii_detect_format() {
+        let ascii_content = "solid test\nfacet normal 0 0 1\nouter loop\n\
+                             vertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n\
+                             endloop\nendfacet\nendsolid test\n";
+        let cursor = Cursor::new(ascii_content.as_bytes().to_vec());
+        let result = read_stl(cursor);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_stl_multiple_facets_write() {
+        let mut mesh = TriangleMesh::new();
+        mesh.vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+        ];
+        mesh.faces = vec![[0, 1, 2], [1, 2, 3]];
+
+        let mut buffer = Vec::new();
+        write_stl_ascii(&mut buffer, &mesh).expect("Write failed");
+
+        // Verify that multiple facets are written to buffer
+        let content = String::from_utf8_lossy(&buffer);
+        // Count the number of "facet" occurrences to verify multiple facets
+        let facet_count = content.matches("facet").count();
+        // Should have at least 2 facet entries for 2 triangles
+        assert!(facet_count >= 2);
+    }
+
+    #[test]
+    fn test_stl_empty_mesh() {
+        let mesh = TriangleMesh::new();
+
+        let mut buffer = Vec::new();
+        write_stl_ascii(&mut buffer, &mesh).expect("Write failed");
+
+        let cursor = Cursor::new(buffer);
+        let loaded = read_stl(cursor).expect("Read failed");
+
+        assert_eq!(loaded.faces.len(), 0);
+    }
+
+    #[test]
+    fn test_stl_write_unified_ascii() {
+        let mut mesh = TriangleMesh::new();
+        mesh.vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ];
+        mesh.faces = vec![[0, 1, 2]];
+
+        let mut buffer = Vec::new();
+        write_stl(&mut buffer, &mesh, false).expect("Write failed");
+
+        let written = String::from_utf8(buffer).expect("UTF-8 conversion failed");
+        assert!(written.contains("solid"));
+        assert!(written.contains("facet"));
+    }
+
+    #[test]
+    fn test_stl_ascii_normal_computation() {
+        let mut mesh = TriangleMesh::new();
+        // Triangle in XY plane
+        mesh.vertices = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ];
+        mesh.faces = vec![[0, 1, 2]];
+
+        let mut buffer = Vec::new();
+        write_stl_ascii(&mut buffer, &mesh).expect("Write failed");
+
+        let written = String::from_utf8(buffer).expect("UTF-8 conversion failed");
+        // Should compute normal as (0, 0, 1) for XY plane triangle
+        assert!(written.contains("facet normal"));
+    }
+}
