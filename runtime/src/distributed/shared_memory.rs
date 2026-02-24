@@ -69,6 +69,7 @@ pub struct ShmCoordinator {
     slot_index: usize,
     #[allow(dead_code)]
     pid: u32,
+    path: std::path::PathBuf,
 }
 
 impl ShmCoordinator {
@@ -110,6 +111,7 @@ impl ShmCoordinator {
             mmap,
             slot_index,
             pid,
+            path,
         })
     }
 
@@ -328,6 +330,7 @@ impl LoadCoordinator for ShmCoordinator {
 impl Drop for ShmCoordinator {
     fn drop(&mut self) {
         self.cleanup();
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
