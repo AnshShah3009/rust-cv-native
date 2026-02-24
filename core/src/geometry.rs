@@ -275,7 +275,8 @@ impl Pose {
     /// Create a new Pose from a rotation matrix and translation vector
     /// Converts the rotation matrix to a quaternion internally
     pub fn new(rotation: Matrix3<f64>, translation: Vector3<f64>) -> Self {
-        let quat = UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(rotation));
+        let quat =
+            UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(rotation));
         Self {
             rotation: quat,
             translation,
@@ -312,7 +313,8 @@ impl Pose {
 
     pub fn matrix(&self) -> Matrix4<f64> {
         let mut m = Matrix4::identity();
-        m.fixed_view_mut::<3, 3>(0, 0).copy_from(&self.rotation_matrix());
+        m.fixed_view_mut::<3, 3>(0, 0)
+            .copy_from(&self.rotation_matrix());
         m.fixed_view_mut::<3, 1>(0, 3).copy_from(&self.translation);
         m
     }
@@ -364,7 +366,6 @@ impl From<Pose> for Isometry3<f64> {
         )
     }
 }
-
 
 pub fn twist_to_se3(twist: &Vector6<f64>) -> (Matrix3<f64>, Vector3<f64>) {
     let omega = Vector3::new(twist[0], twist[1], twist[2]);
@@ -1154,7 +1155,9 @@ mod tests {
             let pose = Pose::new(rotation, translation);
 
             let result = pose.compose(&pose.inverse());
-            assert!((result.rotation.as_ref() - UnitQuaternion::identity().as_ref()).norm() < 1e-10);
+            assert!(
+                (result.rotation.as_ref() - UnitQuaternion::identity().as_ref()).norm() < 1e-10
+            );
             assert!(result.translation.norm() < 1e-10);
         }
 

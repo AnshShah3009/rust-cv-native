@@ -4,7 +4,7 @@
 //! and aligned, making stereo matching much simpler.
 
 use crate::Result;
-use cv_core::{Pose, CameraIntrinsics};
+use cv_core::{CameraIntrinsics, Pose};
 use image::GrayImage;
 use nalgebra::{Matrix3, Vector3};
 
@@ -82,8 +82,8 @@ fn compute_rectification_transforms(
     let relative_rotation = left_rot_mat.transpose() * right_extrinsics.rotation_matrix();
 
     // Relative translation: t = R_left^T * (t_right - t_left)
-    let relative_translation = left_rot_mat.transpose()
-        * (right_extrinsics.translation - left_extrinsics.translation);
+    let relative_translation =
+        left_rot_mat.transpose() * (right_extrinsics.translation - left_extrinsics.translation);
 
     // Compute rectification rotation that aligns epipolar lines
     // This is a simplified version - full implementation requires polar decomposition

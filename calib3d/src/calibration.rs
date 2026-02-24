@@ -568,7 +568,9 @@ fn extrinsics_from_homography(k_inv: &Matrix3<f64>, h: &Matrix3<f64>) -> Result<
         cv_core::Error::CalibrationError("SVD U missing in extrinsics_from_homography".to_string())
     })?;
     let vt = svd.v_t.ok_or_else(|| {
-        cv_core::Error::CalibrationError("SVD V^T missing in extrinsics_from_homography".to_string())
+        cv_core::Error::CalibrationError(
+            "SVD V^T missing in extrinsics_from_homography".to_string(),
+        )
     })?;
     r = u * vt;
     if r.determinant() < 0.0 {
@@ -787,7 +789,9 @@ fn refine_distortion(
         let g = &jt * &r;
 
         let delta = h.lu().solve(&g).ok_or_else(|| {
-            cv_core::Error::AlgorithmError("Distortion refinement normal equation failed".to_string())
+            cv_core::Error::AlgorithmError(
+                "Distortion refinement normal equation failed".to_string(),
+            )
         })?;
 
         for k in 0..5 {

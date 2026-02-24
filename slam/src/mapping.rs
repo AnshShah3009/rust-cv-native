@@ -1,6 +1,6 @@
 use cv_core::slam::{MapPoint, WorldMap};
-use cv_features::{Descriptor, Descriptors};
 use cv_core::KeyPoint;
+use cv_features::{Descriptor, Descriptors};
 use std::sync::{Arc, RwLock};
 
 pub trait MapExt {
@@ -13,10 +13,7 @@ impl MapExt for WorldMap {
         let mut descs = Descriptors::new();
         for p_lock in &self.points {
             if let Ok(p) = p_lock.read() {
-                descs.push(Descriptor::new(
-                    p.descriptor.clone(),
-                    KeyPoint::default(),
-                ));
+                descs.push(Descriptor::new(p.descriptor.clone(), KeyPoint::default()));
             }
         }
         descs

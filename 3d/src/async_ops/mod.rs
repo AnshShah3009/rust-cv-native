@@ -53,10 +53,10 @@ pub mod point_cloud {
         points: Vec<Point3<f32>>,
         voxel_size: f32,
     ) -> crate::Result<Vec<Point3<f32>>> {
-        Ok(task::spawn_blocking(move || {
-            gpu::point_cloud::voxel_downsample(&points, voxel_size)
-        })
-        .await?)
+        Ok(
+            task::spawn_blocking(move || gpu::point_cloud::voxel_downsample(&points, voxel_size))
+                .await?,
+        )
     }
 
     /// Async normal computation
@@ -64,10 +64,10 @@ pub mod point_cloud {
         points: Vec<Point3<f32>>,
         k: usize,
     ) -> crate::Result<Vec<Vector3<f32>>> {
-        Ok(task::spawn_blocking(move || {
-            gpu::point_cloud::compute_normals_simple(&points, k)
-        })
-        .await?)
+        Ok(
+            task::spawn_blocking(move || gpu::point_cloud::compute_normals_simple(&points, k))
+                .await?,
+        )
     }
 
     /// Async voxel-based normal computation
@@ -157,7 +157,10 @@ pub mod registration {
         match result {
             Ok(Ok(matrix)) => Ok(Some(matrix)),
             Ok(Err(_)) => Ok(None),
-            Err(e) => Err(crate::Error::RuntimeError(format!("Async task error: {}", e))),
+            Err(e) => Err(crate::Error::RuntimeError(format!(
+                "Async task error: {}",
+                e
+            ))),
         }
     }
 
@@ -173,9 +176,7 @@ pub mod registration {
             .into_iter()
             .zip(targets.into_iter())
             .zip(target_normals.into_iter())
-            .map(|((src, tgt), normals)| {
-                icp_async(src, tgt, normals, max_distance, max_iterations)
-            })
+            .map(|((src, tgt), normals)| icp_async(src, tgt, normals, max_distance, max_iterations))
             .collect();
 
         futures::future::try_join_all(futures).await
@@ -206,12 +207,16 @@ pub mod mesh {
         vertices: Vec<Point3<f32>>,
         faces: Vec<[usize; 3]>,
     ) -> crate::Result<Vec<Vector3<f32>>> {
-        match task::spawn_blocking(move || {
-            gpu::mesh::compute_vertex_normals(&vertices, &faces)
-        })
-        .await {
-            Ok(result) => result.map_err(|e| crate::Error::RuntimeError(format!("GPU compute failed: {}", e))),
-            Err(e) => Err(crate::Error::RuntimeError(format!("Async task error: {}", e))),
+        match task::spawn_blocking(move || gpu::mesh::compute_vertex_normals(&vertices, &faces))
+            .await
+        {
+            Ok(result) => {
+                result.map_err(|e| crate::Error::RuntimeError(format!("GPU compute failed: {}", e)))
+            }
+            Err(e) => Err(crate::Error::RuntimeError(format!(
+                "Async task error: {}",
+                e
+            ))),
         }
     }
 }
@@ -230,9 +235,15 @@ pub mod raycasting {
         match task::spawn_blocking(move || {
             gpu::raycasting::cast_rays(&ray_origins, &ray_directions, &mesh_vertices, &mesh_faces)
         })
-        .await {
-            Ok(result) => result.map_err(|e| crate::Error::RuntimeError(format!("GPU compute failed: {}", e))),
-            Err(e) => Err(crate::Error::RuntimeError(format!("Async task error: {}", e))),
+        .await
+        {
+            Ok(result) => {
+                result.map_err(|e| crate::Error::RuntimeError(format!("GPU compute failed: {}", e)))
+            }
+            Err(e) => Err(crate::Error::RuntimeError(format!(
+                "Async task error: {}",
+                e
+            ))),
         }
     }
 }
@@ -289,11 +300,7 @@ pub mod pipeline {
     }
 
     /// Parallel map with concurrency limit
-    pub async fn parallel_map<T, R, F, Fut>(
-        items: Vec<T>,
-        limit: usize,
-        f: F,
-    ) -> Vec<R>
+    pub async fn parallel_map<T, R, F, Fut>(items: Vec<T>, limit: usize, f: F) -> Vec<R>
     where
         T: Send + 'static,
         R: Send + 'static,
@@ -313,7 +320,10 @@ pub mod pipeline {
     }
 
     /// Run with timeout
-    pub async fn with_timeout<T>(future: impl Future<Output = T>, dur: std::time::Duration) -> Option<T> {
+    pub async fn with_timeout<T>(
+        future: impl Future<Output = T>,
+        dur: std::time::Duration,
+    ) -> Option<T> {
         match tokio::time::timeout(dur, future).await {
             Ok(result) => Some(result),
             Err(_) => None,
@@ -321,10 +331,12 @@ pub mod pipeline {
     }
 }
 
-/// Re-exports
-pub use point_cloud::{transform_async, batch_transform_async, voxel_downsample_async, compute_normals_async};
-pub use registration::{icp_async, batch_icp_async};
-pub use mesh::{laplacian_smooth_async, compute_normals_async as mesh_compute_normals_async};
-pub use raycasting::cast_rays_async;
-pub use tsdf::integrate_depth_async;
+pub use mesh::{compute_normals_async as mesh_compute_normals_async, laplacian_smooth_async};
 pub use pipeline::{chain, parallel_map, with_timeout};
+/// Re-exports
+pub use point_cloud::{
+    batch_transform_async, compute_normals_async, transform_async, voxel_downsample_async,
+};
+pub use raycasting::cast_rays_async;
+pub use registration::{batch_icp_async, icp_async};
+pub use tsdf::integrate_depth_async;

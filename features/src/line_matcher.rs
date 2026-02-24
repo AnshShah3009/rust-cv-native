@@ -24,13 +24,17 @@ impl LineMatcher {
         Self { threshold }
     }
 
-    pub fn match_lines(&self, query: &[LineDescriptor], train: &[LineDescriptor]) -> Vec<LineMatch> {
+    pub fn match_lines(
+        &self,
+        query: &[LineDescriptor],
+        train: &[LineDescriptor],
+    ) -> Vec<LineMatch> {
         let mut matches = Vec::new();
-        
+
         for (qi, q) in query.iter().enumerate() {
             let mut best_dist = u32::MAX;
             let mut best_idx = None;
-            
+
             for (ti, t) in train.iter().enumerate() {
                 let dist = hamming_dist(&q.data, &t.data);
                 if dist < best_dist {
@@ -38,7 +42,7 @@ impl LineMatcher {
                     best_idx = Some(ti);
                 }
             }
-            
+
             if let Some(ti) = best_idx {
                 if (best_dist as f32) < self.threshold {
                     matches.push(LineMatch {
@@ -49,7 +53,7 @@ impl LineMatcher {
                 }
             }
         }
-        
+
         matches
     }
 }

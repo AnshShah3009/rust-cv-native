@@ -25,21 +25,23 @@
 
 use image::GrayImage;
 
+/// Mixture of Gaussians background subtraction
+pub mod mog2;
 /// Optical flow computation algorithms
 pub mod optical_flow;
 /// Object tracking algorithms
 pub mod tracking;
-/// Mixture of Gaussians background subtraction
-pub mod mog2;
 
+pub use cv_core::{Error, Result};
 pub use optical_flow::*;
 pub use tracking::*;
-pub use cv_core::{Error, Result};
 
 // Re-export from cv-core (Kalman is a general estimation primitive)
-pub use cv_core::kalman::{DynamicKalmanFilter, KalmanFilter, KalmanFilterState, ExtendedKalmanFilter};
 /// Backwards-compatible alias
-pub use cv_core::kalman as kalman;
+pub use cv_core::kalman;
+pub use cv_core::kalman::{
+    DynamicKalmanFilter, ExtendedKalmanFilter, KalmanFilter, KalmanFilterState,
+};
 
 /// Backward compatibility alias for deprecated custom error type
 #[deprecated(
@@ -186,7 +188,8 @@ impl MotionField {
     ///
     /// Vector of magnitude values: `sqrt(u^2 + v^2)` at each pixel
     pub fn magnitude(&self) -> Vec<f32> {
-        self.u.iter()
+        self.u
+            .iter()
             .zip(self.v.iter())
             .map(|(u, v)| (u * u + v * v).sqrt())
             .collect()
@@ -211,34 +214,32 @@ impl MotionField {
     /// - Brightness: Strength of motion
     pub fn visualize(&self) -> image::RgbImage {
         use image::Rgb;
-        
+
         let mut img = image::RgbImage::new(self.width, self.height);
-        
+
         // Find max magnitude for normalization
-        let max_mag = self.magnitude()
-            .into_iter()
-            .fold(0.0f32, f32::max)
-            .max(1.0);
-        
+        let max_mag = self.magnitude().into_iter().fold(0.0f32, f32::max).max(1.0);
+
         for y in 0..self.height {
             for x in 0..self.width {
                 let (u, v) = self.get_motion(x, y);
-                
+
                 // Compute angle and magnitude
-                let angle = v.atan2(u);  // -PI to PI
+                let angle = v.atan2(u); // -PI to PI
                 let magnitude = (u * u + v * v).sqrt();
-                
+
                 // Convert to HSV: Hue = angle, Saturation = 1.0, Value = magnitude
-                let hue = ((angle + std::f32::consts::PI) / (2.0 * std::f32::consts::PI) * 255.0) as u8;
+                let hue =
+                    ((angle + std::f32::consts::PI) / (2.0 * std::f32::consts::PI) * 255.0) as u8;
                 let saturation = 255u8;
                 let value = ((magnitude / max_mag) * 255.0) as u8;
-                
+
                 // Simple HSV to RGB conversion
                 let rgb = hsv_to_rgb(hue, saturation, value);
                 img.put_pixel(x, y, Rgb(rgb));
             }
         }
-        
+
         img
     }
 }
@@ -248,11 +249,11 @@ fn hsv_to_rgb(h: u8, s: u8, v: u8) -> [u8; 3] {
     let h = h as f32 / 255.0 * 360.0;
     let s = s as f32 / 255.0;
     let v = v as f32 / 255.0;
-    
+
     let c = v * s;
     let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
     let m = v - c;
-    
+
     let (r, g, b) = if h < 60.0 {
         (c, x, 0.0)
     } else if h < 120.0 {
@@ -266,7 +267,7 @@ fn hsv_to_rgb(h: u8, s: u8, v: u8) -> [u8; 3] {
     } else {
         (c, 0.0, x)
     };
-    
+
     [
         ((r + m) * 255.0) as u8,
         ((g + m) * 255.0) as u8,
@@ -281,22 +282,22 @@ mod tests {
     #[test]
     fn test_motion_field() {
         let mut field = MotionField::new(10, 10);
-        
+
         field.set_motion(5, 5, 3.0, 4.0);
         let (u, v) = field.get_motion(5, 5);
-        
+
         assert_eq!(u, 3.0);
         assert_eq!(v, 4.0);
-        
+
         let mag = field.magnitude();
-        assert_eq!(mag[55], 5.0);  // sqrt(3^2 + 4^2) = 5
+        assert_eq!(mag[55], 5.0); // sqrt(3^2 + 4^2) = 5
     }
 
     #[test]
     fn test_video_frame() {
         let img = GrayImage::new(100, 100);
         let frame = VideoFrame::new(img, 0.0, 0);
-        
+
         assert_eq!(frame.frame_number, 0);
         assert_eq!(frame.timestamp, 0.0);
     }

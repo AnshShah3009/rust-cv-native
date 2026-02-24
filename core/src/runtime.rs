@@ -25,13 +25,16 @@ pub fn init_global_thread_pool(num_threads: Option<usize>) -> Result<(), String>
             builder = builder.num_threads(n);
         }
 
-        builder.build_global().map_err(|e| e.to_string()).or_else(|e| {
-            if e.contains("already initialized") {
-                Ok(())
-            } else {
-                Err(e)
-            }
-        })
+        builder
+            .build_global()
+            .map_err(|e| e.to_string())
+            .or_else(|e| {
+                if e.contains("already initialized") {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
     });
     res.clone()
 }
@@ -67,12 +70,8 @@ static GLOBAL_BUFFER_POOL: OnceLock<BufferPool> = OnceLock::new();
 
 impl BufferPool {
     pub fn global() -> &'static self::BufferPool {
-        GLOBAL_BUFFER_POOL.get_or_init(|| {
-            BufferPool {
-                buckets: std::array::from_fn(|_| {
-                    std::array::from_fn(|_| Mutex::new(Vec::new()))
-                })
-            }
+        GLOBAL_BUFFER_POOL.get_or_init(|| BufferPool {
+            buckets: std::array::from_fn(|_| std::array::from_fn(|_| Mutex::new(Vec::new()))),
         })
     }
 
@@ -101,7 +100,7 @@ impl BufferPool {
     pub fn get(&self, min_size: usize) -> Vec<u8> {
         let bucket_idx = Self::get_bucket_index(min_size);
         let shard_idx = Self::get_shard_index();
-        
+
         // Try preferred shard first, then linear search others in same bucket
         for i in 0..8 {
             let s = (shard_idx + i) % 8;
@@ -113,7 +112,7 @@ impl BufferPool {
                 }
             }
         }
-        
+
         // Fallback to larger buckets if current one is empty
         for b in (bucket_idx + 1)..4 {
             for s in 0..8 {
@@ -126,20 +125,23 @@ impl BufferPool {
                 }
             }
         }
-        
+
         Vec::with_capacity(min_size)
     }
 
     /// Return a buffer to the pool for later reuse.
     pub fn return_buffer(&self, mut buf: Vec<u8>) {
         let cap = buf.capacity();
-        if cap == 0 { return; }
-        
+        if cap == 0 {
+            return;
+        }
+
         let bucket_idx = Self::get_bucket_index(cap);
         let shard_idx = Self::get_shard_index();
-        
+
         if let Ok(mut bucket) = self.buckets[bucket_idx][shard_idx].lock() {
-            if bucket.len() < 32 { // Sharded limit
+            if bucket.len() < 32 {
+                // Sharded limit
                 buf.clear();
                 bucket.push(buf);
             }
@@ -167,15 +169,21 @@ impl<'a> DropBufferPool<'a> {
     }
 
     pub fn buffer(&self) -> &Vec<u8> {
-        self.buffer.as_ref().expect("DropBufferPool: buffer accessed after being taken (use-after-move logic error)")
+        self.buffer.as_ref().expect(
+            "DropBufferPool: buffer accessed after being taken (use-after-move logic error)",
+        )
     }
 
     pub fn buffer_mut(&mut self) -> &mut Vec<u8> {
-        self.buffer.as_mut().expect("DropBufferPool: buffer accessed after being taken (use-after-move logic error)")
+        self.buffer.as_mut().expect(
+            "DropBufferPool: buffer accessed after being taken (use-after-move logic error)",
+        )
     }
 
     pub fn take(mut self) -> Vec<u8> {
-        self.buffer.take().expect("DropBufferPool: buffer already taken")
+        self.buffer
+            .take()
+            .expect("DropBufferPool: buffer already taken")
     }
 }
 

@@ -1,8 +1,8 @@
-use cv_core::{Tensor, TensorShape, storage::Storage, CpuTensor};
-use cv_hal::gpu::GpuContext;
+use cv_core::{storage::Storage, CpuTensor, Tensor, TensorShape};
+use cv_hal::context::{ColorConversion, ComputeContext, ThresholdType};
 use cv_hal::cpu::CpuBackend;
-use cv_hal::context::{ComputeContext, ThresholdType, ColorConversion};
-use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
+use cv_hal::gpu::GpuContext;
+use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
 use futures::executor::block_on;
 use std::sync::Arc;
 
@@ -10,20 +10,23 @@ use std::sync::Arc;
 fn test_cross_device_parity() {
     // 1. Setup CPU reference
     let cpu = CpuBackend::new().expect("CPU backend unavailable");
-    
+
     // 2. Enumerate all GPUs
     let adapters = block_on(GpuContext::enumerate_adapters());
     println!("Found {} GPU adapters", adapters.len());
 
     for (i, adapter) in adapters.iter().enumerate() {
         let info = adapter.get_info();
-        println!("Adapter {}: {} ({:?}) - Backend: {:?}", i, info.name, info.device_type, info.backend);
+        println!(
+            "Adapter {}: {} ({:?}) - Backend: {:?}",
+            i, info.name, info.device_type, info.backend
+        );
     }
 
     for (i, adapter) in adapters.into_iter().enumerate() {
         let info = adapter.get_info();
         println!("--- Testing Adapter {}: {} ---", i, info.name);
-        
+
         // Skip problematic AMD Integrated GPU on Vulkan that panics in driver
         if info.name.contains("AMD") && info.backend == wgpu::Backend::Vulkan {
             println!("  ! Skipping AMD Integrated GPU on Vulkan to avoid driver panic");
@@ -40,11 +43,14 @@ fn test_cross_device_parity() {
         let gpu = match gpu_res {
             Ok(g) => g,
             Err(e) => {
-                println!("  ! Skipping adapter {}: GPU context creation failed: {}", info.name, e);
+                println!(
+                    "  ! Skipping adapter {}: GPU context creation failed: {}",
+                    info.name, e
+                );
                 continue;
             }
         };
-        
+
         // --- Run Parity Tests ---
         test_threshold_parity(&cpu, &gpu, &info.name);
         test_pc_transform_parity(&cpu, &gpu, &info.name);
@@ -60,36 +66,43 @@ fn test_cross_device_parity() {
 fn test_icp_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
     let num_src = 100;
     let num_tgt = 200;
-    
+
     let mut src_data = vec![0.0f32; num_src * 4];
     let mut tgt_data = vec![0.0f32; num_tgt * 4];
-    
+
     // Create some exact matches
     for i in 0..num_src {
         src_data[i * 4] = i as f32;
         src_data[i * 4 + 1] = (i * 2) as f32;
         src_data[i * 4 + 2] = (i * 3) as f32;
         src_data[i * 4 + 3] = 1.0;
-        
+
         tgt_data[i * 4] = i as f32;
         tgt_data[i * 4 + 1] = (i * 2) as f32;
         tgt_data[i * 4 + 2] = (i * 3) as f32;
         tgt_data[i * 4 + 3] = 1.0;
     }
-    
-    let src_cpu: CpuTensor<f32> = Tensor::from_vec(src_data, TensorShape::new(1, num_src, 4)).unwrap();
-    let tgt_cpu: CpuTensor<f32> = Tensor::from_vec(tgt_data, TensorShape::new(1, num_tgt, 4)).unwrap();
-    
+
+    let src_cpu: CpuTensor<f32> =
+        Tensor::from_vec(src_data, TensorShape::new(1, num_src, 4)).unwrap();
+    let tgt_cpu: CpuTensor<f32> =
+        Tensor::from_vec(tgt_data, TensorShape::new(1, num_tgt, 4)).unwrap();
+
     let src_gpu = src_cpu.to_gpu_ctx(gpu).unwrap();
     let tgt_gpu = tgt_cpu.to_gpu_ctx(gpu).unwrap();
-    
+
     // CPU
     let res_cpu = cpu.icp_correspondences(&src_cpu, &tgt_cpu, 1.0).unwrap();
-    
+
     // GPU
     let res_gpu = gpu.icp_correspondences(&src_gpu, &tgt_gpu, 1.0).unwrap();
-    
-    assert_eq!(res_cpu.len(), res_gpu.len(), "ICP count mismatch on {}", gpu_name);
+
+    assert_eq!(
+        res_cpu.len(),
+        res_gpu.len(),
+        "ICP count mismatch on {}",
+        gpu_name
+    );
     for i in 0..res_cpu.len() {
         assert_eq!(res_cpu[i].0, res_gpu[i].0);
         assert_eq!(res_cpu[i].1, res_gpu[i].1);
@@ -102,10 +115,10 @@ fn test_matching_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
     let q_len = 50;
     let t_len = 100;
     let d_size = 32;
-    
+
     let mut q_data = vec![0u8; q_len * d_size];
     let mut t_data = vec![0u8; t_len * d_size];
-    
+
     // Create some exact matches
     for i in 0..q_len {
         for j in 0..d_size {
@@ -114,22 +127,33 @@ fn test_matching_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
             t_data[i * d_size + j] = val; // Direct match at same index
         }
     }
-    
-    let query_cpu: CpuTensor<u8> = Tensor::from_vec(q_data, TensorShape::new(1, q_len, d_size)).unwrap();
-    let train_cpu: CpuTensor<u8> = Tensor::from_vec(t_data, TensorShape::new(1, t_len, d_size)).unwrap();
-    
+
+    let query_cpu: CpuTensor<u8> =
+        Tensor::from_vec(q_data, TensorShape::new(1, q_len, d_size)).unwrap();
+    let train_cpu: CpuTensor<u8> =
+        Tensor::from_vec(t_data, TensorShape::new(1, t_len, d_size)).unwrap();
+
     let query_gpu = query_cpu.to_gpu_ctx(gpu).unwrap();
     let train_gpu = train_cpu.to_gpu_ctx(gpu).unwrap();
-    
+
     let ratio = 0.8f32;
-    
+
     // CPU
-    let res_cpu = cpu.match_descriptors(&query_cpu, &train_cpu, ratio).unwrap();
-    
+    let res_cpu = cpu
+        .match_descriptors(&query_cpu, &train_cpu, ratio)
+        .unwrap();
+
     // GPU
-    let res_gpu = gpu.match_descriptors(&query_gpu, &train_gpu, ratio).unwrap();
-    
-    assert_eq!(res_cpu.matches.len(), res_gpu.matches.len(), "Match count mismatch on {}", gpu_name);
+    let res_gpu = gpu
+        .match_descriptors(&query_gpu, &train_gpu, ratio)
+        .unwrap();
+
+    assert_eq!(
+        res_cpu.matches.len(),
+        res_gpu.matches.len(),
+        "Match count mismatch on {}",
+        gpu_name
+    );
     for i in 0..res_cpu.matches.len() {
         assert_eq!(res_cpu.matches[i].query_idx, res_gpu.matches[i].query_idx);
         assert_eq!(res_cpu.matches[i].train_idx, res_gpu.matches[i].train_idx);
@@ -147,31 +171,34 @@ fn test_fast_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
             data[y * 128 + x] = 255;
         }
     }
-    
+
     let input_cpu: CpuTensor<u8> = Tensor::from_vec(data, shape).unwrap();
     let input_gpu = input_cpu.to_gpu_ctx(gpu).expect("Upload failed");
-    
+
     // CPU
     let res_cpu = cpu.fast_detect(&input_cpu, 20, false).unwrap();
     let cpu_slice = res_cpu.storage.as_slice().unwrap();
-    
+
     // GPU (Should return NotSupported for now, we handle it gracefully in the test runner)
     let res_gpu_encoded = gpu.fast_detect(&input_gpu, 20, false);
-    
+
     match res_gpu_encoded {
         Ok(res_gpu_t) => {
             let res_gpu = res_gpu_t.to_cpu_ctx(gpu).unwrap();
             let gpu_slice = res_gpu.storage.as_slice().unwrap();
             for i in 0..cpu_slice.len() {
                 if cpu_slice[i] != gpu_slice[i] {
-                    panic!("FAST Parity failure on {}: at index {}, CPU={}, GPU={}", gpu_name, i, cpu_slice[i], gpu_slice[i]);
+                    panic!(
+                        "FAST Parity failure on {}: at index {}, CPU={}, GPU={}",
+                        gpu_name, i, cpu_slice[i], gpu_slice[i]
+                    );
                 }
             }
             println!("  ✓ FAST parity passed for {}", gpu_name);
-        },
+        }
         Err(cv_hal::Error::NotSupported(_)) => {
             println!("  - FAST parity skipped for {} (NotSupported)", gpu_name);
-        },
+        }
         Err(e) => panic!("FAST failed on {}: {}", gpu_name, e),
     }
 }
@@ -182,22 +209,25 @@ fn test_bilateral_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
     for i in 0..data.len() {
         data[i] = (i % 256) as u8;
     }
-    
+
     let input_cpu: CpuTensor<u8> = Tensor::from_vec(data, shape).unwrap();
     let input_gpu = input_cpu.to_gpu_ctx(gpu).expect("Upload failed");
-    
+
     // CPU
     let res_cpu = cpu.bilateral_filter(&input_cpu, 5, 10.0, 10.0).unwrap();
     let cpu_slice = res_cpu.storage.as_slice().unwrap();
-    
+
     // GPU
     let res_gpu_encoded = gpu.bilateral_filter(&input_gpu, 5, 10.0, 10.0).unwrap();
     let res_gpu = res_gpu_encoded.to_cpu_ctx(gpu).unwrap();
     let gpu_slice = res_gpu.storage.as_slice().unwrap();
-    
+
     for i in 0..cpu_slice.len() {
         if (cpu_slice[i] as i32 - gpu_slice[i] as i32).abs() > 1 {
-            panic!("Bilateral Parity failure on {}: at index {}, CPU={}, GPU={}", gpu_name, i, cpu_slice[i], gpu_slice[i]);
+            panic!(
+                "Bilateral Parity failure on {}: at index {}, CPU={}, GPU={}",
+                gpu_name, i, cpu_slice[i], gpu_slice[i]
+            );
         }
     }
     println!("  ✓ Bilateral parity passed for {}", gpu_name);
@@ -209,24 +239,27 @@ fn test_resize_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
     for i in 0..data.len() {
         data[i] = (i % 256) as u8;
     }
-    
+
     let input_cpu: CpuTensor<u8> = Tensor::from_vec(data, shape).unwrap();
     let input_gpu = input_cpu.to_gpu_ctx(gpu).expect("Upload failed");
-    
+
     let new_shape = (64, 64);
-    
+
     // CPU
     let res_cpu = cpu.resize(&input_cpu, new_shape).unwrap();
     let cpu_slice = res_cpu.storage.as_slice().unwrap();
-    
+
     // GPU
     let res_gpu_encoded = gpu.resize(&input_gpu, new_shape).unwrap();
     let res_gpu = res_gpu_encoded.to_cpu_ctx(gpu).unwrap();
     let gpu_slice = res_gpu.storage.as_slice().unwrap();
-    
+
     for i in 0..cpu_slice.len() {
         if cpu_slice[i] != gpu_slice[i] {
-            panic!("Resize Parity failure on {}: at index {}, CPU={}, GPU={}", gpu_name, i, cpu_slice[i], gpu_slice[i]);
+            panic!(
+                "Resize Parity failure on {}: at index {}, CPU={}, GPU={}",
+                gpu_name, i, cpu_slice[i], gpu_slice[i]
+            );
         }
     }
     println!("  ✓ Resize parity passed for {}", gpu_name);
@@ -238,23 +271,30 @@ fn test_color_cvt_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
     for i in 0..data.len() {
         data[i] = (i % 256) as u8;
     }
-    
+
     let input_cpu: CpuTensor<u8> = Tensor::from_vec(data, shape).unwrap();
     let input_gpu = input_cpu.to_gpu_ctx(gpu).expect("Upload failed");
-    
+
     // CPU
-    let res_cpu = cpu.cvt_color(&input_cpu, ColorConversion::RgbToGray).unwrap();
+    let res_cpu = cpu
+        .cvt_color(&input_cpu, ColorConversion::RgbToGray)
+        .unwrap();
     let cpu_slice = res_cpu.storage.as_slice().unwrap();
-    
+
     // GPU
-    let res_gpu_encoded = gpu.cvt_color(&input_gpu, ColorConversion::RgbToGray).unwrap();
+    let res_gpu_encoded = gpu
+        .cvt_color(&input_gpu, ColorConversion::RgbToGray)
+        .unwrap();
     let res_gpu = res_gpu_encoded.to_cpu_ctx(gpu).unwrap();
     let gpu_slice = res_gpu.storage.as_slice().unwrap();
-    
+
     for i in 0..cpu_slice.len() {
         // Use tolerance of 1 due to potential rounding differences
         if (cpu_slice[i] as i32 - gpu_slice[i] as i32).abs() > 1 {
-            panic!("Color Cvt Parity failure on {}: at index {}, CPU={}, GPU={}", gpu_name, i, cpu_slice[i], gpu_slice[i]);
+            panic!(
+                "Color Cvt Parity failure on {}: at index {}, CPU={}, GPU={}",
+                gpu_name, i, cpu_slice[i], gpu_slice[i]
+            );
         }
     }
     println!("  ✓ Color Cvt parity passed for {}", gpu_name);
@@ -292,10 +332,13 @@ fn test_pc_transform_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) 
 
     for i in 0..cpu_slice.len() {
         if (cpu_slice[i] - gpu_slice[i]).abs() > 1e-5 {
-            panic!("PC Transform Parity failure on {}: at index {}, CPU={}, GPU={}", gpu_name, i, cpu_slice[i], gpu_slice[i]);
+            panic!(
+                "PC Transform Parity failure on {}: at index {}, CPU={}, GPU={}",
+                gpu_name, i, cpu_slice[i], gpu_slice[i]
+            );
         }
     }
-    
+
     println!("  ✓ PC Transform parity passed for {}", gpu_name);
 }
 
@@ -305,27 +348,34 @@ fn test_threshold_parity(cpu: &CpuBackend, gpu: &GpuContext, gpu_name: &str) {
     for i in 0..data.len() {
         data[i] = (i % 256) as u8;
     }
-    
+
     let input_cpu: CpuTensor<u8> = Tensor::from_vec(data.clone(), shape).unwrap();
     let input_gpu = input_cpu.to_gpu_ctx(gpu).expect("Failed to upload to GPU");
-    
+
     let thresh = 128u8;
     let max_val = 255u8;
-    
+
     // Execute on CPU
-    let res_cpu = cpu.threshold(&input_cpu, thresh, max_val, ThresholdType::Binary).unwrap();
-    
+    let res_cpu = cpu
+        .threshold(&input_cpu, thresh, max_val, ThresholdType::Binary)
+        .unwrap();
+
     // Execute on GPU
-    let res_gpu_encoded = gpu.threshold(&input_gpu, thresh, max_val, ThresholdType::Binary).unwrap();
+    let res_gpu_encoded = gpu
+        .threshold(&input_gpu, thresh, max_val, ThresholdType::Binary)
+        .unwrap();
     let res_gpu = res_gpu_encoded.to_cpu_ctx(gpu).unwrap();
-    
+
     // Compare
     let cpu_slice = res_cpu.storage.as_slice().unwrap();
     let gpu_slice = res_gpu.storage.as_slice().unwrap();
-    
+
     for i in 0..cpu_slice.len() {
         if cpu_slice[i] != gpu_slice[i] {
-            panic!("Parity failure on {}: at index {}, CPU={}, GPU={}", gpu_name, i, cpu_slice[i], gpu_slice[i]);
+            panic!(
+                "Parity failure on {}: at index {}, CPU={}, GPU={}",
+                gpu_name, i, cpu_slice[i], gpu_slice[i]
+            );
         }
     }
     println!("  ✓ Threshold parity passed for {}", gpu_name);

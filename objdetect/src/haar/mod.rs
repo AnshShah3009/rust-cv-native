@@ -3,8 +3,8 @@
 //! Implementation of the Viola-Jones object detection framework
 //! using Haar-like features and boosted cascades.
 
+use cv_core::{Error, Rect, Result, Tensor};
 use image::GrayImage;
-use cv_core::{Rect, Tensor, Error, Result};
 
 /// Haar Cascade Classifier for object detection
 ///
@@ -128,7 +128,12 @@ impl HaarCascade {
     /// - Step size increases with scale to reduce redundant evaluations
     /// - No grouping/suppression of overlapping detections
     /// - Cascade trained on specific object class (e.g., frontal faces)
-    pub fn detect(&self, image: &GrayImage, scale_factor: f32, _min_neighbors: u32) -> Result<Vec<Rect>> {
+    pub fn detect(
+        &self,
+        image: &GrayImage,
+        scale_factor: f32,
+        _min_neighbors: u32,
+    ) -> Result<Vec<Rect>> {
         // 1. Compute integral image
         let integral = compute_integral_image(image)?;
 
@@ -136,7 +141,9 @@ impl HaarCascade {
         let (img_w, img_h) = image.dimensions();
 
         let mut scale = 1.0f32;
-        while (scale * self.size.0 as f32) < img_w as f32 && (scale * self.size.1 as f32) < img_h as f32 {
+        while (scale * self.size.0 as f32) < img_w as f32
+            && (scale * self.size.1 as f32) < img_h as f32
+        {
             let win_w = (self.size.0 as f32 * scale) as u32;
             let win_h = (self.size.1 as f32 * scale) as u32;
             let step = (scale * 2.0).max(1.0) as u32;
@@ -160,7 +167,11 @@ impl HaarCascade {
             let mut stage_sum = 0.0f32;
             for feature in &stage.features {
                 let feature_sum = feature.evaluate(integral, x, y, scale)?;
-                stage_sum += if feature_sum < feature.threshold * scale * scale { feature.left_val } else { feature.right_val };
+                stage_sum += if feature_sum < feature.threshold * scale * scale {
+                    feature.left_val
+                } else {
+                    feature.right_val
+                };
             }
             if stage_sum < stage.threshold {
                 return Ok(false);
@@ -218,8 +229,11 @@ fn compute_integral_image(src: &GrayImage) -> Result<Tensor<u32>> {
         }
     }
 
-    Tensor::from_vec(integral, cv_core::TensorShape::new(1, h as usize + 1, w as usize + 1))
-        .map_err(|_| Error::MemoryError("Failed to create integral image tensor".to_string()))
+    Tensor::from_vec(
+        integral,
+        cv_core::TensorShape::new(1, h as usize + 1, w as usize + 1),
+    )
+    .map_err(|_| Error::MemoryError("Failed to create integral image tensor".to_string()))
 }
 
 /// Compute sum of pixels in axis-aligned rectangle using integral image
@@ -243,7 +257,8 @@ fn get_rect_sum(integral: &Tensor<u32>, x: u32, y: u32, w: u32, h: u32) -> Resul
     let x1 = (x + w) as usize;
     let y1 = (y + h) as usize;
 
-    let data = integral.as_slice()
+    let data = integral
+        .as_slice()
         .map_err(|_| Error::MemoryError("Failed to get integral slice".to_string()))?;
     Ok(data[y1 * iw + x1] + data[y0 * iw + x0] - data[y1 * iw + x0] - data[y0 * iw + x1])
 }

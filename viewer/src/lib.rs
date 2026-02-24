@@ -1,7 +1,7 @@
 use cv_core::point_cloud::PointCloud;
 
 /// Point cloud logging interface.
-/// 
+///
 /// This replaces the previous Rerun-based logger. Rerun was removed due to
 /// wasm-bindgen version conflicts (rerun pins 0.2.100, eframe needs 0.2.101).
 /// TODO: Re-add rerun support when version compatibility is resolved.
@@ -20,11 +20,16 @@ impl PointCloudLogger {
     }
 
     /// Log a point cloud for later visualization.
-    pub fn log_point_cloud(&mut self, entity_path: &str, pc: &PointCloud) -> Result<(), Box<dyn std::error::Error>> {
-        self.point_clouds.push((entity_path.to_string(), pc.clone()));
+    pub fn log_point_cloud(
+        &mut self,
+        entity_path: &str,
+        pc: &PointCloud,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.point_clouds
+            .push((entity_path.to_string(), pc.clone()));
         Ok(())
     }
-    
+
     /// Get all logged point clouds.
     pub fn logged(&self) -> &[(String, PointCloud)] {
         &self.point_clouds

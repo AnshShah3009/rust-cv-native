@@ -121,12 +121,18 @@ mod tests {
     fn test_parse_bytes_with_suffix() {
         assert_eq!(parse_bytes_with_suffix("512KB").unwrap(), 512 * 1024);
         assert_eq!(parse_bytes_with_suffix("256MB").unwrap(), 256 * 1024 * 1024);
-        assert_eq!(parse_bytes_with_suffix("2GB").unwrap(), 2 * 1024 * 1024 * 1024);
+        assert_eq!(
+            parse_bytes_with_suffix("2GB").unwrap(),
+            2 * 1024 * 1024 * 1024
+        );
     }
 
     #[test]
     fn test_parse_bytes_case_insensitive() {
-        assert_eq!(parse_bytes_with_suffix("1mb").unwrap(), parse_bytes_with_suffix("1MB").unwrap());
+        assert_eq!(
+            parse_bytes_with_suffix("1mb").unwrap(),
+            parse_bytes_with_suffix("1MB").unwrap()
+        );
     }
 
     #[test]

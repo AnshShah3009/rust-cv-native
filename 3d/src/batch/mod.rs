@@ -203,8 +203,7 @@ pub mod mesh {
             .par_iter()
             .zip(faces_list.par_iter())
             .map(|(vertices, faces)| {
-                gpu::mesh::compute_vertex_normals(vertices, faces)
-                    .unwrap_or_default()
+                gpu::mesh::compute_vertex_normals(vertices, faces).unwrap_or_default()
             })
             .collect()
     }

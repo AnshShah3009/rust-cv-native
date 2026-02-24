@@ -1,15 +1,15 @@
+pub use cv_3d as d3;
+pub use cv_calib3d as calib3d;
 pub use cv_core as core;
 pub use cv_features as features;
 pub use cv_hal as hal;
 pub use cv_imgproc as imgproc;
-pub use cv_stereo as stereo;
-pub use cv_video as video;
-pub use cv_3d as d3;
-pub use cv_calib3d as calib3d;
+pub use cv_optimize as optimize;
+pub use cv_runtime as runtime;
 pub use cv_sfm as sfm;
 pub use cv_slam as slam;
-pub use cv_runtime as runtime;
-pub use cv_optimize as optimize;
+pub use cv_stereo as stereo;
+pub use cv_video as video;
 
 /// Initialize the entire cv-native library.
 ///

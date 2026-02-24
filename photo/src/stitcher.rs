@@ -1,5 +1,5 @@
-use image::GrayImage;
 use crate::Result;
+use image::GrayImage;
 
 pub struct Stitcher {
     // panorama state
@@ -14,7 +14,7 @@ impl Stitcher {
         if images.is_empty() {
             return Ok(GrayImage::new(0, 0));
         }
-        
+
         // Return first image as placeholder for Phase 4
         Ok(images[0].clone())
     }

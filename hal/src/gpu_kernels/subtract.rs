@@ -1,9 +1,9 @@
-use cv_core::Tensor;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
-use std::sync::Arc;
+use cv_core::Tensor;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 pub fn subtract(
     ctx: &GpuContext,
@@ -43,9 +43,14 @@ pub fn subtract(
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         let workgroups = (size as u32 + 255) / 256;

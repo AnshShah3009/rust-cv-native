@@ -3,8 +3,8 @@
 //! PLY is a flexible format for storing 3D data with arbitrary properties.
 
 use crate::Result;
-use cv_core::Error;
 use cv_core::point_cloud::PointCloud;
+use cv_core::Error;
 use nalgebra::{Point3, Vector3};
 use std::io::{BufRead, Write};
 
@@ -198,10 +198,8 @@ mod tests {
 
     #[test]
     fn test_ply_round_trip_with_normals() {
-        let mut cloud = PointCloud::new(vec![
-            Point3::new(1.0, 2.0, 3.0),
-            Point3::new(4.0, 5.0, 6.0),
-        ]);
+        let mut cloud =
+            PointCloud::new(vec![Point3::new(1.0, 2.0, 3.0), Point3::new(4.0, 5.0, 6.0)]);
         cloud.normals = Some(vec![
             Vector3::new(0.0, 0.0, 1.0),
             Vector3::new(1.0, 0.0, 0.0),

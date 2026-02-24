@@ -14,9 +14,9 @@ pub mod point_cloud;
 pub mod robust;
 pub mod robust_loss;
 pub mod runtime;
+pub mod slam;
 pub mod storage;
 pub mod tensor;
-pub mod slam;
 
 pub use descriptor::*;
 pub use frames::*;
@@ -28,9 +28,9 @@ pub use point_cloud::*;
 pub use robust::*;
 pub use robust_loss::*;
 pub use runtime::*;
+pub use slam::*;
 pub use storage::*;
 pub use tensor::*;
-pub use slam::*;
 
 /// Error types for core operations
 #[derive(Debug, thiserror::Error)]

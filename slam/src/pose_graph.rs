@@ -10,7 +10,7 @@
 //! maximum-likelihood trajectory.
 
 use cv_core::Pose;
-use cv_optimize::pose_graph::{PoseGraph as OptimizePoseGraph};
+use cv_optimize::pose_graph::PoseGraph as OptimizePoseGraph;
 use nalgebra::Isometry3;
 
 /// Edge in the pose graph representing a relative pose measurement.
@@ -75,7 +75,12 @@ impl PoseGraph {
     /// * `info` - Information matrix (6×6, inverse covariance) weighting the edge.
     ///   Use `Matrix6::identity()` for unit weight.
     pub fn add_edge(&mut self, from: usize, to: usize, rel: Pose, info: nalgebra::Matrix6<f64>) {
-        self.edges.push(PoseGraphEdge { from, to, relative_pose: rel, information: info });
+        self.edges.push(PoseGraphEdge {
+            from,
+            to,
+            relative_pose: rel,
+            information: info,
+        });
     }
 
     /// Optimize the pose graph using Gauss-Newton optimization.

@@ -1,6 +1,6 @@
 #![allow(deprecated)]
 
-use cv_core::{storage::Storage, Descriptors, KeyPoint, KeyPoints, Tensor, Error};
+use cv_core::{storage::Storage, Descriptors, Error, KeyPoint, KeyPoints, Tensor};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::context::ComputeContext;
 use cv_hal::tensor_ext::TensorToCpu;
@@ -237,7 +237,9 @@ impl Sift {
                         self.contrast_threshold,
                         self.edge_threshold,
                     )
-                    .map_err(|e| Error::FeatureError(format!("SIFT extrema detection failed: {}", e)))?;
+                    .map_err(|e| {
+                        Error::FeatureError(format!("SIFT extrema detection failed: {}", e))
+                    })?;
                 let cand_slice = match candidates.storage.as_slice() {
                     Some(slice) => slice,
                     None => {
@@ -345,7 +347,12 @@ impl Sift {
                                 keypoints: octave_kps,
                             },
                         )
-                        .map_err(|e| Error::FeatureError(format!("SIFT descriptor computation failed: {}", e)))?;
+                        .map_err(|e| {
+                            Error::FeatureError(format!(
+                                "SIFT descriptor computation failed: {}",
+                                e
+                            ))
+                        })?;
                     for d in descs.descriptors {
                         let mut restored_kp = d.keypoint.clone();
                         let scale = 2.0f64.powi(octave as i32);
@@ -359,9 +366,9 @@ impl Sift {
                 ComputeDevice::Gpu(gpu) => {
                     use cv_hal::tensor_ext::TensorToGpu;
                     let f32_cpu = convert_to_f32_cpu(ctx, &gaussian_pyramid[octave][0])?;
-                    let octave_img_gpu = f32_cpu
-                        .to_gpu_ctx(gpu)
-                        .map_err(|e| Error::FeatureError(format!("Failed to upload image to GPU: {}", e)))?;
+                    let octave_img_gpu = f32_cpu.to_gpu_ctx(gpu).map_err(|e| {
+                        Error::FeatureError(format!("Failed to upload image to GPU: {}", e))
+                    })?;
                     let descs = gpu
                         .compute_sift_descriptors(
                             &octave_img_gpu,
@@ -369,7 +376,12 @@ impl Sift {
                                 keypoints: octave_kps,
                             },
                         )
-                        .map_err(|e| Error::FeatureError(format!("GPU SIFT descriptor computation failed: {}", e)))?;
+                        .map_err(|e| {
+                            Error::FeatureError(format!(
+                                "GPU SIFT descriptor computation failed: {}",
+                                e
+                            ))
+                        })?;
                     for d in descs.descriptors {
                         let mut restored_kp = d.keypoint.clone();
                         let scale = 2.0f64.powi(octave as i32);
@@ -416,7 +428,10 @@ impl Sift {
     /// May fail if:
     /// - Device selection fails (returns CPU fallback)
     /// - Keypoint detection fails
-    pub fn detect<S: Storage<u8> + 'static>(&self, image: &Tensor<u8, S>) -> crate::Result<KeyPoints> {
+    pub fn detect<S: Storage<u8> + 'static>(
+        &self,
+        image: &Tensor<u8, S>,
+    ) -> crate::Result<KeyPoints> {
         let runner = match cv_runtime::scheduler()
             .and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput))
         {
@@ -608,9 +623,9 @@ fn convert_to_f32_cpu<S: Storage<u8> + 'static>(
                 ))
             }
         };
-        input_gpu.to_cpu_ctx(gpu_ctx).map_err(|e| {
-            Error::FeatureError(format!("GPU download failed: {}", e))
-        })?
+        input_gpu
+            .to_cpu_ctx(gpu_ctx)
+            .map_err(|e| Error::FeatureError(format!("GPU download failed: {}", e)))?
     } else if let Some(cpu_storage) = input.storage.as_any().downcast_ref::<CpuStorage<u8>>() {
         let input_cpu = Tensor {
             storage: cpu_storage.clone(),
@@ -620,9 +635,7 @@ fn convert_to_f32_cpu<S: Storage<u8> + 'static>(
         };
         input_cpu.clone()
     } else {
-        return Err(Error::FeatureError(
-            "Unsupported storage type".into(),
-        ));
+        return Err(Error::FeatureError("Unsupported storage type".into()));
     };
 
     let slice_u8 = cpu_u8
@@ -631,9 +644,8 @@ fn convert_to_f32_cpu<S: Storage<u8> + 'static>(
         .ok_or_else(|| Error::FeatureError("Failed to get u8 slice".into()))?;
     let data_f32: Vec<f32> = slice_u8.iter().map(|&v| v as f32 / 255.0).collect();
 
-    Tensor::from_vec(data_f32, input.shape).map_err(|e| {
-        Error::FeatureError(format!("Failed to create f32 tensor: {}", e))
-    })
+    Tensor::from_vec(data_f32, input.shape)
+        .map_err(|e| Error::FeatureError(format!("Failed to create f32 tensor: {}", e)))
 }
 
 pub fn sift_detect_ctx<S: Storage<u8> + 'static>(

@@ -1,10 +1,10 @@
-use cv_core::Tensor;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
-use wgpu::util::DeviceExt;
-use std::sync::Arc;
+use cv_core::Tensor;
 use std::marker::PhantomData;
+use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -39,11 +39,13 @@ pub fn akaze_diffusion(
         tau,
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Diffusion Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Diffusion Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/akaze_diffusion.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -67,9 +69,14 @@ pub fn akaze_diffusion(
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         let wg_x = (w as u32 + 15) / 16;
@@ -89,7 +96,11 @@ pub fn akaze_diffusion(
 pub fn akaze_derivatives(
     ctx: &GpuContext,
     input: &Tensor<f32, GpuStorage<f32>>,
-) -> Result<(Tensor<f32, GpuStorage<f32>>, Tensor<f32, GpuStorage<f32>>, Tensor<f32, GpuStorage<f32>>)> {
+) -> Result<(
+    Tensor<f32, GpuStorage<f32>>,
+    Tensor<f32, GpuStorage<f32>>,
+    Tensor<f32, GpuStorage<f32>>,
+)> {
     let (h, w) = input.shape.hw();
     let size = input.shape.len();
     let byte_size = (size * 4) as u64;
@@ -114,11 +125,13 @@ pub fn akaze_derivatives(
     }));
 
     let params = [w as u32, h as u32, 0, 0];
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Deriv Params"),
-        contents: bytemuck::cast_slice(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Deriv Params"),
+            contents: bytemuck::cast_slice(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/akaze_derivatives.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -127,17 +140,37 @@ pub fn akaze_derivatives(
         label: Some("Deriv Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: lx_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: ly_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: ldet_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 4, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: lx_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: ly_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: ldet_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         let wg_x = (w as u32 + 15) / 16;
@@ -147,16 +180,28 @@ pub fn akaze_derivatives(
     ctx.submit(encoder);
 
     Ok((
-        Tensor { storage: GpuStorage::from_buffer(lx_buffer, size), shape: input.shape, dtype: cv_core::DataType::F32, _phantom: PhantomData },
-        Tensor { storage: GpuStorage::from_buffer(ly_buffer, size), shape: input.shape, dtype: cv_core::DataType::F32, _phantom: PhantomData },
-        Tensor { storage: GpuStorage::from_buffer(ldet_buffer, size), shape: input.shape, dtype: cv_core::DataType::F32, _phantom: PhantomData },
+        Tensor {
+            storage: GpuStorage::from_buffer(lx_buffer, size),
+            shape: input.shape,
+            dtype: cv_core::DataType::F32,
+            _phantom: PhantomData,
+        },
+        Tensor {
+            storage: GpuStorage::from_buffer(ly_buffer, size),
+            shape: input.shape,
+            dtype: cv_core::DataType::F32,
+            _phantom: PhantomData,
+        },
+        Tensor {
+            storage: GpuStorage::from_buffer(ldet_buffer, size),
+            shape: input.shape,
+            dtype: cv_core::DataType::F32,
+            _phantom: PhantomData,
+        },
     ))
 }
 
-pub fn akaze_contrast_k(
-    ctx: &GpuContext,
-    input: &Tensor<f32, GpuStorage<f32>>,
-) -> Result<f32> {
+pub fn akaze_contrast_k(ctx: &GpuContext, input: &Tensor<f32, GpuStorage<f32>>) -> Result<f32> {
     let (h, w) = input.shape.hw();
     let num_bins = 1000u32;
     let max_mag = 0.5f32;
@@ -164,19 +209,25 @@ pub fn akaze_contrast_k(
     let hist_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("K Histogram"),
         size: (num_bins * 4) as u64,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     encoder.clear_buffer(&hist_buffer, 0, None);
 
     let params = [w as u32, h as u32, num_bins, bytemuck::cast(max_mag)];
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("K Params"),
-        contents: bytemuck::cast_slice(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("K Params"),
+            contents: bytemuck::cast_slice(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/akaze_contrast.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -185,14 +236,26 @@ pub fn akaze_contrast_k(
         label: Some("K Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: hist_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: hist_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         let wg_x = (w as u32 + 15) / 16;

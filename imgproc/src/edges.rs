@@ -1,9 +1,9 @@
+use cv_core::{storage::Storage, Tensor};
+use cv_hal::compute::ComputeDevice;
+use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
+use cv_runtime::orchestrator::RuntimeRunner;
 use image::GrayImage;
 use rayon::prelude::*;
-use cv_core::{Tensor, storage::Storage};
-use cv_hal::compute::{ComputeDevice};
-use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
-use cv_runtime::orchestrator::RuntimeRunner;
 use wide::*;
 
 use crate::convolve::{convolve_with_border_into_ctx, gaussian_blur_ctx, BorderMode, Kernel};
@@ -58,7 +58,16 @@ pub fn sobel_ex(
         Ok(runner) => sobel_ex_ctx(src, dx, dy, ksize, scale, delta, border, &runner),
         Err(_) => {
             // Fallback: compute on CPU
-            sobel_ex_ctx(src, dx, dy, ksize, scale, delta, border, &cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+            sobel_ex_ctx(
+                src,
+                dx,
+                dy,
+                ksize,
+                scale,
+                delta,
+                border,
+                &cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)),
+            )
         }
     }
 }
@@ -82,15 +91,22 @@ pub fn sobel_ex_ctx(
             }
         }
     }
-    
-    let mut out = GrayImage::new(src.width(), src.height());
-    let (deriv, smooth) = sobel_kernels_1d(ksize).unwrap_or_else(|| {
-        (vec![-1.0, 0.0, 1.0], vec![1.0, 2.0, 1.0])
-    });
 
-    let kx = if dx > 0 { deriv.as_slice() } else { smooth.as_slice() };
-    let ky = if dy > 0 { deriv.as_slice() } else { smooth.as_slice() };
-    
+    let mut out = GrayImage::new(src.width(), src.height());
+    let (deriv, smooth) =
+        sobel_kernels_1d(ksize).unwrap_or_else(|| (vec![-1.0, 0.0, 1.0], vec![1.0, 2.0, 1.0]));
+
+    let kx = if dx > 0 {
+        deriv.as_slice()
+    } else {
+        smooth.as_slice()
+    };
+    let ky = if dy > 0 {
+        deriv.as_slice()
+    } else {
+        smooth.as_slice()
+    };
+
     // Use separable convolution for performance
     crate::convolve::separable_convolve_into_ctx(src, &mut out, kx, ky, border, group);
     apply_linear_transform(out, scale, delta)
@@ -102,23 +118,26 @@ fn sobel_gpu(
     ksize: usize,
 ) -> cv_hal::Result<(GrayImage, GrayImage)> {
     use cv_hal::context::ComputeContext;
-    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize))
-        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+    let input_tensor = cv_core::CpuTensor::from_vec(
+        src.as_raw().to_vec(),
+        cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize),
+    )
+    .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
-    
+
     let (gx_gpu, gy_gpu) = gpu.sobel(&input_gpu, 1, 1, ksize)?;
-    
+
     let gx_cpu: Tensor<u8, cv_core::CpuStorage<u8>> = gx_gpu.to_cpu()?;
     let gy_cpu: Tensor<u8, cv_core::CpuStorage<u8>> = gy_gpu.to_cpu()?;
-    
+
     let gx_data = gx_cpu.storage.as_slice().unwrap().to_vec();
     let gy_data = gy_cpu.storage.as_slice().unwrap().to_vec();
-    
+
     let gx = GrayImage::from_raw(src.width(), src.height(), gx_data)
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))?;
     let gy = GrayImage::from_raw(src.width(), src.height(), gy_data)
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))?;
-    
+
     Ok((gx, gy))
 }
 
@@ -134,7 +153,15 @@ pub fn scharr_ex(
         Ok(runner) => scharr_ex_ctx(src, dx, dy, scale, delta, border, &runner),
         Err(_) => {
             // Fallback: compute on CPU
-            scharr_ex_ctx(src, dx, dy, scale, delta, border, &cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
+            scharr_ex_ctx(
+                src,
+                dx,
+                dy,
+                scale,
+                delta,
+                border,
+                &cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)),
+            )
         }
     }
 }
@@ -150,10 +177,18 @@ pub fn scharr_ex_ctx(
 ) -> GrayImage {
     let mut out = GrayImage::new(src.width(), src.height());
     let (deriv, smooth) = scharr_kernels_1d();
-    let kx = if dx > 0 { deriv.as_slice() } else { smooth.as_slice() };
-    let ky = if dy > 0 { deriv.as_slice() } else { smooth.as_slice() };
+    let kx = if dx > 0 {
+        deriv.as_slice()
+    } else {
+        smooth.as_slice()
+    };
+    let ky = if dy > 0 {
+        deriv.as_slice()
+    } else {
+        smooth.as_slice()
+    };
     let kernel = kernel_from_1d(kx, ky);
-    
+
     convolve_with_border_into_ctx(src, &mut out, &kernel, border, group);
     apply_linear_transform(out, scale, delta)
 }
@@ -163,9 +198,7 @@ pub fn sobel_with_border(src: &GrayImage, border: BorderMode) -> (GrayImage, Gra
         // Fallback: use CPU registry if available
         cv_runtime::registry()
             .ok()
-            .and_then(|reg| {
-                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
-            })
+            .and_then(|reg| Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id())))
             .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
     });
     let gx = sobel_ex_ctx(src, 1, 0, 3, 1.0, 0.0, border, &runner);
@@ -182,9 +215,7 @@ pub fn scharr_with_border(src: &GrayImage, border: BorderMode) -> (GrayImage, Gr
         // Fallback: use CPU registry if available
         cv_runtime::registry()
             .ok()
-            .and_then(|reg| {
-                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
-            })
+            .and_then(|reg| Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id())))
             .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
     });
     let gx = scharr_ex_ctx(src, 1, 0, 1.0, 0.0, border, &runner);
@@ -201,9 +232,7 @@ pub fn sobel_magnitude(gx: &GrayImage, gy: &GrayImage) -> GrayImage {
         // Fallback: use CPU registry if available
         cv_runtime::registry()
             .ok()
-            .and_then(|reg| {
-                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
-            })
+            .and_then(|reg| Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id())))
             .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
     });
     sobel_magnitude_ctx(gx, gy, &runner)
@@ -236,9 +265,7 @@ pub fn laplacian(src: &GrayImage) -> GrayImage {
         // Fallback: use CPU registry if available
         cv_runtime::registry()
             .ok()
-            .and_then(|reg| {
-                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
-            })
+            .and_then(|reg| Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id())))
             .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
     });
     laplacian_ctx(src, &runner)
@@ -274,31 +301,33 @@ fn gradients_and_directions(src: &GrayImage) -> (Vec<f32>, Vec<u8>) {
             let r2 = &data[r2_idx..r2_idx + width];
 
             let mut x = 1;
-            
+
             // SIMD Loop
             while x + 8 < width - 1 {
                 // Load 3x10 block to cover 8 outputs (needs x-1 to x+8+1)
                 // We load 8-wide vectors shifted by -1, 0, 1
                 // Actually easier to load unaligned? f32x8 requires alignment? No, but load is from u8.
                 // We load u8 slices and convert.
-                
+
                 let load_f32x8 = |slice: &[u8]| -> f32x8 {
                     let mut arr = [0.0f32; 8];
-                    for i in 0..8 { arr[i] = slice[i] as f32; }
+                    for i in 0..8 {
+                        arr[i] = slice[i] as f32;
+                    }
                     f32x8::from(arr)
                 };
 
-                let p00 = load_f32x8(&r0[x-1..]);
+                let p00 = load_f32x8(&r0[x - 1..]);
                 let p01 = load_f32x8(&r0[x..]);
-                let p02 = load_f32x8(&r0[x+1..]);
-                
-                let p10 = load_f32x8(&r1[x-1..]);
+                let p02 = load_f32x8(&r0[x + 1..]);
+
+                let p10 = load_f32x8(&r1[x - 1..]);
                 // p11 unused for gradients
-                let p12 = load_f32x8(&r1[x+1..]);
-                
-                let p20 = load_f32x8(&r2[x-1..]);
+                let p12 = load_f32x8(&r1[x + 1..]);
+
+                let p20 = load_f32x8(&r2[x - 1..]);
                 let p21 = load_f32x8(&r2[x..]);
-                let p22 = load_f32x8(&r2[x+1..]);
+                let p22 = load_f32x8(&r2[x + 1..]);
 
                 // Sobel
                 let gx = p02 - p00 + (p12 - p10) * 2.0 + p22 - p20;
@@ -307,26 +336,26 @@ fn gradients_and_directions(src: &GrayImage) -> (Vec<f32>, Vec<u8>) {
                 // Magnitude
                 let mag = (gx * gx + gy * gy).sqrt();
                 let mag_arr: [f32; 8] = mag.into();
-                mag_row[x..x+8].copy_from_slice(&mag_arr);
+                mag_row[x..x + 8].copy_from_slice(&mag_arr);
 
                 // Direction
                 // 0: |gy| <= |gx| * tan(22.5) => 0.4142
                 // 90: |gx| <= |gy| * 0.4142
                 // 45: sign(gx) == sign(gy)
                 // 135: else
-                
+
                 let abs_gx = gx.abs();
                 let abs_gy = gy.abs();
                 let tan_22_5 = 0.41421356;
-                
+
                 let is_0 = abs_gy.cmp_lt(abs_gx * tan_22_5);
                 let is_90 = abs_gx.cmp_lt(abs_gy * tan_22_5);
-                
+
                 // For diagonal check:
                 // sign bit check. f32x8 doesn't have direct sign access efficiently?
                 // gx * gy > 0 means same sign.
                 let same_sign = (gx * gy).cmp_gt(f32x8::ZERO);
-                
+
                 // Blend chain
                 // Default 135 (3)
                 // if same_sign -> 45 (1)
@@ -337,14 +366,16 @@ fn gradients_and_directions(src: &GrayImage) -> (Vec<f32>, Vec<u8>) {
                 // Region 0: [-22.5, 22.5] -> |y| < |x| * tan
                 // Region 90: [67.5, 112.5] -> |x| < |y| * cot(67.5) = |y| * tan(22.5)
                 // So is_0 and is_90 checks are correct and exclusive.
-                
+
                 // Values: 0=0, 1=45, 2=90, 3=135
                 let val_diag = same_sign.blend(f32x8::splat(1.0), f32x8::splat(3.0));
                 let val_90 = is_90.blend(f32x8::splat(2.0), val_diag);
                 let val_0 = is_0.blend(f32x8::splat(0.0), val_90);
-                
+
                 let dir_arr: [f32; 8] = val_0.into();
-                for i in 0..8 { dir_row[x+i] = dir_arr[i] as u8; }
+                for i in 0..8 {
+                    dir_row[x + i] = dir_arr[i] as u8;
+                }
 
                 x += 8;
             }
@@ -369,7 +400,7 @@ fn gradients_and_directions(src: &GrayImage) -> (Vec<f32>, Vec<u8>) {
                 let abs_gx = gx.abs();
                 let abs_gy = gy.abs();
                 let tan_22_5 = 0.41421356;
-                
+
                 if abs_gy <= abs_gx * tan_22_5 {
                     dir_row[cx] = 0;
                 } else if abs_gx <= abs_gy * tan_22_5 {
@@ -464,15 +495,18 @@ pub fn canny(src: &GrayImage, low_threshold: u8, high_threshold: u8) -> GrayImag
         // Fallback: use CPU registry if available
         cv_runtime::registry()
             .ok()
-            .and_then(|reg| {
-                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
-            })
+            .and_then(|reg| Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id())))
             .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
     });
     canny_ctx(src, low_threshold, high_threshold, &runner)
 }
 
-pub fn canny_ctx(src: &GrayImage, low_threshold: u8, high_threshold: u8, group: &RuntimeRunner) -> GrayImage {
+pub fn canny_ctx(
+    src: &GrayImage,
+    low_threshold: u8,
+    high_threshold: u8,
+    group: &RuntimeRunner,
+) -> GrayImage {
     match group.device() {
         Ok(ComputeDevice::Gpu(gpu)) => {
             if let Ok(res) = canny_gpu(gpu, src, low_threshold as f32, high_threshold as f32) {
@@ -485,7 +519,7 @@ pub fn canny_ctx(src: &GrayImage, low_threshold: u8, high_threshold: u8, group: 
     let blurred = gaussian_blur_ctx(src, 1.0, BorderMode::Reflect101, group);
     let width = blurred.width() as usize;
     let height = blurred.height() as usize;
-    
+
     group.run(|| {
         let (mag, dir) = gradients_and_directions(&blurred);
         let nms = non_max_suppression(width, height, &mag, &dir);
@@ -502,15 +536,18 @@ fn canny_gpu(
     high: f32,
 ) -> cv_hal::Result<GrayImage> {
     use cv_hal::context::ComputeContext;
-    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize))
-        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+    let input_tensor = cv_core::CpuTensor::from_vec(
+        src.as_raw().to_vec(),
+        cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize),
+    )
+    .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
-    
+
     let res_gpu = gpu.canny(&input_gpu, low, high)?;
-    
+
     let res_cpu: Tensor<u8, cv_core::CpuStorage<u8>> = res_gpu.to_cpu()?;
     let res_data = res_cpu.storage.as_slice().unwrap().to_vec();
-    
+
     GrayImage::from_raw(src.width(), src.height(), res_data)
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
 }

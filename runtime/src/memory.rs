@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use crate::device_registry::{registry, SubmissionIndex};
 use crate::Result;
 use cv_hal::DeviceId;
-use wgpu::BufferUsages;
-use crate::device_registry::{SubmissionIndex, registry};
 use parking_lot::RwLock;
+use std::sync::Arc;
+use wgpu::BufferUsages;
 
 pub struct BufferSlice {
     pub offset: u64,
@@ -14,15 +14,15 @@ pub struct UnifiedBuffer<T> {
     host_data: Arc<RwLock<Vec<T>>>,
     device_data: Option<wgpu::Buffer>,
     device_id: Option<DeviceId>,
-    
+
     host_version: u64,
     device_version: Option<(DeviceId, u64)>,
-    
+
     last_write_submission: SubmissionIndex,
     last_read_submission: SubmissionIndex,
-    
+
     len: usize,
-    
+
     slices: Vec<BufferSlice>,
 }
 
@@ -98,17 +98,20 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
 
     pub fn create_slice(&mut self, offset: usize, size: usize) -> Result<usize> {
         if offset + size > self.len {
-            return Err(crate::Error::MemoryError(
-                format!("Slice [{}, {}) out of bounds for buffer of length {}", offset, offset + size, self.len)
-            ));
+            return Err(crate::Error::MemoryError(format!(
+                "Slice [{}, {}) out of bounds for buffer of length {}",
+                offset,
+                offset + size,
+                self.len
+            )));
         }
-        
+
         let slice_id = self.slices.len();
         self.slices.push(BufferSlice {
             offset: (offset * std::mem::size_of::<T>()) as u64,
             size: (size * std::mem::size_of::<T>()) as u64,
         });
-        
+
         Ok(slice_id)
     }
 
@@ -124,14 +127,15 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         }
 
         let reg = registry()?;
-        let runtime = reg.get_device(target_id)
-            .ok_or_else(|| crate::Error::RuntimeError(format!("Device {:?} not found", target_id)))?;
+        let runtime = reg.get_device(target_id).ok_or_else(|| {
+            crate::Error::RuntimeError(format!("Device {:?} not found", target_id))
+        })?;
 
         let host_guard = self.host_data.read();
 
         let size = (self.len * std::mem::size_of::<T>()) as u64;
         let usages = BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC;
-        
+
         let buffer = if let Some(ref b) = self.device_data {
             if b.size() >= size && self.device_id == Some(target_id) {
                 b.clone()
@@ -139,14 +143,21 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
                 if let Some(old_b) = self.device_data.take() {
                     if let Some(old_id) = self.device_id {
                         if let Some(old_runtime) = reg.get_device(old_id) {
-                            old_runtime.memory().retire_buffer(old_b, self.last_write_submission.max(self.last_read_submission));
+                            old_runtime.memory().retire_buffer(
+                                old_b,
+                                self.last_write_submission.max(self.last_read_submission),
+                            );
                         }
                     }
                 }
-                
+
                 let device = match runtime.context() {
                     crate::device_registry::BackendContext::Gpu(ctx) => ctx.device(),
-                    _ => return Err(crate::Error::NotSupported("sync_to_device only supports GPU".into())),
+                    _ => {
+                        return Err(crate::Error::NotSupported(
+                            "sync_to_device only supports GPU".into(),
+                        ))
+                    }
                 };
 
                 runtime.memory().get_buffer(device, size, usages)
@@ -154,81 +165,106 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         } else {
             let device = match runtime.context() {
                 crate::device_registry::BackendContext::Gpu(ctx) => ctx.device(),
-                _ => return Err(crate::Error::NotSupported("sync_to_device only supports GPU".into())),
+                _ => {
+                    return Err(crate::Error::NotSupported(
+                        "sync_to_device only supports GPU".into(),
+                    ))
+                }
             };
-            
+
             runtime.memory().get_buffer(device, size, usages)
         };
-        
+
         self.device_data = Some(buffer.clone());
         self.device_id = Some(target_id);
 
         match runtime.context() {
             crate::device_registry::BackendContext::Gpu(gpu_ctx) => {
-                gpu_ctx.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&host_guard));
+                gpu_ctx
+                    .queue
+                    .write_buffer(&buffer, 0, bytemuck::cast_slice(&host_guard));
             }
-            _ => return Err(crate::Error::NotSupported(format!("sync_to_device not implemented for {:?}", runtime.backend()))),
+            _ => {
+                return Err(crate::Error::NotSupported(format!(
+                    "sync_to_device not implemented for {:?}",
+                    runtime.backend()
+                )))
+            }
         }
-        
+
         self.device_version = Some((target_id, self.host_version));
         Ok(())
     }
 
     pub fn sync_slice_to_device(&mut self, target_id: DeviceId, slice_id: usize) -> Result<()> {
         let (slice_offset, slice_size) = {
-            let slice = self.slices.get(slice_id)
-                .ok_or_else(|| crate::Error::MemoryError(format!("Invalid slice id {}", slice_id)))?;
+            let slice = self.slices.get(slice_id).ok_or_else(|| {
+                crate::Error::MemoryError(format!("Invalid slice id {}", slice_id))
+            })?;
             (slice.offset, slice.size)
         };
-        
+
         if self.device_data.is_none() || self.device_id != Some(target_id) {
             self.sync_to_device(target_id)?;
         }
 
         let reg = registry()?;
-        let runtime = reg.get_device(target_id)
-            .ok_or_else(|| crate::Error::RuntimeError(format!("Device {:?} not found", target_id)))?;
+        let runtime = reg.get_device(target_id).ok_or_else(|| {
+            crate::Error::RuntimeError(format!("Device {:?} not found", target_id))
+        })?;
 
-        let buffer = self.device_data.as_ref()
+        let buffer = self
+            .device_data
+            .as_ref()
             .ok_or_else(|| crate::Error::MemoryError("Device buffer not allocated".into()))?;
 
         let host_guard = self.host_data.read();
-        
+
         let elem_offset = (slice_offset as usize) / std::mem::size_of::<T>();
         let elem_count = (slice_size as usize) / std::mem::size_of::<T>();
-        
+
         let slice_data = &host_guard[elem_offset..elem_offset + elem_count];
 
         match runtime.context() {
             crate::device_registry::BackendContext::Gpu(gpu_ctx) => {
-                gpu_ctx.queue.write_buffer(buffer, slice_offset, bytemuck::cast_slice(slice_data));
+                gpu_ctx
+                    .queue
+                    .write_buffer(buffer, slice_offset, bytemuck::cast_slice(slice_data));
             }
-            _ => return Err(crate::Error::NotSupported("sync_slice_to_device only supports GPU".into())),
+            _ => {
+                return Err(crate::Error::NotSupported(
+                    "sync_slice_to_device only supports GPU".into(),
+                ))
+            }
         }
-        
+
         self.host_version += 1;
         self.device_version = Some((target_id, self.host_version));
-        
+
         Ok(())
     }
 
     pub async fn sync_to_host(&mut self) -> Result<()> {
-        let (did, dv) = self.device_version
+        let (did, dv) = self
+            .device_version
             .ok_or_else(|| crate::Error::MemoryError("No device data to sync from".into()))?;
-        
+
         if self.host_version >= dv {
             return Ok(());
         }
 
         let reg = registry()?;
-        let runtime = reg.get_device(did)
+        let runtime = reg
+            .get_device(did)
             .ok_or_else(|| crate::Error::RuntimeError(format!("Device {:?} not found", did)))?;
 
-        let buffer = self.device_data.as_ref()
+        let buffer = self
+            .device_data
+            .as_ref()
             .ok_or_else(|| crate::Error::MemoryError("No device buffer to sync from".into()))?;
 
         let size = self.len * std::mem::size_of::<T>();
-        
+
         let data: Vec<T> = match runtime.context() {
             crate::device_registry::BackendContext::Gpu(gpu_ctx) => {
                 cv_hal::gpu_kernels::buffer_utils::read_buffer(
@@ -237,37 +273,47 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
                     buffer,
                     0,
                     size,
-                ).await?
+                )
+                .await?
             }
-            _ => return Err(crate::Error::NotSupported(format!("sync_to_host not implemented for {:?}", runtime.backend()))),
+            _ => {
+                return Err(crate::Error::NotSupported(format!(
+                    "sync_to_host not implemented for {:?}",
+                    runtime.backend()
+                )))
+            }
         };
 
         {
             let mut host_guard = self.host_data.write();
             *host_guard = data;
         }
-        
+
         self.host_version = dv;
         Ok(())
     }
 
     pub fn sync_to_host_blocking(&mut self) -> Result<()> {
-        let (did, dv) = self.device_version
+        let (did, dv) = self
+            .device_version
             .ok_or_else(|| crate::Error::MemoryError("No device data to sync from".into()))?;
-        
+
         if self.host_version >= dv {
             return Ok(());
         }
 
         let reg = registry()?;
-        let runtime = reg.get_device(did)
+        let runtime = reg
+            .get_device(did)
             .ok_or_else(|| crate::Error::RuntimeError(format!("Device {:?} not found", did)))?;
 
-        let buffer = self.device_data.as_ref()
+        let buffer = self
+            .device_data
+            .as_ref()
             .ok_or_else(|| crate::Error::MemoryError("No device buffer to sync from".into()))?;
 
         let size = self.len * std::mem::size_of::<T>();
-        
+
         let data: Vec<T> = match runtime.context() {
             crate::device_registry::BackendContext::Gpu(gpu_ctx) => {
                 futures::executor::block_on(cv_hal::gpu_kernels::buffer_utils::read_buffer(
@@ -278,14 +324,19 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
                     size,
                 ))?
             }
-            _ => return Err(crate::Error::NotSupported(format!("sync_to_host not implemented for {:?}", runtime.backend()))),
+            _ => {
+                return Err(crate::Error::NotSupported(format!(
+                    "sync_to_host not implemented for {:?}",
+                    runtime.backend()
+                )))
+            }
         };
 
         {
             let mut host_guard = self.host_data.write();
             *host_guard = data;
         }
-        
+
         self.host_version = dv;
         Ok(())
     }
@@ -293,10 +344,10 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
     pub async fn map_async(&self) -> Result<Vec<T>> {
         if !self.host_data_valid() {
             return Err(crate::Error::MemoryError(
-                "Host data is stale. Call sync_to_host() first.".into()
+                "Host data is stale. Call sync_to_host() first.".into(),
             ));
         }
-        
+
         let guard = self.host_data.read();
         Ok(guard.clone())
     }
@@ -304,7 +355,10 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
     pub fn mark_device_write(&mut self, index: SubmissionIndex) {
         self.last_write_submission = index;
         if let Some((did, _)) = self.device_version {
-            let next_v = self.host_version.max(self.device_version.map(|v| v.1).unwrap_or(0)) + 1;
+            let next_v = self
+                .host_version
+                .max(self.device_version.map(|v| v.1).unwrap_or(0))
+                + 1;
             self.device_version = Some((did, next_v));
         }
     }
@@ -347,14 +401,19 @@ impl<T> Drop for UnifiedBuffer<T> {
         if let (Some(buffer), Some(id)) = (self.device_data.take(), self.device_id.take()) {
             if let Ok(reg) = registry() {
                 if let Some(runtime) = reg.get_device(id) {
-                    runtime.memory().retire_buffer(buffer, self.last_write_submission.max(self.last_read_submission));
+                    runtime.memory().retire_buffer(
+                        buffer,
+                        self.last_write_submission.max(self.last_read_submission),
+                    );
                 }
             }
         }
     }
 }
 
-impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> From<Vec<T>> for UnifiedBuffer<T> {
+impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> From<Vec<T>>
+    for UnifiedBuffer<T>
+{
     fn from(data: Vec<T>) -> Self {
         Self::with_data(data)
     }
@@ -376,7 +435,7 @@ mod tests {
         let data = vec![1.0f32, 2.0, 3.0];
         let buf = UnifiedBuffer::with_data(data.clone());
         assert_eq!(buf.len(), 3);
-        
+
         let view = buf.host_view();
         assert_eq!(*view, data);
     }
@@ -384,12 +443,12 @@ mod tests {
     #[test]
     fn test_host_view() {
         let buf: UnifiedBuffer<i32> = UnifiedBuffer::new(5);
-        
+
         {
             let mut view = buf.host_view_mut();
             view[0] = 42;
         }
-        
+
         let view = buf.host_view();
         assert_eq!(view[0], 42);
     }
@@ -397,10 +456,10 @@ mod tests {
     #[test]
     fn test_slice_creation() {
         let mut buf: UnifiedBuffer<f32> = UnifiedBuffer::new(100);
-        
+
         let slice_id = buf.create_slice(10, 20).unwrap();
         assert_eq!(slice_id, 0);
-        
+
         let slice = buf.get_slice(slice_id).unwrap();
         assert_eq!(slice.offset, 40);
         assert_eq!(slice.size, 80);
@@ -409,7 +468,7 @@ mod tests {
     #[test]
     fn test_slice_out_of_bounds() {
         let mut buf: UnifiedBuffer<f32> = UnifiedBuffer::new(10);
-        
+
         let result = buf.create_slice(5, 10);
         assert!(result.is_err());
     }
@@ -418,7 +477,7 @@ mod tests {
     fn test_mark_host_dirty() {
         let mut buf: UnifiedBuffer<f32> = UnifiedBuffer::new(10);
         let v1 = buf.host_version();
-        
+
         buf.mark_host_dirty();
         assert!(buf.host_version() > v1);
     }

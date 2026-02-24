@@ -1,11 +1,11 @@
 use crate::{BorderMode, Interpolation};
+use cv_core::{storage::Storage, Tensor};
+use cv_hal::compute::ComputeDevice;
+use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
+use cv_runtime::orchestrator::RuntimeRunner;
 use image::GrayImage;
 use nalgebra::{Matrix3, Point2};
 use rayon::prelude::*;
-use cv_core::{Tensor, storage::Storage};
-use cv_hal::compute::ComputeDevice;
-use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
-use cv_runtime::orchestrator::RuntimeRunner;
 
 pub fn get_pixel_bilinear(img: &GrayImage, x: f32, y: f32) -> f32 {
     get_pixel_bilinear_with_border(img, x, y, BorderMode::Constant(0))
@@ -131,9 +131,7 @@ pub fn warp_perspective_ex(
         // Fallback: use CPU registry if available
         cv_runtime::registry()
             .ok()
-            .and_then(|reg| {
-                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
-            })
+            .and_then(|reg| Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id())))
             .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
     });
     warp_perspective_ex_ctx(src, matrix, width, height, interpolation, border, &runner)
@@ -152,7 +150,14 @@ pub fn warp_perspective_ex_ctx(
     match group.device() {
         Ok(ComputeDevice::Gpu(gpu)) => {
             if interpolation == Interpolation::Linear && border == BorderMode::Constant(0) {
-                if let Ok(result) = warp_gpu(gpu, src, matrix, width, height, cv_hal::context::WarpType::Perspective) {
+                if let Ok(result) = warp_gpu(
+                    gpu,
+                    src,
+                    matrix,
+                    width,
+                    height,
+                    cv_hal::context::WarpType::Perspective,
+                ) {
                     return result;
                 }
             }
@@ -187,14 +192,15 @@ fn warp_gpu(
     typ: cv_hal::context::WarpType,
 ) -> cv_hal::Result<GrayImage> {
     use cv_hal::context::ComputeContext;
-    
+
     let input_tensor = cv_core::CpuTensor::from_vec(
         src.as_raw().to_vec(),
         cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize),
-    ).map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
-    
+    )
+    .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+
     let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
-    
+
     // Matrix to 3x3 array
     let mut mat_data = [[0.0f32; 3]; 3];
     for r in 0..3 {
@@ -203,11 +209,16 @@ fn warp_gpu(
         }
     }
 
-    let res_gpu = gpu.warp(&input_gpu, &mat_data, (width as usize, height as usize), typ)?;
-    
+    let res_gpu = gpu.warp(
+        &input_gpu,
+        &mat_data,
+        (width as usize, height as usize),
+        typ,
+    )?;
+
     let res_cpu: Tensor<u8, cv_core::CpuStorage<u8>> = res_gpu.to_cpu()?;
     let res_data = res_cpu.storage.as_slice().unwrap().to_vec();
-    
+
     GrayImage::from_raw(width, height, res_data)
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
 }
@@ -238,9 +249,7 @@ pub fn warp_affine(
         // Fallback: use CPU registry if available
         cv_runtime::registry()
             .ok()
-            .and_then(|reg| {
-                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
-            })
+            .and_then(|reg| Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id())))
             .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
     });
     warp_affine_ctx(src, matrix_2x3, width, height, &runner)
@@ -276,12 +285,18 @@ pub fn warp_affine_ex(
         // Fallback: use CPU registry if available
         cv_runtime::registry()
             .ok()
-            .and_then(|reg| {
-                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
-            })
+            .and_then(|reg| Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id())))
             .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
     });
-    warp_affine_ex_ctx(src, matrix_2x3, width, height, interpolation, border, &runner)
+    warp_affine_ex_ctx(
+        src,
+        matrix_2x3,
+        width,
+        height,
+        interpolation,
+        border,
+        &runner,
+    )
 }
 
 pub fn warp_affine_ex_ctx(
@@ -308,7 +323,14 @@ pub fn warp_affine_ex_ctx(
     // Check for GPU acceleration
     if let Ok(ComputeDevice::Gpu(gpu)) = group.device() {
         if interpolation == Interpolation::Linear && border == BorderMode::Constant(0) {
-            if let Ok(result) = warp_gpu(gpu, src, &matrix, width, height, cv_hal::context::WarpType::Affine) {
+            if let Ok(result) = warp_gpu(
+                gpu,
+                src,
+                &matrix,
+                width,
+                height,
+                cv_hal::context::WarpType::Affine,
+            ) {
                 return result;
             }
         }

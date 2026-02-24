@@ -11,8 +11,8 @@
 #![allow(deprecated)]
 
 use crate::Result;
-use cv_core::Error;
 use bytemuck::{Pod, Zeroable};
+use cv_core::Error;
 use cv_hal::gpu_utils;
 use image::GrayImage;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -117,16 +117,14 @@ impl MarkerGpuContext {
             .ok()?;
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("Marker GPU Device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::default(),
-                    experimental_features: wgpu::ExperimentalFeatures::default(),
-                    trace: wgpu::Trace::default(),
-                },
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("Marker GPU Device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+                trace: wgpu::Trace::default(),
+            })
             .await
             .ok()?;
 
@@ -264,7 +262,8 @@ impl MarkerGpuContext {
         let candidates_memory = candidates.len() * std::mem::size_of::<GpuCandidate>();
         let results_memory = candidates.len() * std::mem::size_of::<GpuMarkerResult>();
         let dictionary_memory = dictionary.len() * std::mem::size_of::<u64>();
-        let total_memory = image_memory + candidates_memory + results_memory + dictionary_memory + 32;
+        let total_memory =
+            image_memory + candidates_memory + results_memory + dictionary_memory + 32;
 
         // Check if operation fits in budget
         if !gpu_utils::fits_in_budget(total_memory, gpu_budget) {
@@ -421,7 +420,10 @@ impl MarkerGpuContext {
             tx.send(result).unwrap();
         });
 
-        let _ = self.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(index),
+            timeout: None,
+        });
 
         rx.recv()
             .map_err(|e| Error::FeatureError(format!("GPU sync failed: {}", e)))?

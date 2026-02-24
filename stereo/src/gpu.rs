@@ -4,13 +4,13 @@
 
 #![allow(deprecated)]
 
-use crate::{DisparityMap, StereoError, Result};
+use crate::{DisparityMap, Result, StereoError};
 use cv_core::Error;
+use cv_hal::gpu::GpuContext;
+use cv_hal::gpu_utils::{estimate_image_buffer_size, fits_in_budget, read_gpu_max_bytes_from_env};
 use image::GrayImage;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
-use cv_hal::gpu::GpuContext;
-use cv_hal::gpu_utils::{read_gpu_max_bytes_from_env, fits_in_budget, estimate_image_buffer_size};
 
 /// GPU-accelerated stereo matcher
 pub struct GpuStereoMatcher {
@@ -29,87 +29,93 @@ pub enum GpuStereoAlgorithm {
 
 impl GpuStereoMatcher {
     pub async fn new(algorithm: GpuStereoAlgorithm) -> Result<Self> {
-        let global_ctx = GpuContext::global().map_err(|_| {
-            Error::InvalidInput("GPU not available or not initialized".to_string())
-        })?;
-        
+        let global_ctx = GpuContext::global()
+            .map_err(|_| Error::InvalidInput("GPU not available or not initialized".to_string()))?;
+
         let ctx = Arc::new(global_ctx.clone());
 
         // Create bind group layout for stereo parameters
-        let params_bind_group_layout = 
-            ctx.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Stereo Params Bind Group Layout"),
-                entries: &[
-                    // Left image
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+        let params_bind_group_layout =
+            ctx.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Stereo Params Bind Group Layout"),
+                    entries: &[
+                        // Left image
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                multisampled: false,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            },
+                            count: None,
                         },
-                        count: None,
-                    },
-                    // Right image
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        // Right image
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                multisampled: false,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            },
+                            count: None,
                         },
-                        count: None,
-                    },
-                    // Disparity output
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: wgpu::TextureFormat::R32Float,
-                            view_dimension: wgpu::TextureViewDimension::D2,
+                        // Disparity output
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::StorageTexture {
+                                access: wgpu::StorageTextureAccess::WriteOnly,
+                                format: wgpu::TextureFormat::R32Float,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                            },
+                            count: None,
                         },
-                        count: None,
-                    },
-                    // Parameters uniform
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
+                        // Parameters uniform
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 3,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
                         },
-                        count: None,
-                    },
-                ],
-            });
+                    ],
+                });
 
         // Create shader module
-        let shader = ctx.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Stereo Shader"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
-                include_str!("shaders/stereo.wgsl")
-            )),
-        });
+        let shader = ctx
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Stereo Shader"),
+                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                    "shaders/stereo.wgsl"
+                ))),
+            });
 
         // Create compute pipeline
-        let pipeline_layout = ctx.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Stereo Pipeline Layout"),
-            bind_group_layouts: &[&params_bind_group_layout],
-            immediate_size: 0,
-        });
+        let pipeline_layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Stereo Pipeline Layout"),
+                bind_group_layouts: &[&params_bind_group_layout],
+                immediate_size: 0,
+            });
 
-        let stereo_pipeline = ctx.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Stereo Pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
+        let stereo_pipeline =
+            ctx.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("Stereo Pipeline"),
+                    layout: Some(&pipeline_layout),
+                    module: &shader,
+                    entry_point: Some("main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                });
 
         Ok(Self {
             ctx,
@@ -133,7 +139,7 @@ impl GpuStereoMatcher {
         }
 
         let max_bytes = read_gpu_max_bytes_from_env().unwrap_or(None);
-        
+
         if let Some(max_bytes) = max_bytes {
             let estimated = estimate_gpu_bytes(left.width(), left.height());
             if estimated > max_bytes {
@@ -192,46 +198,55 @@ impl GpuStereoMatcher {
             block_size: self.block_size(),
         };
 
-        let params_buffer = self.ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Stereo Parameters"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let params_buffer = self
+            .ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Stereo Parameters"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
 
         // Create bind group
-        let bind_group = self.ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Stereo Bind Group"),
-            layout: &self.params_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &left_texture.create_view(&wgpu::TextureViewDescriptor::default())
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &right_texture.create_view(&wgpu::TextureViewDescriptor::default())
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(
-                        &disparity_texture.create_view(&wgpu::TextureViewDescriptor::default())
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
+        let bind_group = self
+            .ctx
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Stereo Bind Group"),
+                layout: &self.params_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(
+                            &left_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(
+                            &right_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(
+                            &disparity_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: params_buffer.as_entire_binding(),
+                    },
+                ],
+            });
 
         // Create command encoder and compute pass
-        let mut encoder = self.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Stereo Encoder"),
-        });
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Stereo Encoder"),
+            });
 
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -281,7 +296,10 @@ impl GpuStereoMatcher {
         // Read back results
         let buffer_slice = output_buffer.slice(..);
         buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.ctx.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None });
+        self.ctx.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(index),
+            timeout: None,
+        });
 
         let data = buffer_slice.get_mapped_range();
         let disparity_data: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
@@ -350,8 +368,8 @@ impl GpuStereoMatcher {
             for local_row in local_start..local_end {
                 let global_row = output_start as usize + (local_row - local_start);
                 let src = &tile.data[local_row * width_usize..(local_row + 1) * width_usize];
-                let dst = &mut disparity.data
-                    [global_row * width_usize..(global_row + 1) * width_usize];
+                let dst =
+                    &mut disparity.data[global_row * width_usize..(global_row + 1) * width_usize];
                 dst.copy_from_slice(src);
             }
 
@@ -361,11 +379,7 @@ impl GpuStereoMatcher {
         Ok(disparity)
     }
 
-    fn create_input_texture(
-        &self,
-        image: &GrayImage,
-        size: wgpu::Extent3d,
-    ) -> wgpu::Texture {
+    fn create_input_texture(&self, image: &GrayImage, size: wgpu::Extent3d) -> wgpu::Texture {
         let texture = self.ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Input Image"),
             size,
@@ -373,8 +387,7 @@ impl GpuStereoMatcher {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING 
-                 | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
 
@@ -425,9 +438,8 @@ fn extract_rows(image: &GrayImage, start_row: u32, end_row: u32) -> Result<GrayI
     let start_idx = start_row as usize * width;
     let end_idx = end_row as usize * width;
     let data = image.as_raw()[start_idx..end_idx].to_vec();
-    GrayImage::from_raw(image.width(), end_row - start_row, data).ok_or_else(|| {
-        Error::InvalidInput("Failed to build temporary image tile".to_string())
-    })
+    GrayImage::from_raw(image.width(), end_row - start_row, data)
+        .ok_or_else(|| Error::InvalidInput("Failed to build temporary image tile".to_string()))
 }
 
 #[repr(C)]
@@ -447,7 +459,8 @@ pub async fn is_gpu_available() -> bool {
 
 /// Enumerate adapters visible to wgpu on this machine.
 pub async fn enumerate_adapters() -> Vec<wgpu::AdapterInfo> {
-    GpuContext::enumerate_adapters().await
+    GpuContext::enumerate_adapters()
+        .await
         .into_iter()
         .map(|adapter| adapter.get_info())
         .collect()
@@ -461,10 +474,10 @@ mod tests {
     fn create_test_stereo_pair() -> (GrayImage, GrayImage) {
         let width = 64u32;
         let height = 64u32;
-        
+
         let mut left = GrayImage::new(width, height);
         let mut right = GrayImage::new(width, height);
-        
+
         // Create pattern with positive disparity
         // x_right = x_left - disparity
         // so right(x) = left(x + disparity)
@@ -472,13 +485,13 @@ mod tests {
             for x in 0..width {
                 let pattern = ((x / 8) % 2) * 200;
                 left.put_pixel(x, y, Luma([pattern as u8]));
-                
+
                 let sx = (x + 5).min(width - 1);
                 let right_pattern = ((sx / 8) % 2) * 200;
                 right.put_pixel(x, y, Luma([right_pattern as u8]));
             }
         }
-        
+
         (left, right)
     }
 
@@ -508,13 +521,15 @@ mod tests {
         }
 
         let (left, right) = create_test_stereo_pair();
-        
-        let matcher = GpuStereoMatcher::new(GpuStereoAlgorithm::BlockMatching { block_size: 7 }).await.unwrap();
+
+        let matcher = GpuStereoMatcher::new(GpuStereoAlgorithm::BlockMatching { block_size: 7 })
+            .await
+            .unwrap();
         let disparity = matcher.compute_disparity(&left, &right, 0, 10).unwrap();
-        
+
         assert_eq!(disparity.width, 64);
         assert_eq!(disparity.height, 64);
-        
+
         // Center should have disparity approx 5 (from create_test_stereo_pair)
         let d = disparity.get(32, 32);
         println!("GPU Disparity at center: {}", d);

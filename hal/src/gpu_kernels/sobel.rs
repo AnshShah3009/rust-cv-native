@@ -1,10 +1,10 @@
-use cv_core::Tensor;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
-use wgpu::util::DeviceExt;
-use std::sync::Arc;
+use cv_core::Tensor;
 use std::marker::PhantomData;
+use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -23,12 +23,14 @@ pub fn sobel(
     ksize: usize,
 ) -> Result<(Tensor<u8, GpuStorage<u8>>, Tensor<u8, GpuStorage<u8>>)> {
     if dx != 1 || dy != 1 || ksize != 3 {
-        return Err(crate::Error::NotSupported("GPU Sobel only supports dx=1, dy=1, ksize=3 currently".into()));
+        return Err(crate::Error::NotSupported(
+            "GPU Sobel only supports dx=1, dy=1, ksize=3 currently".into(),
+        ));
     }
 
     let len = input.shape.len();
     let (h, w) = input.shape.hw();
-    let byte_size = ((len + 3) / 4 * 4) as u64; 
+    let byte_size = ((len + 3) / 4 * 4) as u64;
 
     // Output buffers
     let gx_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
@@ -51,11 +53,13 @@ pub fn sobel(
         border_mode: 1, // Replicate
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Sobel Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Sobel Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/sobel.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -64,19 +68,38 @@ pub fn sobel(
         label: Some("Sobel Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: gx_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: gy_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: gx_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: gy_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Sobel Dispatch") });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Sobel Dispatch"),
+        });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        
+
         let wg_x = ((w as u32 + 3) / 4 + 15) / 16;
         let wg_y = (h as u32 + 15) / 16;
         pass.dispatch_workgroups(wg_x, wg_y, 1);
@@ -84,7 +107,17 @@ pub fn sobel(
     ctx.submit(encoder);
 
     Ok((
-        Tensor { storage: GpuStorage::from_buffer(Arc::new(gx_buffer), len), shape: input.shape, dtype: input.dtype, _phantom: PhantomData },
-        Tensor { storage: GpuStorage::from_buffer(Arc::new(gy_buffer), len), shape: input.shape, dtype: input.dtype, _phantom: PhantomData },
+        Tensor {
+            storage: GpuStorage::from_buffer(Arc::new(gx_buffer), len),
+            shape: input.shape,
+            dtype: input.dtype,
+            _phantom: PhantomData,
+        },
+        Tensor {
+            storage: GpuStorage::from_buffer(Arc::new(gy_buffer), len),
+            shape: input.shape,
+            dtype: input.dtype,
+            _phantom: PhantomData,
+        },
     ))
 }

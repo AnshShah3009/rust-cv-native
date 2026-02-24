@@ -3,24 +3,27 @@ pub mod batch;
 pub mod compute;
 pub mod context;
 pub mod cpu;
-pub mod storage;
-pub mod tensor_ext;
 pub mod device;
 pub mod gpu;
-pub mod mlx;
-pub mod gpu_utils;
-pub mod gpu_sparse;
 pub mod gpu_kernels;
+pub mod gpu_sparse;
+pub mod gpu_utils;
 pub mod image;
+pub mod mlx;
+pub mod storage;
+pub mod tensor_ext;
 
 pub use gpu::*;
 pub use gpu_kernels::*;
 
-pub use backend::{BackendType, Capability, ComputeBackend, DeviceId, QueueId, QueueType, SubmissionIndex};
+pub use backend::{
+    BackendType, Capability, ComputeBackend, DeviceId, QueueId, QueueType, SubmissionIndex,
+};
 pub use cpu::*;
 pub use device::*;
 pub use gpu_utils::{
-    read_gpu_max_bytes_from_env, parse_bytes_with_suffix, estimate_image_buffer_size, fits_in_budget,
+    estimate_image_buffer_size, fits_in_budget, parse_bytes_with_suffix,
+    read_gpu_max_bytes_from_env,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -3,13 +3,13 @@
 //! This module provides GPU-accelerated implementations of all major 3D algorithms.
 //! Optimized for minimal GPU-CPU data transfers following Open3D patterns.
 
+use cv_core::{storage::Storage, Tensor};
+use cv_hal::context::ComputeContext;
 use cv_hal::gpu::GpuContext;
+use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
 use cv_runtime::orchestrator::RuntimeRunner;
 use nalgebra::{Matrix4, Point3, Vector3};
 use rayon::prelude::*;
-use cv_core::{Tensor, storage::Storage};
-use cv_hal::context::ComputeContext;
-use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
 
 /// GPU-accelerated point cloud operations
 pub mod point_cloud {
@@ -24,9 +24,13 @@ pub mod point_cloud {
         transform_ctx(points, transform, &runner)
     }
 
-    pub fn transform_ctx(points: &[Point3<f32>], transform: &Matrix4<f32>, runner: &RuntimeRunner) -> Vec<Point3<f32>> {
+    pub fn transform_ctx(
+        points: &[Point3<f32>],
+        transform: &Matrix4<f32>,
+        runner: &RuntimeRunner,
+    ) -> Vec<Point3<f32>> {
         if let Ok(cv_hal::compute::ComputeDevice::Gpu(_gpu)) = runner.device() {
-             // TODO: Actual GPU implementation in hal
+            // TODO: Actual GPU implementation in hal
         }
 
         points
@@ -36,10 +40,7 @@ pub mod point_cloud {
     }
 
     /// Compute normals using the runtime scheduler
-    pub fn compute_normals(
-        points: &[Point3<f32>],
-        k: usize,
-    ) -> Vec<Vector3<f32>> {
+    pub fn compute_normals(points: &[Point3<f32>], k: usize) -> Vec<Vector3<f32>> {
         let runner = cv_runtime::best_runner().unwrap_or_else(|_| {
             // Fallback to CPU registry on error
             cv_runtime::orchestrator::RuntimeRunner::Sync(cv_hal::DeviceId(0))
@@ -79,7 +80,11 @@ pub mod point_cloud {
     }
 
     /// CPU path with optimized spatial hashing
-    pub fn compute_normals_cpu(points: &[Point3<f32>], k: usize, voxel_size: f32) -> Vec<Vector3<f32>> {
+    pub fn compute_normals_cpu(
+        points: &[Point3<f32>],
+        k: usize,
+        voxel_size: f32,
+    ) -> Vec<Vector3<f32>> {
         let k = k.min(points.len().saturating_sub(1)).max(3);
         let vs = if voxel_size > 0.0 {
             voxel_size
@@ -209,15 +214,26 @@ pub mod point_cloud {
         compute_normals(points, k)
     }
 
-    pub fn voxel_based_normals_simple(points: &[Point3<f32>], _voxel_size: f32) -> Vec<Vector3<f32>> {
+    pub fn voxel_based_normals_simple(
+        points: &[Point3<f32>],
+        _voxel_size: f32,
+    ) -> Vec<Vector3<f32>> {
         compute_normals(points, 30)
     }
 
-    pub fn voxel_to_point_normal_transfer(points: &[Point3<f32>], _normals: &[Vector3<f32>], _voxel_size: f32) -> Vec<Vector3<f32>> {
+    pub fn voxel_to_point_normal_transfer(
+        points: &[Point3<f32>],
+        _normals: &[Vector3<f32>],
+        _voxel_size: f32,
+    ) -> Vec<Vector3<f32>> {
         vec![Vector3::z(); points.len()]
     }
 
-    pub fn approximate_normals_simple(points: &[Point3<f32>], k: usize, _epsilon: f32) -> Vec<Vector3<f32>> {
+    pub fn approximate_normals_simple(
+        points: &[Point3<f32>],
+        k: usize,
+        _epsilon: f32,
+    ) -> Vec<Vector3<f32>> {
         compute_normals(points, k)
     }
 }
@@ -232,7 +248,8 @@ pub mod stereo {
         right: &::image::GrayImage,
         params: &StereoMatchParams,
     ) -> cv_hal::Result<::image::ImageBuffer<::image::Luma<f32>, Vec<f32>>> {
-        let runner = cv_runtime::best_runner().map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+        let runner =
+            cv_runtime::best_runner().map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
         match_stereo_ctx(left, right, params, &runner)
     }
 
@@ -243,23 +260,32 @@ pub mod stereo {
         runner: &RuntimeRunner,
     ) -> cv_hal::Result<::image::ImageBuffer<::image::Luma<f32>, Vec<f32>>> {
         if let Ok(cv_hal::compute::ComputeDevice::Gpu(gpu)) = runner.device() {
-            let l_tensor = cv_core::CpuTensor::from_vec(left.as_raw().to_vec(), cv_core::TensorShape::new(1, left.height() as usize, left.width() as usize))
-                .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
-            let r_tensor = cv_core::CpuTensor::from_vec(right.as_raw().to_vec(), cv_core::TensorShape::new(1, right.height() as usize, right.width() as usize))
-                .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
-                
+            let l_tensor = cv_core::CpuTensor::from_vec(
+                left.as_raw().to_vec(),
+                cv_core::TensorShape::new(1, left.height() as usize, left.width() as usize),
+            )
+            .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+            let r_tensor = cv_core::CpuTensor::from_vec(
+                right.as_raw().to_vec(),
+                cv_core::TensorShape::new(1, right.height() as usize, right.width() as usize),
+            )
+            .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+
             let l_gpu = l_tensor.to_gpu_ctx(gpu)?;
             let r_gpu = r_tensor.to_gpu_ctx(gpu)?;
-            
+
             // Note: We use OS=GpuStorage<f32> for the output
-            let res_gpu: Tensor<f32, cv_hal::storage::GpuStorage<f32>> = gpu.stereo_match(&l_gpu, &r_gpu, params)?;
+            let res_gpu: Tensor<f32, cv_hal::storage::GpuStorage<f32>> =
+                gpu.stereo_match(&l_gpu, &r_gpu, params)?;
             let res_cpu = res_gpu.to_cpu_ctx(gpu)?;
-            
+
             let data = res_cpu.storage.as_slice().unwrap().to_vec();
             return Ok(::image::ImageBuffer::from_raw(left.width(), left.height(), data).unwrap());
         }
 
-        Err(cv_hal::Error::NotSupported("CPU fallback for orchestrated stereo not yet in 3d::gpu".into()))
+        Err(cv_hal::Error::NotSupported(
+            "CPU fallback for orchestrated stereo not yet in 3d::gpu".into(),
+        ))
     }
 }
 
@@ -275,7 +301,13 @@ pub mod registration {
     /// 3. Robust outlier rejection
     ///
     /// To use ICP registration, use the `cv-registration` crate instead.
-    pub fn icp_point_to_plane(_s: &[Point3<f32>], _t: &[Point3<f32>], _tn: &[Vector3<f32>], _dist: f32, _iters: usize) -> Result<Matrix4<f32>, String> {
+    pub fn icp_point_to_plane(
+        _s: &[Point3<f32>],
+        _t: &[Point3<f32>],
+        _tn: &[Vector3<f32>],
+        _dist: f32,
+        _iters: usize,
+    ) -> Result<Matrix4<f32>, String> {
         Err("ICP point-to-plane registration not yet implemented in GPU module. Use cv-registration crate instead.".to_string())
     }
 }
@@ -292,8 +324,16 @@ pub mod mesh {
     ///
     /// This operation is expensive on CPU and requires GPU acceleration
     /// through a custom kernel implementation in cv-hal.
-    pub fn laplacian_smooth(_v: &mut [Point3<f32>], _f: &[[usize; 3]], _iters: usize, _l: f32) -> Result<(), String> {
-        Err("Laplacian mesh smoothing not yet implemented. Requires GPU kernel in cv-hal.".to_string())
+    pub fn laplacian_smooth(
+        _v: &mut [Point3<f32>],
+        _f: &[[usize; 3]],
+        _iters: usize,
+        _l: f32,
+    ) -> Result<(), String> {
+        Err(
+            "Laplacian mesh smoothing not yet implemented. Requires GPU kernel in cv-hal."
+                .to_string(),
+        )
     }
 
     /// Compute vertex normals from mesh: NOT IMPLEMENTED
@@ -305,7 +345,10 @@ pub mod mesh {
     /// 1. For each face, compute normal from vertex positions
     /// 2. For each vertex, accumulate normals from all adjacent faces
     /// 3. Normalize per-vertex accumulated normals
-    pub fn compute_vertex_normals(_v: &[Point3<f32>], _f: &[[usize; 3]]) -> Result<Vec<Vector3<f32>>, String> {
+    pub fn compute_vertex_normals(
+        _v: &[Point3<f32>],
+        _f: &[[usize; 3]],
+    ) -> Result<Vec<Vector3<f32>>, String> {
         Err("Vertex normal computation not yet implemented.".to_string())
     }
 }
@@ -336,7 +379,17 @@ pub mod tsdf {
     ///
     /// This is heavily used in real-time reconstruction and MUST be GPU-accelerated
     /// through a compute kernel in cv-hal.
-    pub fn integrate_depth(_d: &[f32], _w: u32, _h: u32, _p: &Matrix4<f32>, _i: &[f32; 4], _vol: &mut [f32], _weights: &mut [f32], _vs: f32, _tr: f32) -> Result<(), String> {
+    pub fn integrate_depth(
+        _d: &[f32],
+        _w: u32,
+        _h: u32,
+        _p: &Matrix4<f32>,
+        _i: &[f32; 4],
+        _vol: &mut [f32],
+        _weights: &mut [f32],
+        _vs: f32,
+        _tr: f32,
+    ) -> Result<(), String> {
         Err("TSDF depth integration not yet implemented. Requires GPU kernel for real-time performance.".to_string())
     }
 }
@@ -368,8 +421,16 @@ pub mod raycasting {
     /// This is a performance-critical operation best implemented with:
     /// - Spatial hashing or BVH
     /// - SIMD vectorization or GPU acceleration
-    pub fn cast_rays(_ro: &[Point3<f32>], _rd: &[Vector3<f32>], _v: &[Point3<f32>], _f: &[[usize; 3]]) -> Result<Vec<Option<(f32, Point3<f32>, Vector3<f32>)>>, String> {
-        Err("Ray-mesh intersection not yet implemented. Requires BVH acceleration structure.".to_string())
+    pub fn cast_rays(
+        _ro: &[Point3<f32>],
+        _rd: &[Vector3<f32>],
+        _v: &[Point3<f32>],
+        _f: &[[usize; 3]],
+    ) -> Result<Vec<Option<(f32, Point3<f32>, Vector3<f32>)>>, String> {
+        Err(
+            "Ray-mesh intersection not yet implemented. Requires BVH acceleration structure."
+                .to_string(),
+        )
     }
 }
 

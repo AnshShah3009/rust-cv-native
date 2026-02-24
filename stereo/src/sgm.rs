@@ -1,12 +1,12 @@
 #![allow(deprecated)]
 
 use crate::{DisparityMap, Result, StereoMatcher, StereoMatcherCtx};
+use cv_core::{storage::Storage, Error, Tensor};
+use cv_hal::compute::ComputeDevice;
+use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
+use cv_runtime::orchestrator::RuntimeRunner;
 use image::GrayImage;
 use rayon::prelude::*;
-use cv_runtime::orchestrator::RuntimeRunner;
-use cv_hal::compute::ComputeDevice;
-use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
-use cv_core::{Tensor, storage::Storage, Error};
 
 /// SGM stereo matcher
 pub struct SgmMatcher {
@@ -52,7 +52,12 @@ impl StereoMatcher for SgmMatcher {
 }
 
 impl StereoMatcherCtx for SgmMatcher {
-    fn compute_ctx(&self, left: &GrayImage, right: &GrayImage, group: &RuntimeRunner) -> Result<DisparityMap> {
+    fn compute_ctx(
+        &self,
+        left: &GrayImage,
+        right: &GrayImage,
+        group: &RuntimeRunner,
+    ) -> Result<DisparityMap> {
         if left.width() != right.width() || left.height() != right.height() {
             return Err(Error::DimensionMismatch(
                 "Left and right images must have the same dimensions".to_string(),
@@ -91,8 +96,13 @@ impl StereoMatcherCtx for SgmMatcher {
                 .enumerate()
                 .for_each(|(y, row)| {
                     for (x, px) in row.iter_mut().enumerate() {
-                        let best_d =
-                            self.find_best_disparity(&aggregated_costs, x, y, width, num_disparities);
+                        let best_d = self.find_best_disparity(
+                            &aggregated_costs,
+                            x,
+                            y,
+                            width,
+                            num_disparities,
+                        );
                         *px = best_d as f32;
                     }
                 });
@@ -119,27 +129,39 @@ impl SgmMatcher {
         self
     }
 
-    fn compute_gpu(&self, gpu: &cv_hal::gpu::GpuContext, left: &GrayImage, right: &GrayImage) -> cv_hal::Result<DisparityMap> {
-        use cv_hal::context::{ComputeContext, StereoMatchParams, StereoMatchMethod};
-        
-        let l_tensor = cv_core::CpuTensor::from_vec(left.as_raw().to_vec(), cv_core::TensorShape::new(1, left.height() as usize, left.width() as usize))
-            .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
-        let r_tensor = cv_core::CpuTensor::from_vec(right.as_raw().to_vec(), cv_core::TensorShape::new(1, right.height() as usize, right.width() as usize))
-            .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
-            
+    fn compute_gpu(
+        &self,
+        gpu: &cv_hal::gpu::GpuContext,
+        left: &GrayImage,
+        right: &GrayImage,
+    ) -> cv_hal::Result<DisparityMap> {
+        use cv_hal::context::{ComputeContext, StereoMatchMethod, StereoMatchParams};
+
+        let l_tensor = cv_core::CpuTensor::from_vec(
+            left.as_raw().to_vec(),
+            cv_core::TensorShape::new(1, left.height() as usize, left.width() as usize),
+        )
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+        let r_tensor = cv_core::CpuTensor::from_vec(
+            right.as_raw().to_vec(),
+            cv_core::TensorShape::new(1, right.height() as usize, right.width() as usize),
+        )
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+
         let l_gpu = l_tensor.to_gpu_ctx(gpu)?;
         let r_gpu = r_tensor.to_gpu_ctx(gpu)?;
-        
+
         let params = StereoMatchParams {
             method: StereoMatchMethod::SemiGlobalMatching,
             min_disparity: self.min_disparity,
             num_disparities: self.max_disparity - self.min_disparity,
             block_size: 1, // SGM is pixel-wise usually
         };
-        
-        let res_gpu: Tensor<f32, cv_hal::storage::GpuStorage<f32>> = gpu.stereo_match(&l_gpu, &r_gpu, &params)?;
+
+        let res_gpu: Tensor<f32, cv_hal::storage::GpuStorage<f32>> =
+            gpu.stereo_match(&l_gpu, &r_gpu, &params)?;
         let res_cpu = res_gpu.to_cpu_ctx(gpu)?;
-        
+
         Ok(DisparityMap {
             data: res_cpu.storage.as_slice().unwrap().to_vec(),
             width: left.width(),

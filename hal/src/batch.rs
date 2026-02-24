@@ -1,8 +1,8 @@
-use wgpu::{CommandEncoder, Queue, Device};
 use std::sync::Arc;
+use wgpu::{CommandEncoder, Device, Queue};
 
 /// A batch executor for GPU operations.
-/// 
+///
 /// Instead of submitting work immediately, it collects commands and submits them
 /// in a single batch to reduce driver overhead.
 pub struct BatchExecutor {
@@ -17,7 +17,7 @@ impl BatchExecutor {
         let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Batch Executor Encoder"),
         });
-        
+
         Self {
             device,
             queue,
@@ -30,9 +30,11 @@ impl BatchExecutor {
     pub fn encoder(&mut self) -> &mut CommandEncoder {
         // Re-create encoder if it was flushed/taken
         if self.encoder.is_none() {
-            self.encoder = Some(self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Batch Executor Encoder (Refilled)"),
-            }));
+            self.encoder = Some(self.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor {
+                    label: Some("Batch Executor Encoder (Refilled)"),
+                },
+            ));
         }
         self.encoder.as_mut().expect("BatchExecutor command encoder is missing - this should be impossible given self.encoder initialization")
     }

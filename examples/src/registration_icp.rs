@@ -46,7 +46,9 @@ fn main() {
     ];
 
     let source = PointCloud::new(source_points);
-    let target = PointCloud::new(target_points).with_normals(target_normals).unwrap();
+    let target = PointCloud::new(target_points)
+        .with_normals(target_normals)
+        .unwrap();
 
     println!("Source points: {}", source.points.len());
     println!("Target points: {}", target.points.len());

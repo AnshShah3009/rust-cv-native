@@ -140,7 +140,8 @@ impl TriangleMesh {
         }
 
         // 1. Calculate area of each face
-        let face_areas: Vec<f32> = self.faces
+        let face_areas: Vec<f32> = self
+            .faces
             .par_iter()
             .map(|face| {
                 let v0 = self.vertices[face[0]];
@@ -157,7 +158,7 @@ impl TriangleMesh {
             Ok(d) => d,
             Err(_) => return PointCloud::new(Vec::new()), // All zero area faces
         };
-        
+
         let mut rng = rand::thread_rng();
         let mut sampled_points = Vec::with_capacity(num_points);
 
@@ -173,7 +174,7 @@ impl TriangleMesh {
             // Random barycentric coordinates
             let r1: f32 = rng.gen();
             let r2: f32 = rng.gen();
-            
+
             let (u, v) = if r1 + r2 > 1.0 {
                 (1.0 - r1, 1.0 - r2)
             } else {

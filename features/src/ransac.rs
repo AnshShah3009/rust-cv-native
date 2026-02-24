@@ -3,7 +3,7 @@
 //! RANSAC is used to robustly estimate geometric transformations
 //! (homography, fundamental matrix) from feature matches with outliers.
 
-use cv_core::{Matches, RobustModel, RobustConfig, Ransac};
+use cv_core::{Matches, Ransac, RobustConfig, RobustModel};
 use nalgebra::{Matrix3, Vector3};
 
 pub type RansacConfig = RobustConfig;
@@ -19,7 +19,9 @@ pub struct HomographyEstimator;
 impl RobustModel<MatchPair> for HomographyEstimator {
     type Model = Matrix3<f64>;
 
-    fn min_sample_size(&self) -> usize { 4 }
+    fn min_sample_size(&self) -> usize {
+        4
+    }
 
     fn estimate(&self, data: &[&MatchPair]) -> Option<Self::Model> {
         let mut a = vec![0.0f64; data.len() * 2 * 9];
@@ -28,10 +30,18 @@ impl RobustModel<MatchPair> for HomographyEstimator {
             let (x2, y2) = m.dst;
             let row1 = i * 2;
             let row2 = i * 2 + 1;
-            a[row1 * 9 + 0] = -x1; a[row1 * 9 + 1] = -y1; a[row1 * 9 + 2] = -1.0;
-            a[row1 * 9 + 6] = x2 * x1; a[row1 * 9 + 7] = x2 * y1; a[row1 * 9 + 8] = x2;
-            a[row2 * 9 + 3] = -x1; a[row2 * 9 + 4] = -y1; a[row2 * 9 + 5] = -1.0;
-            a[row2 * 9 + 6] = y2 * x1; a[row2 * 9 + 7] = y2 * y1; a[row2 * 9 + 8] = y2;
+            a[row1 * 9 + 0] = -x1;
+            a[row1 * 9 + 1] = -y1;
+            a[row1 * 9 + 2] = -1.0;
+            a[row1 * 9 + 6] = x2 * x1;
+            a[row1 * 9 + 7] = x2 * y1;
+            a[row1 * 9 + 8] = x2;
+            a[row2 * 9 + 3] = -x1;
+            a[row2 * 9 + 4] = -y1;
+            a[row2 * 9 + 5] = -1.0;
+            a[row2 * 9 + 6] = y2 * x1;
+            a[row2 * 9 + 7] = y2 * y1;
+            a[row2 * 9 + 8] = y2;
         }
         solve_dlt_homography(&a, data.len() * 2)
     }
@@ -54,16 +64,24 @@ pub struct FundamentalEstimator;
 impl RobustModel<MatchPair> for FundamentalEstimator {
     type Model = Matrix3<f64>;
 
-    fn min_sample_size(&self) -> usize { 8 }
+    fn min_sample_size(&self) -> usize {
+        8
+    }
 
     fn estimate(&self, data: &[&MatchPair]) -> Option<Self::Model> {
         let mut a = vec![0.0f64; data.len() * 9];
         for (i, m) in data.iter().enumerate() {
             let (x1, y1) = m.src;
             let (x2, y2) = m.dst;
-            a[i * 9 + 0] = x2 * x1; a[i * 9 + 1] = x2 * y1; a[i * 9 + 2] = x2;
-            a[i * 9 + 3] = y2 * x1; a[i * 9 + 4] = y2 * y1; a[i * 9 + 5] = y2;
-            a[i * 9 + 6] = x1; a[i * 9 + 7] = y1; a[i * 9 + 8] = 1.0;
+            a[i * 9 + 0] = x2 * x1;
+            a[i * 9 + 1] = x2 * y1;
+            a[i * 9 + 2] = x2;
+            a[i * 9 + 3] = y2 * x1;
+            a[i * 9 + 4] = y2 * y1;
+            a[i * 9 + 5] = y2;
+            a[i * 9 + 6] = x1;
+            a[i * 9 + 7] = y1;
+            a[i * 9 + 8] = 1.0;
         }
         solve_dlt_fundamental(&a, data.len())
     }
@@ -90,11 +108,15 @@ pub fn estimate_homography(
     dst_points: &[(f64, f64)],
     config: &RansacConfig,
 ) -> RansacResult<Matrix3<f64>> {
-    let data: Vec<MatchPair> = matches.matches.iter().map(|m| MatchPair {
-        src: src_points[m.query_idx as usize],
-        dst: dst_points[m.train_idx as usize],
-    }).collect();
-    
+    let data: Vec<MatchPair> = matches
+        .matches
+        .iter()
+        .map(|m| MatchPair {
+            src: src_points[m.query_idx as usize],
+            dst: dst_points[m.train_idx as usize],
+        })
+        .collect();
+
     let ransac = Ransac::new(config.clone());
     ransac.run(&HomographyEstimator, &data)
 }
@@ -106,11 +128,15 @@ pub fn estimate_fundamental(
     dst_points: &[(f64, f64)],
     config: &RansacConfig,
 ) -> RansacResult<Matrix3<f64>> {
-    let data: Vec<MatchPair> = matches.matches.iter().map(|m| MatchPair {
-        src: src_points[m.query_idx as usize],
-        dst: dst_points[m.train_idx as usize],
-    }).collect();
-    
+    let data: Vec<MatchPair> = matches
+        .matches
+        .iter()
+        .map(|m| MatchPair {
+            src: src_points[m.query_idx as usize],
+            dst: dst_points[m.train_idx as usize],
+        })
+        .collect();
+
     let ransac = Ransac::new(config.clone());
     ransac.run(&FundamentalEstimator, &data)
 }
@@ -173,22 +199,20 @@ fn compute_homography_4pt(
 /// Solve DLT for homography using SVD
 fn solve_dlt_homography(a: &[f64], n_rows: usize) -> Option<Matrix3<f64>> {
     let mut matrix = nalgebra::DMatrix::from_row_slice(n_rows, 9, a);
-    
+
     // If underdetermined, pad with zeros to ensure we get 9 singular vectors
     if n_rows < 9 {
         let mut padded = nalgebra::DMatrix::zeros(9, 9);
         padded.view_mut((0, 0), (n_rows, 9)).copy_from(&matrix);
         matrix = padded;
     }
-    
+
     let svd = matrix.svd(false, true);
     let v_t = svd.v_t?;
     let h_vec = v_t.row(8);
-    
+
     Some(Matrix3::new(
-        h_vec[0], h_vec[1], h_vec[2],
-        h_vec[3], h_vec[4], h_vec[5],
-        h_vec[6], h_vec[7], h_vec[8],
+        h_vec[0], h_vec[1], h_vec[2], h_vec[3], h_vec[4], h_vec[5], h_vec[6], h_vec[7], h_vec[8],
     ))
 }
 
@@ -239,28 +263,26 @@ fn compute_fundamental_8pt(
 /// Solve DLT for fundamental matrix using SVD
 fn solve_dlt_fundamental(a: &[f64], n_rows: usize) -> Option<Matrix3<f64>> {
     let mut matrix = nalgebra::DMatrix::from_row_slice(n_rows, 9, a);
-    
+
     // If underdetermined, pad with zeros to ensure we get 9 singular vectors
     if n_rows < 9 {
         let mut padded = nalgebra::DMatrix::zeros(9, 9);
         padded.view_mut((0, 0), (n_rows, 9)).copy_from(&matrix);
         matrix = padded;
     }
-    
+
     let svd = matrix.svd(false, true);
     let v_t = svd.v_t?;
     let f_vec = v_t.row(8);
-    
+
     let f = Matrix3::new(
-        f_vec[0], f_vec[1], f_vec[2],
-        f_vec[3], f_vec[4], f_vec[5],
-        f_vec[6], f_vec[7], f_vec[8],
+        f_vec[0], f_vec[1], f_vec[2], f_vec[3], f_vec[4], f_vec[5], f_vec[6], f_vec[7], f_vec[8],
     );
-    
+
     // Enforce rank-2 constraint for Fundamental matrix
     let mut svd_f = f.svd(true, true);
     svd_f.singular_values[2] = 0.0;
-    
+
     Some(svd_f.recompose().ok()?)
 }
 

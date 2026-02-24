@@ -54,12 +54,8 @@ pub struct FPFHFeature {
     pub histogram: [f32; 33], // 33-dimensional histogram
 }
 
-
 /// Compute FPFH features for point cloud
-pub fn compute_fpfh_features(
-    _cloud: &PointCloud,
-    _radius: f32,
-) -> Result<Vec<FPFHFeature>> {
+pub fn compute_fpfh_features(_cloud: &PointCloud, _radius: f32) -> Result<Vec<FPFHFeature>> {
     Err(Error::RuntimeError(
         "FPFH features are currently stubbed".to_string(),
     ))
@@ -232,9 +228,9 @@ pub fn registration_ransac_based_on_feature_matching(
     let ransac = Ransac::new(config);
     let res = ransac.run(&estimator, &top_correspondences);
 
-    let final_transformation = res.model.ok_or_else(|| {
-        Error::RuntimeError("RANSAC failed to find model".to_string())
-    })?;
+    let final_transformation = res
+        .model
+        .ok_or_else(|| Error::RuntimeError("RANSAC failed to find model".to_string()))?;
 
     // Compute fitness and RMSE
     let (fitness, rmse) = evaluate_registration(

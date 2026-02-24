@@ -82,33 +82,23 @@ pub mod spatial;
 pub mod tsdf;
 
 pub use async_ops::{
-    point_cloud as async_point_cloud,
-    registration as async_registration,    mesh as async_mesh,
-    raycasting as async_raycasting,
-    tsdf as async_tsdf,
-    pipeline as async_pipeline,
+    mesh as async_mesh, pipeline as async_pipeline, point_cloud as async_point_cloud,
+    raycasting as async_raycasting, registration as async_registration, tsdf as async_tsdf,
 };
 
 pub use batch::{
-    BatchConfig,
-    point_cloud as batch_point_cloud,
-    registration as batch_registration,
-    mesh as batch_mesh,
-    raycasting as batch_raycasting,
-    bench as batch_bench,
+    bench as batch_bench, mesh as batch_mesh, point_cloud as batch_point_cloud,
+    raycasting as batch_raycasting, registration as batch_registration, BatchConfig,
 };
 
+pub use cv_core::PointCloud;
 pub use gpu::{
-    gpu_info, is_gpu_available, force_cpu_mode, force_gpu_mode,
-    point_cloud as gpu_point_cloud,
-    registration as gpu_registration,
-    mesh as gpu_mesh,
+    force_cpu_mode, force_gpu_mode, gpu_info, is_gpu_available, mesh as gpu_mesh,
+    point_cloud as gpu_point_cloud, raycasting as gpu_raycasting, registration as gpu_registration,
     tsdf as gpu_tsdf,
-    raycasting as gpu_raycasting,
 };
 pub use mesh::TriangleMesh;
 pub use odometry::{compute_rgbd_odometry, OdometryMethod, OdometryResult};
-pub use cv_core::PointCloud;
 pub use raycasting::{
     cast_ray_mesh, cast_rays_mesh, closest_point_on_mesh, closest_points_on_mesh,
     mesh_to_mesh_distance, point_inside_mesh, Ray, RayHit,

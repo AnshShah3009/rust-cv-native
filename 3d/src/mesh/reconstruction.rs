@@ -23,7 +23,7 @@ pub fn compute_point_normals(cloud: &PointCloud, _k: usize) -> Vec<Vector3<f32>>
     if let Some(ref normals) = cloud.normals {
         return normals.clone();
     }
-    
+
     // Default: return upward normals
     vec![Vector3::new(0.0, 1.0, 0.0); n]
 }
@@ -97,32 +97,35 @@ pub fn alpha_shapes(cloud: &PointCloud, alpha: f32) -> TriangleMesh {
 }
 
 /// Create a simple sphere point cloud for testing
-pub fn create_sphere_point_cloud(center: Point3<f32>, radius: f32, num_points: usize) -> PointCloud {
-    
+pub fn create_sphere_point_cloud(
+    center: Point3<f32>,
+    radius: f32,
+    num_points: usize,
+) -> PointCloud {
     let _rng = rand::thread_rng();
-    
+
     let mut points = Vec::with_capacity(num_points);
     let mut normals = Vec::with_capacity(num_points);
-    
+
     let phi = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
-    
+
     for i in 0..num_points {
         let y = 1.0 - (i as f32 / (num_points - 1).max(1) as f32) * 2.0;
         let radius_at_y = (1.0 - y * y).max(0.0).sqrt();
         let theta = phi * i as f32;
-        
+
         let x = theta.cos() * radius_at_y;
         let z = theta.sin() * radius_at_y;
-        
+
         let point = center + radius * Vector3::new(x, y, z);
         points.push(point);
-        
+
         let normal = (point - center).normalize();
         normals.push(normal);
     }
-    
-    PointCloud { 
-        points, 
+
+    PointCloud {
+        points,
         normals: Some(normals),
         colors: None,
     }
@@ -137,7 +140,7 @@ pub fn create_plane_point_cloud(
 ) -> PointCloud {
     use rand::Rng;
     let mut rng = rand::thread_rng();
-    
+
     let up = if normal.z.abs() < 0.9 {
         Vector3::new(0.0, 0.0, 1.0)
     } else {
@@ -145,19 +148,19 @@ pub fn create_plane_point_cloud(
     };
     let right = normal.cross(&up).normalize();
     let up = right.cross(&normal).normalize();
-    
+
     let mut points = Vec::with_capacity(num_points);
     let mut normals = Vec::with_capacity(num_points);
-    
+
     for _ in 0..num_points {
         let u = rng.gen_range(-size..size);
         let v = rng.gen_range(-size..size);
-        
+
         let point = origin + right * u + up * v;
         points.push(point);
         normals.push(normal);
     }
-    
+
     PointCloud {
         points,
         normals: Some(normals),
@@ -310,7 +313,9 @@ fn find_seed_triangle(
                 &cloud.points[idx1],
                 &cloud.points[idx2],
                 ball_radius,
-            ).is_some() {
+            )
+            .is_some()
+            {
                 return Some([start_idx, idx1, idx2]);
             }
         }

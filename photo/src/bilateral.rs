@@ -1,11 +1,6 @@
 use image::{GrayImage, Luma};
 
-pub fn bilateral_filter(
-    src: &GrayImage,
-    d: i32,
-    sigma_color: f32,
-    sigma_space: f32,
-) -> GrayImage {
+pub fn bilateral_filter(src: &GrayImage, d: i32, sigma_color: f32, sigma_space: f32) -> GrayImage {
     let width = src.width() as usize;
     let height = src.height() as usize;
     let mut dst = GrayImage::new(src.width(), src.height());
@@ -27,11 +22,15 @@ pub fn bilateral_filter(
 
             for dy in -radius..=radius {
                 let sy = y as i32 + dy;
-                if sy < 0 || sy >= height as i32 { continue; }
+                if sy < 0 || sy >= height as i32 {
+                    continue;
+                }
 
                 for dx in -radius..=radius {
                     let sx = x as i32 + dx;
-                    if sx < 0 || sx >= width as i32 { continue; }
+                    if sx < 0 || sx >= width as i32 {
+                        continue;
+                    }
 
                     let val = src.get_pixel(sx as u32, sy as u32)[0] as f32;
 
@@ -39,14 +38,19 @@ pub fn bilateral_filter(
                     let color_diff = val - center_val;
                     let color_diff_sq = color_diff * color_diff;
 
-                    let weight = (dist_sq * gauss_space_coeff + color_diff_sq * gauss_color_coeff).exp();
+                    let weight =
+                        (dist_sq * gauss_space_coeff + color_diff_sq * gauss_color_coeff).exp();
 
                     sum_val += val * weight;
                     sum_weight += weight;
                 }
             }
 
-            dst.put_pixel(x as u32, y as u32, Luma([(sum_val / sum_weight).min(255.0) as u8]));
+            dst.put_pixel(
+                x as u32,
+                y as u32,
+                Luma([(sum_val / sum_weight).min(255.0) as u8]),
+            );
         }
     }
 

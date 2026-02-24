@@ -7,7 +7,7 @@
 
 use crate::descriptor::{Descriptor, Descriptors};
 use crate::Result;
-use cv_core::{storage::Storage, CpuTensor, KeyPoint, KeyPoints, Tensor, Error};
+use cv_core::{storage::Storage, CpuTensor, Error, KeyPoint, KeyPoints, Tensor};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::context::ComputeContext;
 use cv_hal::tensor_ext::{TensorCast, TensorToCpu, TensorToGpu};
@@ -202,12 +202,12 @@ impl Akaze {
                 let current_u8 = ctx.gaussian_blur(image, 1.0, 5).map_err(|e| {
                     Error::FeatureError(format!("Gaussian blur failed on GPU: {}", e))
                 })?;
-                let gpu_u8 =
-                    <Tensor<u8, S> as TensorToGpu<u8>>::to_gpu_ctx(&current_u8, gpu).map_err(|e| {
+                let gpu_u8 = <Tensor<u8, S> as TensorToGpu<u8>>::to_gpu_ctx(&current_u8, gpu)
+                    .map_err(|e| {
                         Error::FeatureError(format!("Failed to transfer tensor to GPU: {}", e))
                     })?;
-                let mut current_f32 =
-                    <Tensor<u8, _> as TensorCast>::to_f32_ctx(&gpu_u8, gpu).map_err(|e| {
+                let mut current_f32 = <Tensor<u8, _> as TensorCast>::to_f32_ctx(&gpu_u8, gpu)
+                    .map_err(|e| {
                         Error::FeatureError(format!("Failed to cast tensor to f32: {}", e))
                     })?;
                 let k = ctx.akaze_contrast_k(&current_f32).unwrap_or(0.03);
@@ -223,9 +223,13 @@ impl Akaze {
                             let n_steps = self.get_fed_steps(dt);
                             let step_tau = dt / (n_steps as f32);
                             for _ in 0..n_steps {
-                                current_f32 =
-                                    gpu.akaze_diffusion(&current_f32, k, step_tau).map_err(|e| {
-                                        Error::FeatureError(format!("Diffusion failed on GPU: {}", e))
+                                current_f32 = gpu
+                                    .akaze_diffusion(&current_f32, k, step_tau)
+                                    .map_err(|e| {
+                                        Error::FeatureError(format!(
+                                            "Diffusion failed on GPU: {}",
+                                            e
+                                        ))
                                     })?;
                             }
                             t = esigma;
@@ -237,7 +241,10 @@ impl Akaze {
 
                         evolution.push(EvolutionLevel {
                             image: current_f32.to_cpu_ctx(gpu).map_err(|e| {
-                                Error::FeatureError(format!("Failed to transfer image to CPU: {}", e))
+                                Error::FeatureError(format!(
+                                    "Failed to transfer image to CPU: {}",
+                                    e
+                                ))
                             })?,
                             lx: lx.to_cpu_ctx(gpu).map_err(|e| {
                                 Error::FeatureError(format!("Failed to transfer lx to CPU: {}", e))
@@ -246,7 +253,10 @@ impl Akaze {
                                 Error::FeatureError(format!("Failed to transfer ly to CPU: {}", e))
                             })?,
                             ldet: ldet.to_cpu_ctx(gpu).map_err(|e| {
-                                Error::FeatureError(format!("Failed to transfer ldet to CPU: {}", e))
+                                Error::FeatureError(format!(
+                                    "Failed to transfer ldet to CPU: {}",
+                                    e
+                                ))
                             })?,
                             sigma,
                             octave: o,
@@ -264,14 +274,9 @@ impl Akaze {
                 let slice = current_u8
                     .as_slice()
                     .map_err(|e| Error::FeatureError(format!("Failed to get slice: {}", e)))?;
-                let data: Vec<f32> = slice
-                    .iter()
-                    .map(|&v| v as f32 / 255.0)
-                    .collect();
-                let mut current_f32 =
-                    CpuTensor::from_vec(data, current_u8.shape).map_err(|e| {
-                        Error::FeatureError(format!("Failed to create tensor: {}", e))
-                    })?;
+                let data: Vec<f32> = slice.iter().map(|&v| v as f32 / 255.0).collect();
+                let mut current_f32 = CpuTensor::from_vec(data, current_u8.shape)
+                    .map_err(|e| Error::FeatureError(format!("Failed to create tensor: {}", e)))?;
 
                 let k = cpu.akaze_contrast_k(&current_f32).unwrap_or(0.03);
 
@@ -286,16 +291,17 @@ impl Akaze {
                             let n_steps = self.get_fed_steps(dt);
                             let step_tau = dt / (n_steps as f32);
                             for _ in 0..n_steps {
-                                current_f32 = cpu
-                                    .akaze_diffusion(&current_f32, k, step_tau)
-                                    .map_err(|e| Error::FeatureError(format!("Diffusion failed: {}", e)))?;
+                                current_f32 =
+                                    cpu.akaze_diffusion(&current_f32, k, step_tau).map_err(
+                                        |e| Error::FeatureError(format!("Diffusion failed: {}", e)),
+                                    )?;
                             }
                             t = esigma;
                         }
 
-                        let (lx, ly, ldet) = cpu
-                            .akaze_derivatives(&current_f32)
-                            .map_err(|e| Error::FeatureError(format!("Derivatives failed: {}", e)))?;
+                        let (lx, ly, ldet) = cpu.akaze_derivatives(&current_f32).map_err(|e| {
+                            Error::FeatureError(format!("Derivatives failed: {}", e))
+                        })?;
 
                         evolution.push(EvolutionLevel {
                             image: current_f32.clone(),
@@ -329,9 +335,10 @@ impl Akaze {
 
         for curr in evolution {
             let (h, w) = curr.ldet.shape.hw();
-            let det_slice = curr.ldet.as_slice().map_err(|e| {
-                Error::FeatureError(format!("Failed to get det slice: {}", e))
-            })?;
+            let det_slice = curr
+                .ldet
+                .as_slice()
+                .map_err(|e| Error::FeatureError(format!("Failed to get det slice: {}", e)))?;
 
             let mut level_kps: Vec<KeyPoint> = (1..h - 1)
                 .into_par_iter()
@@ -405,12 +412,14 @@ impl Akaze {
         kp: &KeyPoint,
     ) -> Result<Option<Descriptor>> {
         let (h, w) = level.image.shape.hw();
-        let lx_slice = level.lx.as_slice().map_err(|e| {
-            Error::FeatureError(format!("Failed to get lx slice: {}", e))
-        })?;
-        let ly_slice = level.ly.as_slice().map_err(|e| {
-            Error::FeatureError(format!("Failed to get ly slice: {}", e))
-        })?;
+        let lx_slice = level
+            .lx
+            .as_slice()
+            .map_err(|e| Error::FeatureError(format!("Failed to get lx slice: {}", e)))?;
+        let ly_slice = level
+            .ly
+            .as_slice()
+            .map_err(|e| Error::FeatureError(format!("Failed to get ly slice: {}", e)))?;
 
         let mut desc = vec![0u8; 64];
         let mut float_desc = [0.0f32; 64];
@@ -500,9 +509,9 @@ fn to_cpu_f32<S: Storage<f32> + 'static>(
             _phantom: std::marker::PhantomData,
         };
         match ctx {
-            ComputeDevice::Gpu(gpu) => gpu_tensor.to_cpu_ctx(gpu).map_err(|e| {
-                Error::FeatureError(format!("Download from GPU failed: {}", e))
-            }),
+            ComputeDevice::Gpu(gpu) => gpu_tensor
+                .to_cpu_ctx(gpu)
+                .map_err(|e| Error::FeatureError(format!("Download from GPU failed: {}", e))),
             _ => Err(Error::FeatureError(
                 "GpuStorage with non-GPU context".into(),
             )),
@@ -516,9 +525,7 @@ fn to_cpu_f32<S: Storage<f32> + 'static>(
         };
         Ok(cpu_tensor)
     } else {
-        Err(Error::FeatureError(
-            "Unsupported storage type".into(),
-        ))
+        Err(Error::FeatureError("Unsupported storage type".into()))
     }
 }
 
@@ -547,7 +554,9 @@ mod tests {
         let device = ComputeDevice::Cpu(&cpu);
         let tensor = create_test_image();
         let akaze = Akaze::new(AkazeParams::default());
-        let kps = akaze.detect_ctx(&device, &tensor).expect("detect_ctx failed");
+        let kps = akaze
+            .detect_ctx(&device, &tensor)
+            .expect("detect_ctx failed");
         println!("Detected {} AKAZE keypoints", kps.len());
         assert!(kps.len() > 0);
     }

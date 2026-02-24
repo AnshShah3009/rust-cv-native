@@ -1,9 +1,9 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
-use std::time::{Duration, Instant};
-use cv_hal::DeviceId;
 use crate::Result;
+use cv_hal::DeviceId;
 use parking_lot::RwLock;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 const RESIZE_TIMEOUT_SECS: u64 = 30;
 
@@ -45,16 +45,19 @@ impl std::fmt::Debug for Executor {
 
 impl Executor {
     pub fn new(device_id: DeviceId, num_threads: usize, name: &str) -> Result<Self> {
-        Self::with_config(device_id, ExecutorConfig {
-            num_threads,
-            name: name.to_string(),
-            ..Default::default()
-        })
+        Self::with_config(
+            device_id,
+            ExecutorConfig {
+                num_threads,
+                name: name.to_string(),
+                ..Default::default()
+            },
+        )
     }
 
     pub fn with_config(device_id: DeviceId, config: ExecutorConfig) -> Result<Self> {
         let pool = Self::build_pool(&config)?;
-        
+
         Ok(Self {
             device_id,
             pool: RwLock::new(pool),
@@ -67,11 +70,11 @@ impl Executor {
     fn build_pool(config: &ExecutorConfig) -> Result<rayon::ThreadPool> {
         let name_clone = config.name.clone();
         let cores_clone = config.core_affinity.clone();
-        
+
         let mut builder = rayon::ThreadPoolBuilder::new()
             .num_threads(config.num_threads)
             .thread_name(move |idx| format!("{}-{}", name_clone, idx));
-        
+
         if let Some(cores) = cores_clone {
             builder = builder.start_handler(move |idx| {
                 if idx < cores.len() {
@@ -80,8 +83,9 @@ impl Executor {
                 }
             });
         }
-        
-        builder.build()
+
+        builder
+            .build()
             .map_err(|e| crate::Error::RuntimeError(format!("Failed to build thread pool: {}", e)))
     }
 
@@ -103,7 +107,7 @@ impl Executor {
     {
         let inflight = self.inflight_jobs.clone();
         inflight.fetch_add(1, Ordering::SeqCst);
-        
+
         let pool = self.pool.read();
         pool.spawn(move || {
             struct JobGuard(Arc<AtomicUsize>);
@@ -138,12 +142,18 @@ impl Executor {
     }
 
     pub fn resize(&self, new_num_threads: usize) -> Result<()> {
-        if self.resizing.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed).is_err() {
-            return Err(crate::Error::RuntimeError("Executor is already being resized".into()));
+        if self
+            .resizing
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_err()
+        {
+            return Err(crate::Error::RuntimeError(
+                "Executor is already being resized".into(),
+            ));
         }
 
         let result = self.do_resize(new_num_threads);
-        
+
         self.resizing.store(false, Ordering::Relaxed);
         result
     }
@@ -153,11 +163,11 @@ impl Executor {
         let start = Instant::now();
         let mut sleep_duration = Duration::from_micros(100);
         let max_sleep = Duration::from_millis(100);
-        
+
         while self.load() > 0 {
             if start.elapsed() > timeout {
                 return Err(crate::Error::RuntimeError(
-                    "Timeout waiting for jobs to complete during resize".into()
+                    "Timeout waiting for jobs to complete during resize".into(),
                 ));
             }
             std::thread::sleep(sleep_duration);
@@ -166,20 +176,26 @@ impl Executor {
 
         let mut config = self.config.write();
         config.num_threads = new_num_threads;
-        
+
         let new_pool = Self::build_pool(&config)?;
         *self.pool.write() = new_pool;
-        
+
         Ok(())
     }
 
     pub fn set_core_affinity(&self, cores: Vec<usize>) -> Result<()> {
-        if self.resizing.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed).is_err() {
-            return Err(crate::Error::RuntimeError("Executor is already being resized".into()));
+        if self
+            .resizing
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .is_err()
+        {
+            return Err(crate::Error::RuntimeError(
+                "Executor is already being resized".into(),
+            ));
         }
 
         let result = self.do_set_core_affinity(cores);
-        
+
         self.resizing.store(false, Ordering::Relaxed);
         result
     }
@@ -189,11 +205,11 @@ impl Executor {
         let start = Instant::now();
         let mut sleep_duration = Duration::from_micros(100);
         let max_sleep = Duration::from_millis(100);
-        
+
         while self.load() > 0 {
             if start.elapsed() > timeout {
                 return Err(crate::Error::RuntimeError(
-                    "Timeout waiting for jobs to complete during core affinity change".into()
+                    "Timeout waiting for jobs to complete during core affinity change".into(),
                 ));
             }
             std::thread::sleep(sleep_duration);
@@ -202,10 +218,10 @@ impl Executor {
 
         let mut config = self.config.write();
         config.core_affinity = Some(cores);
-        
+
         let new_pool = Self::build_pool(&config)?;
         *self.pool.write() = new_pool;
-        
+
         Ok(())
     }
 
@@ -216,10 +232,11 @@ impl Executor {
     {
         let inflight = self.inflight_jobs.clone();
         inflight.fetch_add(1, Ordering::SeqCst);
-        
-        let handle = tokio::runtime::Handle::try_current()
-            .map_err(|_| crate::Error::RuntimeError("No Tokio runtime available for spawn_async".into()))?;
-        
+
+        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+            crate::Error::RuntimeError("No Tokio runtime available for spawn_async".into())
+        })?;
+
         handle.spawn(async move {
             struct JobGuard(Arc<AtomicUsize>);
             impl Drop for JobGuard {
@@ -230,7 +247,7 @@ impl Executor {
             let _guard = JobGuard(inflight);
             f().await;
         });
-        
+
         Ok(())
     }
 
@@ -241,7 +258,7 @@ impl Executor {
     {
         let inflight = self.inflight_jobs.clone();
         inflight.fetch_add(1, Ordering::SeqCst);
-        
+
         let pool = self.pool.read();
         pool.install(|| {
             use rayon::prelude::*;
@@ -249,7 +266,7 @@ impl Executor {
                 f(item);
             });
         });
-        
+
         self.inflight_jobs.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -273,9 +290,7 @@ impl ExecutorPool {
     }
 
     pub fn best_executor(&self) -> Option<Arc<Executor>> {
-        self.executors.iter()
-            .min_by_key(|e| e.load())
-            .cloned()
+        self.executors.iter().min_by_key(|e| e.load()).cloned()
     }
 
     pub fn executor_count(&self) -> usize {
@@ -287,7 +302,8 @@ impl ExecutorPool {
     }
 
     pub fn least_loaded(&self) -> Option<(Arc<Executor>, usize)> {
-        self.executors.iter()
+        self.executors
+            .iter()
             .map(|e| (e.clone(), e.load()))
             .min_by_key(|(_, load)| *load)
     }
@@ -310,12 +326,12 @@ mod tests {
     fn test_executor_spawn() {
         let executor = Executor::new(cv_hal::DeviceId(0), 2, "test").unwrap();
         let counter = Arc::new(AtomicUsize::new(0));
-        
+
         let counter_clone = counter.clone();
         executor.spawn(move || {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         });
-        
+
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
@@ -323,15 +339,15 @@ mod tests {
     #[test]
     fn test_executor_pool() {
         let mut pool = ExecutorPool::new(cv_hal::DeviceId(0));
-        
+
         let e1 = Arc::new(Executor::new(cv_hal::DeviceId(0), 2, "pool-1").unwrap());
         let e2 = Arc::new(Executor::new(cv_hal::DeviceId(0), 2, "pool-2").unwrap());
-        
+
         pool.add_executor(e1.clone());
         pool.add_executor(e2.clone());
-        
+
         assert_eq!(pool.executor_count(), 2);
-        
+
         let best = pool.best_executor().unwrap();
         assert_eq!(best.load(), 0);
     }

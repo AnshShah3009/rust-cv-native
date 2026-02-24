@@ -2,8 +2,8 @@
 //!
 //! LBD is a robust line descriptor that uses local gradient information.
 
-use image::GrayImage;
 use crate::line_matcher::LineDescriptor;
+use image::GrayImage;
 use rayon::prelude::*;
 
 pub struct LbdParams {
@@ -29,63 +29,79 @@ impl Lbd {
         Self { _params: params }
     }
 
-    pub fn compute(&self, image: &GrayImage, segments: &[crate::hough::LineSegment]) -> Vec<LineDescriptor> {
+    pub fn compute(
+        &self,
+        image: &GrayImage,
+        segments: &[crate::hough::LineSegment],
+    ) -> Vec<LineDescriptor> {
         // Simplified LBD implementation
         // For each segment, compute a descriptor based on orthogonal gradients
-        
+
         let (gx, gy) = cv_imgproc::sobel(image);
         let gx_raw = gx.as_raw();
         let gy_raw = gy.as_raw();
         let (w, h) = image.dimensions();
 
-        segments.par_iter().map(|seg| {
-            let mut packed = [0u8; 32]; // 256 bits directly packed
-            
-            // Vector of the line
-            let dx = seg.x2 - seg.x1;
-            let dy = seg.y2 - seg.y1;
-            let len = (dx*dx + dy*dy).sqrt();
-            
-            if len > 1e-5 {
-                // Orthogonal vector (normal)
-                let nx = -dy / len;
-                let ny = dx / len;
-                
-                // Sample 32 points along the line, and at each point 8 bits of orthogonal comparison
-                for i in 0..32 {
-                    let t = i as f32 / 31.0;
-                    let lx = seg.x1 + t * dx;
-                    let ly = seg.y1 + t * dy;
-                    
-                    let mut byte_val = 0u8;
-                    for bit in 0..8 {
-                        let offset = (bit as f32 - 3.5) * 1.5;
-                        let x_p = (lx + nx * offset).round() as i32;
-                        let y_p = (ly + ny * offset).round() as i32;
-                        let x_n = (lx - nx * offset).round() as i32;
-                        let y_n = (ly - ny * offset).round() as i32;
-                        
-                        if x_p >= 0 && x_p < w as i32 && y_p >= 0 && y_p < h as i32 &&
-                           x_n >= 0 && x_n < w as i32 && y_n >= 0 && y_n < h as i32 {
-                            let idx_p = y_p as usize * w as usize + x_p as usize;
-                            let idx_n = y_n as usize * w as usize + x_n as usize;
-                            
-                            let g_p = (gx_raw[idx_p] as f32).abs() + (gy_raw[idx_p] as f32).abs();
-                            let g_n = (gx_raw[idx_n] as f32).abs() + (gy_raw[idx_n] as f32).abs();
-                            
-                            if g_p > g_n {
-                                byte_val |= 1 << bit;
+        segments
+            .par_iter()
+            .map(|seg| {
+                let mut packed = [0u8; 32]; // 256 bits directly packed
+
+                // Vector of the line
+                let dx = seg.x2 - seg.x1;
+                let dy = seg.y2 - seg.y1;
+                let len = (dx * dx + dy * dy).sqrt();
+
+                if len > 1e-5 {
+                    // Orthogonal vector (normal)
+                    let nx = -dy / len;
+                    let ny = dx / len;
+
+                    // Sample 32 points along the line, and at each point 8 bits of orthogonal comparison
+                    for i in 0..32 {
+                        let t = i as f32 / 31.0;
+                        let lx = seg.x1 + t * dx;
+                        let ly = seg.y1 + t * dy;
+
+                        let mut byte_val = 0u8;
+                        for bit in 0..8 {
+                            let offset = (bit as f32 - 3.5) * 1.5;
+                            let x_p = (lx + nx * offset).round() as i32;
+                            let y_p = (ly + ny * offset).round() as i32;
+                            let x_n = (lx - nx * offset).round() as i32;
+                            let y_n = (ly - ny * offset).round() as i32;
+
+                            if x_p >= 0
+                                && x_p < w as i32
+                                && y_p >= 0
+                                && y_p < h as i32
+                                && x_n >= 0
+                                && x_n < w as i32
+                                && y_n >= 0
+                                && y_n < h as i32
+                            {
+                                let idx_p = y_p as usize * w as usize + x_p as usize;
+                                let idx_n = y_n as usize * w as usize + x_n as usize;
+
+                                let g_p =
+                                    (gx_raw[idx_p] as f32).abs() + (gy_raw[idx_p] as f32).abs();
+                                let g_n =
+                                    (gx_raw[idx_n] as f32).abs() + (gy_raw[idx_n] as f32).abs();
+
+                                if g_p > g_n {
+                                    byte_val |= 1 << bit;
+                                }
                             }
                         }
+                        packed[i] = byte_val;
                     }
-                    packed[i] = byte_val;
                 }
-            }
-            
-            LineDescriptor {
-                data: packed.to_vec(),
-                segment: *seg,
-            }
-        }).collect()
+
+                LineDescriptor {
+                    data: packed.to_vec(),
+                    segment: *seg,
+                }
+            })
+            .collect()
     }
 }

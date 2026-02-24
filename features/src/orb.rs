@@ -7,7 +7,7 @@
 
 use crate::descriptor::{Descriptor, DescriptorExtractor, Descriptors};
 use crate::fast::fast_detect;
-use cv_core::{storage::Storage, KeyPoint, KeyPoints, Tensor, Error};
+use cv_core::{storage::Storage, Error, KeyPoint, KeyPoints, Tensor};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::tensor_ext::TensorToCpu;
 use image::GrayImage;
@@ -227,9 +227,9 @@ fn extract_keypoints_from_score_map<S: Storage<u8> + 'static>(
                 ))
             }
         };
-        input_gpu.to_cpu_ctx(gpu_ctx).map_err(|e| {
-            Error::FeatureError(format!("GPU download failed: {}", e))
-        })?
+        input_gpu
+            .to_cpu_ctx(gpu_ctx)
+            .map_err(|e| Error::FeatureError(format!("GPU download failed: {}", e)))?
     } else if let Some(cpu_storage) = score_map.storage.as_any().downcast_ref::<CpuStorage<u8>>() {
         let input_cpu = Tensor {
             storage: cpu_storage.clone(),
@@ -239,9 +239,7 @@ fn extract_keypoints_from_score_map<S: Storage<u8> + 'static>(
         };
         input_cpu.clone()
     } else {
-        return Err(Error::FeatureError(
-            "Unsupported storage type".into(),
-        ));
+        return Err(Error::FeatureError("Unsupported storage type".into()));
     };
 
     let slice = cpu_tensor

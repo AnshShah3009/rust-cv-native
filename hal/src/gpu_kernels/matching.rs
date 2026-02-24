@@ -1,7 +1,7 @@
-use cv_core::{Tensor, Matches, FeatureMatch};
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
+use cv_core::{FeatureMatch, Matches, Tensor};
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
@@ -24,7 +24,10 @@ pub fn match_descriptors(
     let d_size = query.shape.width;
 
     if q_len == 0 || t_len == 0 {
-        return Ok(Matches { matches: Vec::new(), mask: None });
+        return Ok(Matches {
+            matches: Vec::new(),
+            mask: None,
+        });
     }
 
     // Output buffer: one vec4<f32> per query point
@@ -43,11 +46,13 @@ pub fn match_descriptors(
         ratio_threshold,
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Matching Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Matching Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/matching.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -56,16 +61,33 @@ pub fn match_descriptors(
         label: Some("Matching Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: query.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: train.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: output_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: query.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: train.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: output_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         let x = (q_len as u32 + 63) / 64;
@@ -74,13 +96,14 @@ pub fn match_descriptors(
     ctx.submit(encoder);
 
     // Read back and filter by ratio test on host
-    let raw_matches: Vec<[f32; 4]> = pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer(
-        ctx.device.clone(),
-        &ctx.queue,
-        &output_buffer,
-        0,
-        byte_size as usize,
-    ))?;
+    let raw_matches: Vec<[f32; 4]> =
+        pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer(
+            ctx.device.clone(),
+            &ctx.queue,
+            &output_buffer,
+            0,
+            byte_size as usize,
+        ))?;
 
     let mut matches = Vec::new();
     for (i, res) in raw_matches.iter().enumerate() {
@@ -93,5 +116,8 @@ pub fn match_descriptors(
         }
     }
 
-    Ok(Matches { matches, mask: None })
+    Ok(Matches {
+        matches,
+        mask: None,
+    })
 }

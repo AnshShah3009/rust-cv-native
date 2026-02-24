@@ -442,9 +442,9 @@ impl HomographySolver {
         );
 
         // 3. Denormalization: H = T2^-1 * H_norm * T1
-        let t2_inv = t2
-            .try_inverse()
-            .ok_or_else(|| cv_core::Error::AlgorithmError("Singular normalization matrix".into()))?;
+        let t2_inv = t2.try_inverse().ok_or_else(|| {
+            cv_core::Error::AlgorithmError("Singular normalization matrix".into())
+        })?;
         let h = t2_inv * h_norm * t1;
 
         // Normalize such that h[2,2] = 1

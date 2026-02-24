@@ -239,9 +239,9 @@ impl Tracker for MeanShiftTracker {
     }
 
     fn update(&mut self, frame: &GrayImage) -> Result<(u32, u32, u32, u32)> {
-        let (mut cx, mut cy) = self.last_position.ok_or_else(|| {
-            Error::RuntimeError("Tracker not initialized".to_string())
-        })?;
+        let (mut cx, mut cy) = self
+            .last_position
+            .ok_or_else(|| Error::RuntimeError("Tracker not initialized".to_string()))?;
 
         for _ in 0..self.max_iterations {
             let (new_cx, new_cy) = self.compute_mean_shift(frame, cx, cy);

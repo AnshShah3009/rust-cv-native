@@ -362,16 +362,32 @@ mod tests {
     #[test]
     fn otsu_bimodal_picks_correct_threshold() {
         let mut img = GrayImage::new(20, 1);
-        for x in 0..10 { img.put_pixel(x, 0, Luma([50])); }
-        for x in 10..20 { img.put_pixel(x, 0, Luma([200])); }
+        for x in 0..10 {
+            img.put_pixel(x, 0, Luma([50]));
+        }
+        for x in 10..20 {
+            img.put_pixel(x, 0, Luma([200]));
+        }
         let (thresh, result) = threshold_otsu(&img, 255, ThresholdType::Binary);
         // Verify the result properly segments the bimodal histogram
-        assert!(thresh >= 50 && thresh <= 200, "threshold should be in reasonable range: {}", thresh);
+        assert!(
+            thresh >= 50 && thresh <= 200,
+            "threshold should be in reasonable range: {}",
+            thresh
+        );
         // Check segmentation correctness - lower group should map to 0, upper to 255
         let mut lower_count_zero = 0;
         let mut upper_count_255 = 0;
-        for x in 0..10 { if result.get_pixel(x, 0)[0] == 0 { lower_count_zero += 1; } }
-        for x in 10..20 { if result.get_pixel(x, 0)[0] == 255 { upper_count_255 += 1; } }
+        for x in 0..10 {
+            if result.get_pixel(x, 0)[0] == 0 {
+                lower_count_zero += 1;
+            }
+        }
+        for x in 10..20 {
+            if result.get_pixel(x, 0)[0] == 255 {
+                upper_count_255 += 1;
+            }
+        }
         assert!(lower_count_zero >= 5, "most lower pixels should be 0");
         assert!(upper_count_255 >= 5, "most upper pixels should be 255");
     }
@@ -386,14 +402,28 @@ mod tests {
     #[test]
     fn adaptive_mean_correct_dimensions() {
         let img = GrayImage::new(20, 20);
-        let result = adaptive_threshold(&img, 255, AdaptiveMethod::MeanC, ThresholdType::Binary, 5, 0.0);
+        let result = adaptive_threshold(
+            &img,
+            255,
+            AdaptiveMethod::MeanC,
+            ThresholdType::Binary,
+            5,
+            0.0,
+        );
         assert_eq!((result.width(), result.height()), (20, 20));
     }
 
     #[test]
     fn adaptive_gaussian_correct_dimensions() {
         let img = GrayImage::new(20, 20);
-        let result = adaptive_threshold(&img, 255, AdaptiveMethod::GaussianC, ThresholdType::Binary, 5, 0.0);
+        let result = adaptive_threshold(
+            &img,
+            255,
+            AdaptiveMethod::GaussianC,
+            ThresholdType::Binary,
+            5,
+            0.0,
+        );
         assert_eq!((result.width(), result.height()), (20, 20));
     }
 }

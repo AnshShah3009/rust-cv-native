@@ -1,4 +1,4 @@
-use cv_core::geometry::{PinholeModel, CameraIntrinsics, Distortion, CameraModel};
+use cv_core::geometry::{CameraIntrinsics, CameraModel, Distortion, PinholeModel};
 use nalgebra::{Point2, Point3};
 
 #[test]
@@ -35,8 +35,8 @@ fn test_pinhole_distortion() {
     // Radial = 1 + 0.1*0.08 + 0.01*0.0064 = 1.008064
     // Distorted x = 0.2 * 1.008064 = 0.2016128
     // Distorted pixel x = 0.2016128 * 500 + 320 = 420.8064
-    
-    assert!(p2.x > 420.5); 
+
+    assert!(p2.x > 420.5);
 
     let p3_back = model.unproject(&p2, 5.0);
     assert!((p3_back.x - 1.0).abs() < 1e-3); // Iterative removal check

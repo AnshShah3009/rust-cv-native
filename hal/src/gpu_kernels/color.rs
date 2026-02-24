@@ -1,11 +1,11 @@
-use cv_core::{Tensor, TensorShape};
+use crate::context::ColorConversion;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
-use crate::context::ColorConversion;
 use crate::Result;
-use wgpu::util::DeviceExt;
+use cv_core::{Tensor, TensorShape};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -21,7 +21,7 @@ pub fn cvt_color(
 ) -> Result<Tensor<u8, GpuStorage<u8>>> {
     let (h, w) = input.shape.hw();
     let num_pixels = h * w;
-    
+
     let (out_channels, code_int) = match code {
         ColorConversion::RgbToGray => (1, 0),
         ColorConversion::BgrToGray => (1, 1),
@@ -46,11 +46,13 @@ pub fn cvt_color(
         code: code_int,
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Color Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Color Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/color_cvt.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -59,15 +61,29 @@ pub fn cvt_color(
         label: Some("Color Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: output_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: output_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         let x = ((num_pixels as u32 + 3) / 4 + 63) / 64;

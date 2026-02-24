@@ -5,8 +5,8 @@
 #![allow(deprecated)]
 
 use crate::{DisparityMap, StereoParams};
-use nalgebra::{Point2, Point3};
 use cv_core::{project_point, CameraIntrinsics, PointCloudf64 as PointCloud};
+use nalgebra::{Point2, Point3};
 
 /// Compute depth map from disparity map
 pub fn disparity_to_depth(disparity: &DisparityMap, params: &StereoParams) -> Vec<Option<f64>> {
@@ -71,16 +71,27 @@ pub fn disparity_to_pointcloud(
 }
 
 /// Reproject 3D point to image coordinates
-pub fn project_point_to_image(point: &Point3<f64>, params: &StereoParams) -> crate::Result<Point2<f64>> {
+pub fn project_point_to_image(
+    point: &Point3<f64>,
+    params: &StereoParams,
+) -> crate::Result<Point2<f64>> {
     // Construct CameraIntrinsics from stereo parameters
     // For stereo, fx=fy=focal_length, and width/height are unused in projection
-    let intrinsics = CameraIntrinsics::new(params.focal_length, params.focal_length, params.cx, params.cy, 0, 0);
+    let intrinsics = CameraIntrinsics::new(
+        params.focal_length,
+        params.focal_length,
+        params.cx,
+        params.cy,
+        0,
+        0,
+    );
 
     // Delegate to unified projection function (no extrinsics, no distortion for stereo)
-    project_point(point, &intrinsics, None, None)
-        .ok_or_else(|| crate::Error::InvalidInput(
+    project_point(point, &intrinsics, None, None).ok_or_else(|| {
+        crate::Error::InvalidInput(
             "Point depth (z) must be non-zero to project to image".to_string(),
-        ))
+        )
+    })
 }
 
 /// Compute 3D coordinates from disparity
@@ -127,9 +138,9 @@ pub fn filter_pointcloud_by_depth(
 
     let mut filtered = PointCloud::new(filtered_points);
     if !filtered_colors.is_empty() {
-        filtered = filtered.with_colors(filtered_colors).map_err(|e| {
-            crate::Error::RuntimeError(format!("Core error: {}", e))
-        })?;
+        filtered = filtered
+            .with_colors(filtered_colors)
+            .map_err(|e| crate::Error::RuntimeError(format!("Core error: {}", e)))?;
     }
     Ok(filtered)
 }

@@ -1,12 +1,12 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use tokio::runtime::Runtime;
 use cv_stereo::BlockMatcher;
 use image::GrayImage;
+use tokio::runtime::Runtime;
 
 fn benchmark_async_bridge(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let (left, right) = (GrayImage::new(256, 256), GrayImage::new(256, 256));
-    
+
     let mut group = c.benchmark_group("async_bridge");
     group.sample_size(10); // Reduce sample size for speed
 
@@ -14,7 +14,9 @@ fn benchmark_async_bridge(c: &mut Criterion) {
     group.bench_function("sync_direct", |b| {
         b.iter(|| {
             let matcher = BlockMatcher::new();
-            matcher.compute(black_box(&left), black_box(&right)).unwrap();
+            matcher
+                .compute(black_box(&left), black_box(&right))
+                .unwrap();
         })
     });
 
@@ -28,7 +30,9 @@ fn benchmark_async_bridge(c: &mut Criterion) {
                     let matcher = BlockMatcher::new();
                     matcher.compute(&l, &r).unwrap()
                 }
-            }).await.unwrap()
+            })
+            .await
+            .unwrap()
         })
     });
 

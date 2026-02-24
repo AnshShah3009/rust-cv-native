@@ -271,7 +271,9 @@ pub fn stereo_calibrate_from_chessboard_files_with_options<P: AsRef<Path>>(
         )));
     }
     let dims = expected_dims.ok_or_else(|| {
-        cv_core::Error::CalibrationError("no readable stereo pairs in provided file lists".to_string())
+        cv_core::Error::CalibrationError(
+            "no readable stereo pairs in provided file lists".to_string(),
+        )
     })?;
 
     let calib = stereo_calibrate_planar_with_options(
@@ -305,8 +307,8 @@ pub fn stereo_rectify_matrices(
 ) -> Result<StereoRectifyMatrices> {
     let left_rot_mat = left_extrinsics.rotation_matrix();
     let rel_r = left_rot_mat.transpose() * right_extrinsics.rotation_matrix();
-    let rel_t = left_rot_mat.transpose()
-        * (right_extrinsics.translation - left_extrinsics.translation);
+    let rel_t =
+        left_rot_mat.transpose() * (right_extrinsics.translation - left_extrinsics.translation);
     let baseline = rel_t.norm();
     if baseline <= 1e-12 {
         return Err(cv_core::Error::CalibrationError(

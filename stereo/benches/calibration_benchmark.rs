@@ -6,9 +6,7 @@ fn generate_synthetic_calibration_data() -> (Vec<Vec<Point3<f64>>>, Vec<Vec<Poin
     let pattern_size = (7, 6);
     let board = (0..pattern_size.1)
         .flat_map(|y| {
-            (0..pattern_size.0).map(move |x| {
-                Point3::new(x as f64 * 0.04, y as f64 * 0.04, 0.0)
-            })
+            (0..pattern_size.0).map(move |x| Point3::new(x as f64 * 0.04, y as f64 * 0.04, 0.0))
         })
         .collect::<Vec<_>>();
 

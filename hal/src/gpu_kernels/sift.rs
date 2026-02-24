@@ -1,10 +1,10 @@
-use cv_core::Tensor;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
-use wgpu::util::DeviceExt;
+use cv_core::Tensor;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -26,7 +26,7 @@ pub fn sift_extrema(
     let (h, w) = dog_curr.shape.hw();
     let out_len = w * h;
     let byte_size = ((out_len + 3) / 4 * 4) as u64;
-    
+
     let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("SIFT Extrema Output"),
         size: byte_size,
@@ -41,11 +41,13 @@ pub fn sift_extrema(
         edge_threshold,
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("SIFT Extrema Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("SIFT Extrema Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/sift_extrema.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -54,17 +56,37 @@ pub fn sift_extrema(
         label: Some("SIFT Extrema Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: dog_prev.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: dog_curr.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: dog_next.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: output_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 4, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: dog_prev.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: dog_curr.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: dog_next.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: output_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         let x = ((w as u32 + 3) / 4 + 15) / 16;

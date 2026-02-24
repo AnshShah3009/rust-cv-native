@@ -1,18 +1,18 @@
-mod graph;
 mod allocator;
-mod handle;
 mod fusion;
+mod graph;
+mod handle;
 
-pub use graph::{ExecutionGraph, NodeId, NodeDependency};
-pub use allocator::{TransientBufferPool, BufferAlloc};
-pub use handle::{AsyncPipelineHandle, PipelineResult, ExecutionEvent};
-pub use fusion::{KernelFuser, FusionPattern, FusedKernel};
+pub use allocator::{BufferAlloc, TransientBufferPool};
+pub use fusion::{FusedKernel, FusionPattern, KernelFuser};
+pub use graph::{ExecutionGraph, NodeDependency, NodeId};
+pub use handle::{AsyncPipelineHandle, ExecutionEvent, PipelineResult};
 
-use cv_hal::DeviceId;
-use cv_hal::context::ComputeContext;
-use crate::Result;
 use crate::device_registry::registry;
 use crate::orchestrator::RuntimeRunner;
+use crate::Result;
+use cv_hal::context::ComputeContext;
+use cv_hal::DeviceId;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -37,21 +37,26 @@ pub enum PipelineNode {
 impl std::fmt::Debug for PipelineNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PipelineNode::Kernel { name, inputs, outputs, params } => {
-                f.debug_struct("Kernel")
-                    .field("name", name)
-                    .field("inputs", inputs)
-                    .field("outputs", outputs)
-                    .field("params", &format!("[{} bytes]", params.len()))
-                    .finish()
-            }
-            PipelineNode::CpuOp { inputs, outputs, .. } => {
-                f.debug_struct("CpuOp")
-                    .field("inputs", inputs)
-                    .field("outputs", outputs)
-                    .field("op", &"<function>")
-                    .finish()
-            }
+            PipelineNode::Kernel {
+                name,
+                inputs,
+                outputs,
+                params,
+            } => f
+                .debug_struct("Kernel")
+                .field("name", name)
+                .field("inputs", inputs)
+                .field("outputs", outputs)
+                .field("params", &format!("[{} bytes]", params.len()))
+                .finish(),
+            PipelineNode::CpuOp {
+                inputs, outputs, ..
+            } => f
+                .debug_struct("CpuOp")
+                .field("inputs", inputs)
+                .field("outputs", outputs)
+                .field("op", &"<function>")
+                .finish(),
             PipelineNode::Barrier => write!(f, "Barrier"),
         }
     }
@@ -60,21 +65,26 @@ impl std::fmt::Debug for PipelineNode {
 impl Clone for PipelineNode {
     fn clone(&self) -> Self {
         match self {
-            PipelineNode::Kernel { name, inputs, outputs, params } => {
-                PipelineNode::Kernel {
-                    name: name.clone(),
-                    inputs: inputs.clone(),
-                    outputs: outputs.clone(),
-                    params: params.clone(),
-                }
-            }
-            PipelineNode::CpuOp { inputs, outputs, op } => {
-                PipelineNode::CpuOp {
-                    inputs: inputs.clone(),
-                    outputs: outputs.clone(),
-                    op: op.clone(),
-                }
-            }
+            PipelineNode::Kernel {
+                name,
+                inputs,
+                outputs,
+                params,
+            } => PipelineNode::Kernel {
+                name: name.clone(),
+                inputs: inputs.clone(),
+                outputs: outputs.clone(),
+                params: params.clone(),
+            },
+            PipelineNode::CpuOp {
+                inputs,
+                outputs,
+                op,
+            } => PipelineNode::CpuOp {
+                inputs: inputs.clone(),
+                outputs: outputs.clone(),
+                op: op.clone(),
+            },
             PipelineNode::Barrier => PipelineNode::Barrier,
         }
     }
@@ -145,31 +155,44 @@ impl Pipeline {
     }
 
     pub fn execute(self, runner: &RuntimeRunner) -> Result<()> {
-        let graph = self.execution_graph.as_ref()
-            .ok_or_else(|| crate::Error::RuntimeError("Pipeline not built. Call .build() first.".into()))?;
-        
+        let graph = self.execution_graph.as_ref().ok_or_else(|| {
+            crate::Error::RuntimeError("Pipeline not built. Call .build() first.".into())
+        })?;
+
         let device_id = self.preferred_device.unwrap_or_else(|| runner.device_id());
         let reg = registry()?;
-        let device_runtime = reg.get_device(device_id)
-            .ok_or_else(|| crate::Error::RuntimeError(format!("Device {:?} not found", device_id)))?;
-        
+        let device_runtime = reg.get_device(device_id).ok_or_else(|| {
+            crate::Error::RuntimeError(format!("Device {:?} not found", device_id))
+        })?;
+
         let allocator = TransientBufferPool::new(device_id);
-        
+
         for &node_id in &graph.topology_order {
             match &self.nodes[node_id.0] {
-                PipelineNode::Kernel { name, inputs, outputs, params } => {
-                    let _input_buffers: Vec<_> = inputs.iter()
+                PipelineNode::Kernel {
+                    name,
+                    inputs,
+                    outputs,
+                    params,
+                } => {
+                    let _input_buffers: Vec<_> = inputs
+                        .iter()
                         .filter_map(|&id| allocator.get_buffer(id))
                         .collect();
-                    
-                    let output_sizes: Vec<_> = outputs.iter()
+
+                    let output_sizes: Vec<_> = outputs
+                        .iter()
                         .filter_map(|&id| self.buffers.get(&id).copied())
                         .collect();
 
                     #[cfg(feature = "tracing")]
-                    tracing::debug!("Executing kernel: {} ({} inputs, {} outputs)", 
-                        name, input_buffers.len(), output_sizes.len());
-                    
+                    tracing::debug!(
+                        "Executing kernel: {} ({} inputs, {} outputs)",
+                        name,
+                        input_buffers.len(),
+                        output_sizes.len()
+                    );
+
                     if !outputs.is_empty() {
                         for (i, &output_id) in outputs.iter().enumerate() {
                             if i < output_sizes.len() {
@@ -177,17 +200,23 @@ impl Pipeline {
                             }
                         }
                     }
-                    
+
                     let _: (_, _, _) = (name, params, device_runtime.as_ref());
                 }
-                PipelineNode::CpuOp { inputs, outputs, op } => {
-                    let input_data: Vec<Vec<u8>> = inputs.iter()
+                PipelineNode::CpuOp {
+                    inputs,
+                    outputs,
+                    op,
+                } => {
+                    let input_data: Vec<Vec<u8>> = inputs
+                        .iter()
                         .filter_map(|&id| allocator.get_buffer_data(id))
                         .collect();
-                    
-                    let input_slices: Vec<&[u8]> = input_data.iter().map(|v| v.as_slice()).collect();
+
+                    let input_slices: Vec<&[u8]> =
+                        input_data.iter().map(|v| v.as_slice()).collect();
                     let results = op(&input_slices);
-                    
+
                     for (i, &output_id) in outputs.iter().enumerate() {
                         if i < results.len() {
                             if let Some(size) = self.buffers.get(&output_id) {
@@ -196,17 +225,15 @@ impl Pipeline {
                         }
                     }
                 }
-                PipelineNode::Barrier => {
-                    match device_runtime.context() {
-                        crate::device_registry::BackendContext::Gpu(gpu_ctx) => {
-                            let _ = gpu_ctx.wait_idle();
-                        }
-                        _ => {}
+                PipelineNode::Barrier => match device_runtime.context() {
+                    crate::device_registry::BackendContext::Gpu(gpu_ctx) => {
+                        let _ = gpu_ctx.wait_idle();
                     }
-                }
+                    _ => {}
+                },
             }
         }
-        
+
         Ok(())
     }
 
@@ -215,7 +242,7 @@ impl Pipeline {
         let graph = self.execution_graph.clone();
         let buffers = self.buffers.clone();
         let nodes = self.nodes.clone();
-        
+
         handle::spawn_pipeline_execution(nodes, buffers, graph, device_id)
     }
 

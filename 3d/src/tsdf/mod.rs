@@ -4,11 +4,11 @@
 //! Based on "KinectFusion: Real-Time Dense Surface Mapping and Tracking" by Newcombe et al.
 
 use nalgebra::{Matrix4, Point3, Vector3};
-use std::collections::HashMap;
 use rayon::prelude::*;
+use std::collections::HashMap;
 
-use cv_runtime::orchestrator::RuntimeRunner;
 use cv_hal::compute::ComputeDevice;
+use cv_runtime::orchestrator::RuntimeRunner;
 
 /// Camera intrinsics
 #[derive(Debug, Clone, Copy)]
@@ -102,7 +102,15 @@ impl TSDFVolume {
         height: usize,
     ) {
         if let Ok(runner) = cv_runtime::best_runner() {
-            self.integrate_ctx(depth_image, color_image, intrinsics, extrinsics, width, height, &runner);
+            self.integrate_ctx(
+                depth_image,
+                color_image,
+                intrinsics,
+                extrinsics,
+                width,
+                height,
+                &runner,
+            );
         }
     }
 
@@ -169,14 +177,16 @@ impl TSDFVolume {
 
                             // Calculate TSDF value
                             let dist = (voxel_pos - point_world).norm();
-                            let sdf =
-                                if voxel_pos.coords.dot(&ray_dir) > point_world.coords.dot(&ray_dir) {
-                                    dist // Behind surface
-                                } else {
-                                    -dist // In front of surface
-                                };
+                            let sdf = if voxel_pos.coords.dot(&ray_dir)
+                                > point_world.coords.dot(&ray_dir)
+                            {
+                                dist // Behind surface
+                            } else {
+                                -dist // In front of surface
+                            };
 
-                            let tsdf = sdf.clamp(-self.truncation_distance, self.truncation_distance)
+                            let tsdf = sdf
+                                .clamp(-self.truncation_distance, self.truncation_distance)
                                 / self.truncation_distance;
 
                             local_updates.push((voxel_pos, tsdf, color));

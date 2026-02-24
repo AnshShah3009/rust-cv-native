@@ -1,13 +1,13 @@
 #![allow(deprecated)]
 
 use crate::{DisparityMap, Result, StereoMatcher, StereoMatcherCtx};
+use cv_core::{storage::Storage, Error, Tensor};
+use cv_hal::compute::ComputeDevice;
+use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
+use cv_runtime::orchestrator::RuntimeRunner;
 use image::GrayImage;
 use rayon::prelude::*;
 use wide::*;
-use cv_runtime::orchestrator::RuntimeRunner;
-use cv_hal::compute::ComputeDevice;
-use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
-use cv_core::{Tensor, storage::Storage, Error};
 
 /// Block matching stereo matcher
 pub struct BlockMatcher {
@@ -48,7 +48,12 @@ impl StereoMatcher for BlockMatcher {
 }
 
 impl StereoMatcherCtx for BlockMatcher {
-    fn compute_ctx(&self, left: &GrayImage, right: &GrayImage, group: &RuntimeRunner) -> Result<DisparityMap> {
+    fn compute_ctx(
+        &self,
+        left: &GrayImage,
+        right: &GrayImage,
+        group: &RuntimeRunner,
+    ) -> Result<DisparityMap> {
         if left.width() != right.width() || left.height() != right.height() {
             return Err(Error::DimensionMismatch(
                 "Left and right images must have the same dimensions".to_string(),
@@ -89,8 +94,14 @@ impl StereoMatcherCtx for BlockMatcher {
                         return;
                     }
                     for x in half_block..width - half_block {
-                        let best_disparity =
-                            self.find_best_disparity(left_data, right_data, width_usize, x, y, half_block);
+                        let best_disparity = self.find_best_disparity(
+                            left_data,
+                            right_data,
+                            width_usize,
+                            x,
+                            y,
+                            half_block,
+                        );
                         row[x as usize] = best_disparity as f32;
                     }
                 });
@@ -121,27 +132,39 @@ impl BlockMatcher {
         self
     }
 
-    fn compute_gpu(&self, gpu: &cv_hal::gpu::GpuContext, left: &GrayImage, right: &GrayImage) -> cv_hal::Result<DisparityMap> {
-        use cv_hal::context::{ComputeContext, StereoMatchParams, StereoMatchMethod};
-        
-        let l_tensor = cv_core::CpuTensor::from_vec(left.as_raw().to_vec(), cv_core::TensorShape::new(1, left.height() as usize, left.width() as usize))
-            .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
-        let r_tensor = cv_core::CpuTensor::from_vec(right.as_raw().to_vec(), cv_core::TensorShape::new(1, right.height() as usize, right.width() as usize))
-            .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
-            
+    fn compute_gpu(
+        &self,
+        gpu: &cv_hal::gpu::GpuContext,
+        left: &GrayImage,
+        right: &GrayImage,
+    ) -> cv_hal::Result<DisparityMap> {
+        use cv_hal::context::{ComputeContext, StereoMatchMethod, StereoMatchParams};
+
+        let l_tensor = cv_core::CpuTensor::from_vec(
+            left.as_raw().to_vec(),
+            cv_core::TensorShape::new(1, left.height() as usize, left.width() as usize),
+        )
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+        let r_tensor = cv_core::CpuTensor::from_vec(
+            right.as_raw().to_vec(),
+            cv_core::TensorShape::new(1, right.height() as usize, right.width() as usize),
+        )
+        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+
         let l_gpu = l_tensor.to_gpu_ctx(gpu)?;
         let r_gpu = r_tensor.to_gpu_ctx(gpu)?;
-        
+
         let params = StereoMatchParams {
             method: StereoMatchMethod::BlockMatching,
             min_disparity: self.min_disparity,
             num_disparities: self.max_disparity - self.min_disparity,
             block_size: self.block_size,
         };
-        
-        let res_gpu: Tensor<f32, cv_hal::storage::GpuStorage<f32>> = gpu.stereo_match(&l_gpu, &r_gpu, &params)?;
+
+        let res_gpu: Tensor<f32, cv_hal::storage::GpuStorage<f32>> =
+            gpu.stereo_match(&l_gpu, &r_gpu, &params)?;
         let res_cpu = res_gpu.to_cpu_ctx(gpu)?;
-        
+
         Ok(DisparityMap {
             data: res_cpu.storage.as_slice().unwrap().to_vec(),
             width: left.width(),
@@ -172,7 +195,8 @@ impl BlockMatcher {
         let mut second_best_cost = f32::INFINITY;
 
         for d in min_valid..=max_valid {
-            let cost = self.compute_matching_cost(left_data, right_data, width, x, y, d, half_block);
+            let cost =
+                self.compute_matching_cost(left_data, right_data, width, x, y, d, half_block);
 
             if cost < best_cost {
                 second_best_cost = best_cost;
@@ -203,8 +227,12 @@ impl BlockMatcher {
         half_block: i32,
     ) -> f32 {
         match self.metric {
-            MatchingMetric::SAD => self.compute_sad_simd(left_data, right_data, width, x, y, disparity, half_block),
-            MatchingMetric::SSD => self.compute_ssd_simd(left_data, right_data, width, x, y, disparity, half_block),
+            MatchingMetric::SAD => {
+                self.compute_sad_simd(left_data, right_data, width, x, y, disparity, half_block)
+            }
+            MatchingMetric::SSD => {
+                self.compute_ssd_simd(left_data, right_data, width, x, y, disparity, half_block)
+            }
             MatchingMetric::NCC => {
                 let mut cost = 0.0f32;
                 let mut count = 0usize;
@@ -241,11 +269,11 @@ impl BlockMatcher {
         for dy in -half_block..=half_block {
             let ly = (y + dy) as usize;
             let mut dx = -half_block;
-            
+
             while dx <= half_block - 7 {
                 let lx = (x + dx) as usize;
                 let rx = (x + dx - disparity) as usize;
-                
+
                 let l_vals = f32x8::from([
                     left_data[ly * width + lx] as f32,
                     left_data[ly * width + lx + 1] as f32,
@@ -256,7 +284,7 @@ impl BlockMatcher {
                     left_data[ly * width + lx + 6] as f32,
                     left_data[ly * width + lx + 7] as f32,
                 ]);
-                
+
                 let r_vals = f32x8::from([
                     right_data[ly * width + rx] as f32,
                     right_data[ly * width + rx + 1] as f32,
@@ -267,17 +295,18 @@ impl BlockMatcher {
                     right_data[ly * width + rx + 6] as f32,
                     right_data[ly * width + rx + 7] as f32,
                 ]);
-                
+
                 total_sad += (l_vals - r_vals).abs();
                 dx += 8;
                 count += 8;
             }
-            
+
             // Remainder
             for rem_dx in dx..=half_block {
                 let lx = (x + rem_dx) as usize;
                 let rx = (x + rem_dx - disparity) as usize;
-                let diff = (left_data[ly * width + lx] as f32 - right_data[ly * width + rx] as f32).abs();
+                let diff =
+                    (left_data[ly * width + lx] as f32 - right_data[ly * width + rx] as f32).abs();
                 total_sad += f32x8::from([diff, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
                 count += 1;
             }
@@ -302,11 +331,11 @@ impl BlockMatcher {
         for dy in -half_block..=half_block {
             let ly = (y + dy) as usize;
             let mut dx = -half_block;
-            
+
             while dx <= half_block - 7 {
                 let lx = (x + dx) as usize;
                 let rx = (x + dx - disparity) as usize;
-                
+
                 let l_vals = f32x8::from([
                     left_data[ly * width + lx] as f32,
                     left_data[ly * width + lx + 1] as f32,
@@ -317,7 +346,7 @@ impl BlockMatcher {
                     left_data[ly * width + lx + 6] as f32,
                     left_data[ly * width + lx + 7] as f32,
                 ]);
-                
+
                 let r_vals = f32x8::from([
                     right_data[ly * width + rx] as f32,
                     right_data[ly * width + rx + 1] as f32,
@@ -328,13 +357,13 @@ impl BlockMatcher {
                     right_data[ly * width + rx + 6] as f32,
                     right_data[ly * width + rx + 7] as f32,
                 ]);
-                
+
                 let diff = l_vals - r_vals;
                 total_ssd += diff * diff;
                 dx += 8;
                 count += 8;
             }
-            
+
             // Remainder
             for rem_dx in dx..=half_block {
                 let lx = (x + rem_dx) as usize;

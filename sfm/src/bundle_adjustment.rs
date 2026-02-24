@@ -1,7 +1,7 @@
-use cv_core::{Pose, CameraIntrinsics};
+use cv_core::{CameraIntrinsics, Pose};
+use cv_runtime::orchestrator::{scheduler, ResourceGroup};
 use nalgebra::{DMatrix, DVector, Point2, Point3, Rotation3, UnitQuaternion, Vector3};
 use rayon::prelude::*;
-use cv_runtime::orchestrator::{ResourceGroup, scheduler};
 
 use cv_optimize::sparse::{SparseMatrix, Triplet};
 
@@ -173,7 +173,7 @@ impl SfMState {
                 return self.numerical_jacobian_ctx(&group);
             }
         }
-        
+
         // Fallback to sequential execution if scheduler fails
         let params = self.to_parameters();
         let n_res = self.residuals().len();
@@ -187,9 +187,12 @@ impl SfMState {
             params_plus[j] += eps;
             params_minus[j] -= eps;
 
-            let (res_plus, res_minus) = self.compute_residuals_for_param(&params_plus, &params_minus);
+            let (res_plus, res_minus) =
+                self.compute_residuals_for_param(&params_plus, &params_minus);
             for i in 0..n_res {
-                jacobian_data[j * n_res + i] = (res_plus.get(i).unwrap_or(&0.0) - res_minus.get(i).unwrap_or(&0.0)) / (2.0 * eps);
+                jacobian_data[j * n_res + i] = (res_plus.get(i).unwrap_or(&0.0)
+                    - res_minus.get(i).unwrap_or(&0.0))
+                    / (2.0 * eps);
             }
         }
         DMatrix::from_vec(n_res, n_params, jacobian_data)
@@ -202,20 +205,26 @@ impl SfMState {
         let eps = 1e-6;
 
         let jacobian_data: Vec<f64> = group.run(|| {
-            (0..n_params).into_par_iter().flat_map(|j| {
-                let mut params_plus = params.clone();
-                let mut params_minus = params.clone();
-                params_plus[j] += eps;
-                params_minus[j] -= eps;
+            (0..n_params)
+                .into_par_iter()
+                .flat_map(|j| {
+                    let mut params_plus = params.clone();
+                    let mut params_minus = params.clone();
+                    params_plus[j] += eps;
+                    params_minus[j] -= eps;
 
-                let (res_plus, res_minus) = self.compute_residuals_for_param(&params_plus, &params_minus);
-                
-                let mut col = vec![0.0; n_res];
-                for i in 0..n_res {
-                    col[i] = (res_plus.get(i).unwrap_or(&0.0) - res_minus.get(i).unwrap_or(&0.0)) / (2.0 * eps);
-                }
-                col
-            }).collect()
+                    let (res_plus, res_minus) =
+                        self.compute_residuals_for_param(&params_plus, &params_minus);
+
+                    let mut col = vec![0.0; n_res];
+                    for i in 0..n_res {
+                        col[i] = (res_plus.get(i).unwrap_or(&0.0)
+                            - res_minus.get(i).unwrap_or(&0.0))
+                            / (2.0 * eps);
+                    }
+                    col
+                })
+                .collect()
         });
 
         // DMatrix is column-major by default in nalgebra for from_vec
@@ -233,19 +242,31 @@ impl SfMState {
 
         let mut res_idx = 0;
         for (lm_idx, lm) in self.landmarks.iter().enumerate() {
-            if !lm.is_valid { continue; }
+            if !lm.is_valid {
+                continue;
+            }
             for (cam_idx, _obs) in &lm.observations {
                 // Camera block (6 params)
                 for k in 0..6 {
                     let mut p_perturbed = params.clone();
                     p_perturbed[6 * cam_idx + k] += eps;
-                    let (res_plus, _) = self.compute_residuals_for_param_local(&p_perturbed, *cam_idx, lm_idx);
-                    
-                    let base_pt = self.cameras[*cam_idx].rotation * lm.position + self.cameras[*cam_idx].translation;
+                    let (res_plus, _) =
+                        self.compute_residuals_for_param_local(&p_perturbed, *cam_idx, lm_idx);
+
+                    let base_pt = self.cameras[*cam_idx].rotation * lm.position
+                        + self.cameras[*cam_idx].translation;
                     let base_proj = self.intrinsics.project(&base_pt.into());
-                    
-                    triplets.push(Triplet::new(res_idx, 6 * cam_idx + k, (res_plus.x - base_proj.x) / eps));
-                    triplets.push(Triplet::new(res_idx + 1, 6 * cam_idx + k, (res_plus.y - base_proj.y) / eps));
+
+                    triplets.push(Triplet::new(
+                        res_idx,
+                        6 * cam_idx + k,
+                        (res_plus.x - base_proj.x) / eps,
+                    ));
+                    triplets.push(Triplet::new(
+                        res_idx + 1,
+                        6 * cam_idx + k,
+                        (res_plus.y - base_proj.y) / eps,
+                    ));
                 }
 
                 // Landmark block (3 params)
@@ -253,13 +274,23 @@ impl SfMState {
                 for k in 0..3 {
                     let mut p_perturbed = params.clone();
                     p_perturbed[offset + 3 * lm_idx + k] += eps;
-                    let (res_plus, _) = self.compute_residuals_for_param_local(&p_perturbed, *cam_idx, lm_idx);
-                    
-                    let base_pt = self.cameras[*cam_idx].rotation * lm.position + self.cameras[*cam_idx].translation;
+                    let (res_plus, _) =
+                        self.compute_residuals_for_param_local(&p_perturbed, *cam_idx, lm_idx);
+
+                    let base_pt = self.cameras[*cam_idx].rotation * lm.position
+                        + self.cameras[*cam_idx].translation;
                     let base_proj = self.intrinsics.project(&base_pt.into());
 
-                    triplets.push(Triplet::new(res_idx, offset + 3 * lm_idx + k, (res_plus.x - base_proj.x) / eps));
-                    triplets.push(Triplet::new(res_idx + 1, offset + 3 * lm_idx + k, (res_plus.y - base_proj.y) / eps));
+                    triplets.push(Triplet::new(
+                        res_idx,
+                        offset + 3 * lm_idx + k,
+                        (res_plus.x - base_proj.x) / eps,
+                    ));
+                    triplets.push(Triplet::new(
+                        res_idx + 1,
+                        offset + 3 * lm_idx + k,
+                        (res_plus.y - base_proj.y) / eps,
+                    ));
                 }
                 res_idx += 2;
             }
@@ -268,15 +299,32 @@ impl SfMState {
         SparseMatrix::from_triplets(n_res, n_params, &triplets)
     }
 
-    fn compute_residuals_for_param_local(&self, params: &DVector<f64>, cam_idx: usize, lm_idx: usize) -> (Point2<f64>, Point2<f64>) {
-        let axis_angle = Vector3::new(params[6 * cam_idx], params[6 * cam_idx + 1], params[6 * cam_idx + 2]);
+    fn compute_residuals_for_param_local(
+        &self,
+        params: &DVector<f64>,
+        cam_idx: usize,
+        lm_idx: usize,
+    ) -> (Point2<f64>, Point2<f64>) {
+        let axis_angle = Vector3::new(
+            params[6 * cam_idx],
+            params[6 * cam_idx + 1],
+            params[6 * cam_idx + 2],
+        );
         let rot = Rotation3::new(axis_angle).into_inner();
-        let trans = Vector3::new(params[6 * cam_idx + 3], params[6 * cam_idx + 4], params[6 * cam_idx + 5]);
-        
+        let trans = Vector3::new(
+            params[6 * cam_idx + 3],
+            params[6 * cam_idx + 4],
+            params[6 * cam_idx + 5],
+        );
+
         let n_cam = self.cameras.len();
         let offset = 6 * n_cam;
-        let lm_pos = Point3::new(params[offset + 3 * lm_idx], params[offset + 3 * lm_idx + 1], params[offset + 3 * lm_idx + 2]);
-        
+        let lm_pos = Point3::new(
+            params[offset + 3 * lm_idx],
+            params[offset + 3 * lm_idx + 1],
+            params[offset + 3 * lm_idx + 2],
+        );
+
         let pt_cam = rot * lm_pos + trans;
         let proj = self.intrinsics.project(&pt_cam.into());
         (proj, proj) // Dummy second for signature parity
@@ -340,7 +388,12 @@ use cv_optimize::{CostFunction, SparseLMSolver};
 
 impl CostFunction for SfMState {
     fn dimensions(&self) -> (usize, usize) {
-        let n_res = self.landmarks.iter().filter(|l| l.is_valid).map(|l| l.observations.len() * 2).sum();
+        let n_res = self
+            .landmarks
+            .iter()
+            .filter(|l| l.is_valid)
+            .map(|l| l.observations.len() * 2)
+            .sum();
         let n_params = 6 * self.cameras.len() + 3 * self.landmarks.len();
         (n_res, n_params)
     }
@@ -385,7 +438,7 @@ pub fn bundle_adjust(state: &mut SfMState, config: &BundleAdjustmentConfig) {
             return;
         }
     }
-    
+
     // Fallback: Use a temporary dummy group or implement a sequential version of bundle_adjust_ctx.
     // For now, since bundle_adjust_ctx doesn't use the group for much other than calling numerical_jacobian_ctx,
     // we can implement a basic loop.
@@ -411,7 +464,9 @@ pub fn bundle_adjust(state: &mut SfMState, config: &BundleAdjustmentConfig) {
         let delta = if let Some(ch) = lhs.clone().cholesky() {
             ch.solve(&neg_jtr)
         } else {
-            lhs.lu().solve(&neg_jtr).unwrap_or_else(|| DVector::zeros(jtr.len()))
+            lhs.lu()
+                .solve(&neg_jtr)
+                .unwrap_or_else(|| DVector::zeros(jtr.len()))
         };
 
         let next_params = &current_params + &delta;
@@ -424,7 +479,9 @@ pub fn bundle_adjust(state: &mut SfMState, config: &BundleAdjustmentConfig) {
             current_residuals = next_residuals;
             current_err = next_err;
             lambda /= 10.0;
-            if delta.norm() < config.convergence_threshold { break; }
+            if delta.norm() < config.convergence_threshold {
+                break;
+            }
         } else {
             lambda *= 10.0;
             state.from_parameters(&current_params);
@@ -436,10 +493,14 @@ pub fn bundle_adjust(state: &mut SfMState, config: &BundleAdjustmentConfig) {
     }
 }
 
-pub fn bundle_adjust_ctx(state: &mut SfMState, config: &BundleAdjustmentConfig, group: &ResourceGroup) {
+pub fn bundle_adjust_ctx(
+    state: &mut SfMState,
+    config: &BundleAdjustmentConfig,
+    group: &ResourceGroup,
+) {
     let device = match group.device() {
         Ok(dev) => dev,
-        Err(_) => return,  // Skip optimization on device error, use CPU fallback
+        Err(_) => return, // Skip optimization on device error, use CPU fallback
     };
     let solver = SparseLMSolver {
         ctx: &device,
@@ -707,11 +768,20 @@ mod tests {
         state.add_camera(create_test_pose(Vector3::new(1.0, 0.0, 0.0)));
 
         // Add 3 landmarks
-        state.add_landmark(Point3::new(0.0, 0.0, 5.0), vec![(0, Point2::new(320.0, 240.0))]);
-        state.add_landmark(Point3::new(1.0, 0.0, 5.0), vec![(0, Point2::new(330.0, 240.0))]);
+        state.add_landmark(
+            Point3::new(0.0, 0.0, 5.0),
+            vec![(0, Point2::new(320.0, 240.0))],
+        );
+        state.add_landmark(
+            Point3::new(1.0, 0.0, 5.0),
+            vec![(0, Point2::new(330.0, 240.0))],
+        );
         state.add_landmark(
             Point3::new(2.0, 0.0, 5.0),
-            vec![(0, Point2::new(340.0, 240.0)), (1, Point2::new(320.0, 240.0))],
+            vec![
+                (0, Point2::new(340.0, 240.0)),
+                (1, Point2::new(320.0, 240.0)),
+            ],
         );
 
         let (n_res, n_params) = state.dimensions();
@@ -754,8 +824,14 @@ mod tests {
         let pose = create_test_pose(Vector3::zeros());
         state.add_camera(pose);
 
-        state.add_landmark(Point3::new(0.0, 0.0, 5.0), vec![(0, Point2::new(320.0, 240.0))]);
-        state.add_landmark(Point3::new(1.0, 0.0, 5.0), vec![(0, Point2::new(330.0, 240.0))]);
+        state.add_landmark(
+            Point3::new(0.0, 0.0, 5.0),
+            vec![(0, Point2::new(320.0, 240.0))],
+        );
+        state.add_landmark(
+            Point3::new(1.0, 0.0, 5.0),
+            vec![(0, Point2::new(330.0, 240.0))],
+        );
 
         // Mark first landmark as invalid
         state.landmarks[0].is_valid = false;

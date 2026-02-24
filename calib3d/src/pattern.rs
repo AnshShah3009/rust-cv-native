@@ -291,7 +291,9 @@ fn assign_grid_points(
                 }
             }
             let idx = best.ok_or_else(|| {
-                cv_core::Error::CalibrationError("failed to assign all chessboard corners".to_string())
+                cv_core::Error::CalibrationError(
+                    "failed to assign all chessboard corners".to_string(),
+                )
             })?;
             used[idx] = true;
             out.push(Point2::new(points[idx][0], points[idx][1]));

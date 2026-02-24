@@ -1,8 +1,8 @@
 use crate::{BackendType, DeviceId, Result};
-use cv_core::{Tensor, storage::Storage};
+use cv_core::{storage::Storage, Tensor};
 
 /// A unified context for executing compute operations.
-/// 
+///
 /// This trait abstracts over different compute backends (CPU, CUDA, Vulkan/WebGPU),
 /// allowing high-level algorithms to be written in a backend-agnostic way.
 pub trait ComputeContext: Send + Sync {
@@ -29,7 +29,7 @@ pub trait ComputeContext: Send + Sync {
     ) -> Result<Tensor<f32, S>>;
 
     /// Execute a generic compute shader/kernel
-    /// 
+    ///
     /// * `name`: Name of the kernel (e.g., "gaussian_blur")
     /// * `buffers`: List of buffers (input/output)
     /// * `uniforms`: Uniform data (constants)
@@ -327,10 +327,7 @@ pub trait ComputeContext: Send + Sync {
     ) -> Result<(Tensor<f32, S>, Tensor<f32, S>, Tensor<f32, S>)>;
 
     /// Compute AKAZE Contrast K factor (70th percentile)
-    fn akaze_contrast_k<S: Storage<f32> + 'static>(
-        &self,
-        input: &Tensor<f32, S>,
-    ) -> Result<f32>;
+    fn akaze_contrast_k<S: Storage<f32> + 'static>(&self, input: &Tensor<f32, S>) -> Result<f32>;
 
     /// Sparse Matrix-Vector Multiply (y = A * x)
     fn spmv<S: Storage<f32> + 'static>(

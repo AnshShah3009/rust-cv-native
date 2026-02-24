@@ -86,14 +86,21 @@ impl Matcher {
                     }
 
                     if keep_match {
-                        return Some(FeatureMatch::new(query_idx as i32, train_idx as i32, distance as f32));
+                        return Some(FeatureMatch::new(
+                            query_idx as i32,
+                            train_idx as i32,
+                            distance as f32,
+                        ));
                     }
                 }
                 None
             })
             .collect();
 
-        Matches { matches, mask: None }
+        Matches {
+            matches,
+            mask: None,
+        }
     }
 
     fn find_best_match(

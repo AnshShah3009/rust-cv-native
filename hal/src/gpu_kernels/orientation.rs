@@ -1,7 +1,7 @@
-use cv_core::{Tensor, KeyPointF32};
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
+use cv_core::{KeyPointF32, Tensor};
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
@@ -27,11 +27,13 @@ pub fn compute_orientation(
     let num_kp = keypoints.len() as u32;
 
     // Create buffers
-    let kp_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Orientation Keypoints"),
-        contents: bytemuck::cast_slice(keypoints),
-        usage: wgpu::BufferUsages::STORAGE,
-    });
+    let kp_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Orientation Keypoints"),
+            contents: bytemuck::cast_slice(keypoints),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
 
     let angle_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Orientation Angles"),
@@ -47,11 +49,13 @@ pub fn compute_orientation(
         radius,
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Orientation Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Orientation Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("orientation.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -60,16 +64,33 @@ pub fn compute_orientation(
         label: Some("Orientation Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: image.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: kp_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: angle_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: image.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: kp_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: angle_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(num_kp, 1, 1);

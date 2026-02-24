@@ -33,54 +33,54 @@ pub fn morton_encode(x: u32, y: u32, z: u32) -> u32 {
     let mut mx = x & 0x000003FFu32;
     let mut my = y & 0x000003FFu32;
     let mut mz = z & 0x000003FFu32;
-    
+
     mx = (mx | (mx << 16)) & 0x030000FF;
     mx = (mx | (mx << 8)) & 0x0300F00F;
     mx = (mx | (mx << 4)) & 0x030C30C3;
     mx = (mx | (mx << 2)) & 0x09249249;
-    
+
     my = (my | (my << 16)) & 0x030000FF;
     my = (my | (my << 8)) & 0x0300F00F;
     my = (my | (my << 4)) & 0x030C30C3;
     my = (my | (my << 2)) & 0x09249249;
-    
+
     mz = (mz | (mz << 16)) & 0x030000FF;
     mz = (mz | (mz << 8)) & 0x0300F00F;
     mz = (mz | (mz << 4)) & 0x030C30C3;
     mz = (mz | (mz << 2)) & 0x09249249;
-    
+
     mx | (my << 1) | (mz << 2)
 }
 
-pub mod convolve;
-pub mod threshold;
-pub mod sobel;
+pub mod akaze;
+pub mod bilateral;
+pub mod brief;
 pub mod canny;
+pub mod color;
+pub mod convolve;
+pub mod fast;
 pub mod hough;
 pub mod hough_circles;
+pub mod icp;
+pub mod marching_cubes;
+pub mod matching;
 pub mod morphology;
 pub mod nms;
-pub mod pointcloud;
-pub mod tsdf;
 pub mod optical_flow;
-pub mod marching_cubes;
-pub mod color;
-pub mod resize;
-pub mod template_matching;
-pub mod warp;
-pub mod pyramid;
 pub mod orientation;
-pub mod brief;
-pub mod bilateral;
-pub mod fast;
-pub mod matching;
-pub mod sift;
-pub mod stereo;
-pub mod icp;
-pub mod subtract;
-pub mod akaze;
-pub mod sparse;
+pub mod pointcloud;
+pub mod pyramid;
 pub mod radix_sort;
+pub mod resize;
+pub mod sift;
+pub mod sobel;
+pub mod sparse;
+pub mod stereo;
+pub mod subtract;
+pub mod template_matching;
+pub mod threshold;
+pub mod tsdf;
+pub mod warp;
 
 pub mod unified {
     /// Configuration for automatic CPU/GPU selection
@@ -122,11 +122,13 @@ pub fn mog2_update(
 ) -> crate::Result<()> {
     use wgpu::util::DeviceExt;
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("MOG2 Params"),
-        contents: bytemuck::cast_slice(&[*params]),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("MOG2 Params"),
+            contents: bytemuck::cast_slice(&[*params]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/mog2_update.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -135,16 +137,33 @@ pub fn mog2_update(
         label: Some("MOG2 Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: frame.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: model.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: mask.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: frame.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: model.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: mask.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups((params.width + 15) / 16, (params.height + 15) / 16, 1);
@@ -191,16 +210,10 @@ pub mod shaders {
             );
 
             // TSDF integration
-            shaders.insert(
-                "tsdf_integrate",
-                include_str!("tsdf_integrate.wgsl"),
-            );
+            shaders.insert("tsdf_integrate", include_str!("tsdf_integrate.wgsl"));
 
             // TSDF raycasting (surface extraction)
-            shaders.insert(
-                "tsdf_raycast",
-                include_str!("tsdf_raycast.wgsl"),
-            );
+            shaders.insert("tsdf_raycast", include_str!("tsdf_raycast.wgsl"));
 
             // ICP correspondence finding
             shaders.insert(
@@ -215,22 +228,13 @@ pub mod shaders {
             );
 
             // ICP reduction (sum of errors)
-            shaders.insert(
-                "icp_reduction",
-                include_str!("icp_reduction.wgsl"),
-            );
+            shaders.insert("icp_reduction", include_str!("icp_reduction.wgsl"));
 
             // KDTree build (parallel construction)
-            shaders.insert(
-                "kdtree_build",
-                include_str!("kdtree_build.wgsl"),
-            );
+            shaders.insert("kdtree_build", include_str!("kdtree_build.wgsl"));
 
             // KDTree nearest neighbor search
-            shaders.insert(
-                "kdtree_search",
-                include_str!("kdtree_search.wgsl"),
-            );
+            shaders.insert("kdtree_search", include_str!("kdtree_search.wgsl"));
 
             // Voxel grid operations
             shaders.insert(
@@ -239,10 +243,7 @@ pub mod shaders {
             );
 
             // Mesh vertex operations
-            shaders.insert(
-                "mesh_laplacian",
-                include_str!("mesh_laplacian.wgsl"),
-            );
+            shaders.insert("mesh_laplacian", include_str!("mesh_laplacian.wgsl"));
 
             // Ray casting
             shaders.insert(
@@ -251,22 +252,13 @@ pub mod shaders {
             );
 
             // Distance field computation
-            shaders.insert(
-                "distance_field",
-                include_str!("distance_field.wgsl"),
-            );
+            shaders.insert("distance_field", include_str!("distance_field.wgsl"));
 
             // RGBD odometry
-            shaders.insert(
-                "rgbd_odometry",
-                include_str!("rgbd_odometry.wgsl"),
-            );
+            shaders.insert("rgbd_odometry", include_str!("rgbd_odometry.wgsl"));
 
             // Parallel reduction (sum, min, max)
-            shaders.insert(
-                "parallel_reduce",
-                include_str!("parallel_reduce.wgsl"),
-            );
+            shaders.insert("parallel_reduce", include_str!("parallel_reduce.wgsl"));
 
             // Gaussian blur (separable)
             shaders.insert(
@@ -275,28 +267,16 @@ pub mod shaders {
             );
 
             // Image subtraction
-            shaders.insert(
-                "subtract",
-                include_str!("../../shaders/subtract.wgsl"),
-            );
+            shaders.insert("subtract", include_str!("../../shaders/subtract.wgsl"));
 
             // Matrix multiplication
-            shaders.insert(
-                "matrix_multiply",
-                include_str!("matrix_multiply.wgsl"),
-            );
+            shaders.insert("matrix_multiply", include_str!("matrix_multiply.wgsl"));
 
             // Prefix sum (scan)
-            shaders.insert(
-                "prefix_sum",
-                include_str!("prefix_sum.wgsl"),
-            );
+            shaders.insert("prefix_sum", include_str!("prefix_sum.wgsl"));
 
             // Radix sort (for KDTree, Octree)
-            shaders.insert(
-                "radix_sort",
-                include_str!("radix_sort.wgsl"),
-            );
+            shaders.insert("radix_sort", include_str!("radix_sort.wgsl"));
 
             Self { shaders }
         }
@@ -315,9 +295,9 @@ pub mod shaders {
 
 /// GPU Buffer utilities
 pub mod buffer_utils {
-    use wgpu::{Buffer, Device, BufferDescriptor, BufferUsages, MapMode};
-    use std::sync::{Arc, Mutex, OnceLock};
     use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, MapMode};
 
     /// A bucketed pool for reusing GPU buffers
     pub struct GpuBufferPool {
@@ -347,7 +327,7 @@ pub mod buffer_utils {
                 Ok(b) => b,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            
+
             let usage_map = buckets.entry(usage).or_insert_with(HashMap::new);
             if let Some(pool) = usage_map.get_mut(&bucket_size) {
                 if let Some(buffer) = pool.pop() {
@@ -406,11 +386,7 @@ pub mod buffer_utils {
     }
 
     /// Create an uninitialized GPU buffer
-    pub fn create_buffer_uninit(
-        device: &Device,
-        size: usize,
-        usage: BufferUsages,
-    ) -> Buffer {
+    pub fn create_buffer_uninit(device: &Device, size: usize, usage: BufferUsages) -> Buffer {
         device.create_buffer(&BufferDescriptor {
             label: Some("Compute Buffer (uninit)"),
             size: size as u64,
@@ -429,27 +405,25 @@ pub mod buffer_utils {
     ) -> crate::Result<Vec<T>> {
         let pool = global_pool();
         let aligned_size = ((size + 3) & !3) as u64;
-        
+
         // Use pooled staging buffer instead of creating one every time
-        let staging_buffer = pool.get(&device, aligned_size, BufferUsages::MAP_READ | BufferUsages::COPY_DST);
+        let staging_buffer = pool.get(
+            &device,
+            aligned_size,
+            BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+        );
 
         // Copy from source to staging
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Readback Encoder"),
         });
-        
-        encoder.copy_buffer_to_buffer(
-            buffer,
-            offset,
-            &staging_buffer,
-            0,
-            aligned_size,
-        );
+
+        encoder.copy_buffer_to_buffer(buffer, offset, &staging_buffer, 0, aligned_size);
 
         let _index = queue.submit(std::iter::once(encoder.finish()));
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        
+
         let slice = staging_buffer.slice(..);
         slice.map_async(MapMode::Read, move |res| {
             tx.send(res).ok();
@@ -473,7 +447,10 @@ pub mod buffer_utils {
         staging_buffer.unmap();
 
         // Return to pool!
-        pool.return_buffer(staging_buffer, BufferUsages::MAP_READ | BufferUsages::COPY_DST);
+        pool.return_buffer(
+            staging_buffer,
+            BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+        );
 
         let num_elements = size / std::mem::size_of::<T>();
         Ok(result_full[..num_elements].to_vec())
@@ -491,22 +468,25 @@ mod tests {
         // Test size bucket logic
         assert_eq!(GpuBufferPool::get_size_bucket(100), 256);
         assert_eq!(GpuBufferPool::get_size_bucket(1024), 1024);
-        assert_eq!(GpuBufferPool::get_size_bucket(1024 * 1024 + 1), 2 * 1024 * 1024);
+        assert_eq!(
+            GpuBufferPool::get_size_bucket(1024 * 1024 + 1),
+            2 * 1024 * 1024
+        );
     }
 
     #[test]
     fn test_gpu_buffer_pool_reuse() {
-        // We can't easily test the 'get' without a real Device, 
-        // but we can test the internal structure if we exposed it, 
+        // We can't easily test the 'get' without a real Device,
+        // but we can test the internal structure if we exposed it,
         // or just ensure 'return_buffer' doesn't crash.
     }
 }
 
 /// GPU-accelerated point cloud operations
 pub mod pointcloud_gpu {
-    use nalgebra::{Matrix4, Vector3};
     use crate::gpu::GpuContext;
     use crate::gpu_kernels::{dispatch_size_1d, morton_encode};
+    use nalgebra::{Matrix4, Vector3};
 
     /// Transform point cloud on GPU
     pub fn transform_points(
@@ -525,8 +505,8 @@ pub mod pointcloud_gpu {
         neighbor_indices: &[u32],
         k_neighbors: u32,
     ) -> crate::Result<Vec<Vector3<f32>>> {
-        use wgpu::BufferUsages;
         use crate::gpu_kernels::buffer_utils::{create_buffer, create_buffer_uninit, read_buffer};
+        use wgpu::BufferUsages;
 
         let device = ctx.device.clone();
         let queue = &ctx.queue;
@@ -535,10 +515,14 @@ pub mod pointcloud_gpu {
         // 1. Create buffers
         // Convert Vector3 to [f32; 4] for 16-byte alignment (vec4 in shader)
         let points_data: Vec<[f32; 4]> = points.iter().map(|p| [p.x, p.y, p.z, 0.0]).collect();
-        
+
         let points_buf = create_buffer(&device, &points_data, BufferUsages::STORAGE);
         let indices_buf = create_buffer(&device, neighbor_indices, BufferUsages::STORAGE);
-        let normals_buf = create_buffer_uninit(&device, points.len() * 16, BufferUsages::STORAGE | BufferUsages::COPY_SRC);
+        let normals_buf = create_buffer_uninit(
+            &device,
+            points.len() * 16,
+            BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+        );
         let num_points_buf = create_buffer(&device, &[num_points], BufferUsages::UNIFORM);
         let k_buf = create_buffer(&device, &[k_neighbors], BufferUsages::UNIFORM);
 
@@ -563,18 +547,34 @@ pub mod pointcloud_gpu {
             label: Some("Normals Bind Group"),
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: points_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: normals_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: indices_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: num_points_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: k_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: points_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: normals_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: indices_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: num_points_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: k_buf.as_entire_binding(),
+                },
             ],
         });
 
         // 4. Dispatch
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { 
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: None,
                 timestamp_writes: None,
             });
@@ -587,8 +587,17 @@ pub mod pointcloud_gpu {
         ctx.submit(encoder);
 
         // 5. Read back
-        let result_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(device.clone(), queue, &normals_buf, 0, points.len() * 16))?;
-        let result: Vec<Vector3<f32>> = result_data.into_iter().map(|v| Vector3::new(v[0], v[1], v[2])).collect();
+        let result_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(
+            device.clone(),
+            queue,
+            &normals_buf,
+            0,
+            points.len() * 16,
+        ))?;
+        let result: Vec<Vector3<f32>> = result_data
+            .into_iter()
+            .map(|v| Vector3::new(v[0], v[1], v[2]))
+            .collect();
         Ok(result)
     }
 
@@ -599,8 +608,8 @@ pub mod pointcloud_gpu {
         points: &[Vector3<f32>],
         k_neighbors: u32,
     ) -> crate::Result<Vec<Vector3<f32>>> {
-        use wgpu::BufferUsages;
         use crate::gpu_kernels::buffer_utils::{create_buffer, create_buffer_uninit, read_buffer};
+        use wgpu::BufferUsages;
 
         let device = gpu.device.clone();
         let queue = &gpu.queue;
@@ -609,18 +618,25 @@ pub mod pointcloud_gpu {
 
         // Step 1: Compute Morton codes on CPU
         let (min_bound, max_bound) = points.iter().fold(
-            (Vector3::new(f32::MAX, f32::MAX, f32::MAX), Vector3::new(f32::MIN, f32::MIN, f32::MIN)),
-            |(min, max), p| (min.inf(p), max.sup(p))
+            (
+                Vector3::new(f32::MAX, f32::MAX, f32::MAX),
+                Vector3::new(f32::MIN, f32::MIN, f32::MIN),
+            ),
+            |(min, max), p| (min.inf(p), max.sup(p)),
         );
         let span = (max_bound - min_bound).max();
         let grid_size = span / 1024.0;
 
-        let mut morton_data: Vec<(u32, usize)> = points.iter().enumerate().map(|(i, p)| {
-            let x = ((p.x - min_bound.x) / grid_size).max(0.0).min(1023.0) as u32;
-            let y = ((p.y - min_bound.y) / grid_size).max(0.0).min(1023.0) as u32;
-            let z = ((p.z - min_bound.z) / grid_size).max(0.0).min(1023.0) as u32;
-            (morton_encode(x, y, z), i)
-        }).collect();
+        let mut morton_data: Vec<(u32, usize)> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let x = ((p.x - min_bound.x) / grid_size).max(0.0).min(1023.0) as u32;
+                let y = ((p.y - min_bound.y) / grid_size).max(0.0).min(1023.0) as u32;
+                let z = ((p.z - min_bound.z) / grid_size).max(0.0).min(1023.0) as u32;
+                (morton_encode(x, y, z), i)
+            })
+            .collect();
 
         // Step 2: Sort by Morton code
         morton_data.sort_by_key(|&(code, _)| code);
@@ -630,12 +646,16 @@ pub mod pointcloud_gpu {
 
         // Step 3: Create GPU buffers
         let points_data: Vec<[f32; 4]> = points.iter().map(|p| [p.x, p.y, p.z, 0.0]).collect();
-        
+
         let points_buf = create_buffer(&device, &points_data, BufferUsages::STORAGE);
-        let normals_buf = create_buffer_uninit(&device, points.len() * 16, BufferUsages::STORAGE | BufferUsages::COPY_SRC);
+        let normals_buf = create_buffer_uninit(
+            &device,
+            points.len() * 16,
+            BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+        );
         let sorted_buf = create_buffer(&device, &sorted_indices, BufferUsages::STORAGE);
         let morton_buf = create_buffer(&device, &morton_codes, BufferUsages::STORAGE);
-        
+
         let params_data: [f32; 4] = [num_points as f32, k as f32, grid_size, 0.0];
         let params_buf = create_buffer(&device, &params_data, BufferUsages::UNIFORM);
 
@@ -722,11 +742,26 @@ pub mod pointcloud_gpu {
             label: Some("Normals Morton Bind Group"),
             layout: &bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: points_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: normals_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: sorted_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: morton_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: points_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: normals_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: sorted_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: morton_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: params_buf.as_entire_binding(),
+                },
             ],
         });
 
@@ -742,16 +777,25 @@ pub mod pointcloud_gpu {
         queue.submit(std::iter::once(encoder.finish()));
 
         // Step 6: Read back
-        let result_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(device.clone(), queue, &normals_buf, 0, points.len() * 16))?;
-        let result: Vec<Vector3<f32>> = result_data.into_iter().map(|v| Vector3::new(v[0], v[1], v[2])).collect();
+        let result_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(
+            device.clone(),
+            queue,
+            &normals_buf,
+            0,
+            points.len() * 16,
+        ))?;
+        let result: Vec<Vector3<f32>> = result_data
+            .into_iter()
+            .map(|v| Vector3::new(v[0], v[1], v[2]))
+            .collect();
         Ok(result)
     }
 }
 
 /// GPU-accelerated TSDF operations
 pub mod tsdf_gpu {
-    use nalgebra::Vector3;
     use crate::gpu::GpuContext;
+    use nalgebra::Vector3;
 
     pub fn raycast_volume(
         _ctx: &GpuContext,
@@ -787,7 +831,8 @@ pub mod icp_gpu {
         _target: &[Vector3<f32>],
         _transform: &Matrix4<f32>,
         _max_distance: f32,
-    ) -> crate::Result<Vec<(u32, u32, f32)>> { // (src_idx, tgt_idx, distance)
+    ) -> crate::Result<Vec<(u32, u32, f32)>> {
+        // (src_idx, tgt_idx, distance)
         Err(crate::Error::not_supported("GPU correspondence finding"))
     }
 
@@ -799,7 +844,8 @@ pub mod icp_gpu {
         _target_normals: &[Vector3<f32>],
         _correspondences: &[(u32, u32)],
         _transform: &Matrix4<f32>,
-    ) -> crate::Result<(f32, f32)> { // (sum_squared_error, inlier_count)
+    ) -> crate::Result<(f32, f32)> {
+        // (sum_squared_error, inlier_count)
         Err(crate::Error::not_supported("GPU residual computation"))
     }
 
@@ -834,7 +880,8 @@ pub mod spatial_gpu {
         _kdtree: &GpuKDTree,
         _queries: &[Vector3<f32>],
         _k: u32,
-    ) -> crate::Result<Vec<Vec<(u32, f32)>>> { // (point_idx, distance)
+    ) -> crate::Result<Vec<Vec<(u32, f32)>>> {
+        // (point_idx, distance)
         Err(crate::Error::not_supported("GPU batch NN search"))
     }
 
@@ -874,7 +921,7 @@ pub mod spatial_gpu {
 
 /// GPU-accelerated mesh operations
 pub mod mesh_gpu {
-    use nalgebra::{Vector3, Point3};
+    use nalgebra::{Point3, Vector3};
 
     /// Compute vertex normals on GPU
     pub fn compute_vertex_normals(
@@ -925,7 +972,8 @@ pub mod raycasting_gpu {
         _rays: &[(Point3<f32>, Vector3<f32>)], // (origin, direction)
         _vertices: &[Point3<f32>],
         _faces: &[[u32; 3]],
-    ) -> crate::Result<Vec<Option<(f32, Point3<f32>, Vector3<f32>)>>> { // (distance, hit_point, normal)
+    ) -> crate::Result<Vec<Option<(f32, Point3<f32>, Vector3<f32>)>>> {
+        // (distance, hit_point, normal)
         Err(crate::Error::not_supported("GPU ray casting"))
     }
 
@@ -957,7 +1005,8 @@ pub mod odometry_gpu {
         _width: u32,
         _height: u32,
         _init_transform: &[f32; 16],
-    ) -> crate::Result<([f32; 16], f32, f32)> { // (transform, fitness, rmse)
+    ) -> crate::Result<([f32; 16], f32, f32)> {
+        // (transform, fitness, rmse)
         Err(crate::Error::not_supported("GPU RGBD odometry"))
     }
 

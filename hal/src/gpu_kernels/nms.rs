@@ -1,9 +1,9 @@
-use cv_core::Tensor;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
-use wgpu::util::DeviceExt;
+use cv_core::Tensor;
 use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -18,9 +18,13 @@ pub fn nms_boxes(
     iou_threshold: f32,
 ) -> Result<Vec<usize>> {
     let num_boxes = input.shape.height;
-    if num_boxes == 0 { return Ok(Vec::new()); }
+    if num_boxes == 0 {
+        return Ok(Vec::new());
+    }
     if num_boxes > 4096 {
-        return Err(crate::Error::NotSupported("GPU NMS currently limited to 4096 boxes".into()));
+        return Err(crate::Error::NotSupported(
+            "GPU NMS currently limited to 4096 boxes".into(),
+        ));
     }
 
     let byte_size = (num_boxes * num_boxes * 4) as u64;
@@ -36,11 +40,13 @@ pub fn nms_boxes(
         threshold: iou_threshold,
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("NMS Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("NMS Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/iou_matrix.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -49,18 +55,34 @@ pub fn nms_boxes(
         label: Some("NMS Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: iou_matrix_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: iou_matrix_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("NMS Dispatch") });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("NMS Dispatch"),
+        });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        
+
         let wg = (num_boxes as u32 + 15) / 16;
         pass.dispatch_workgroups(wg, wg, 1);
     }
@@ -80,7 +102,9 @@ pub fn nms_boxes(
     let mut suppressed = vec![false; num_boxes];
 
     for i in 0..num_boxes {
-        if suppressed[i] { continue; }
+        if suppressed[i] {
+            continue;
+        }
         kept.push(i);
         for j in (i + 1)..num_boxes {
             if matrix_data[i * num_boxes + j] != 0 {
@@ -109,14 +133,17 @@ pub fn nms_pixel(
 ) -> Result<Tensor<f32, GpuStorage<f32>>> {
     let (h, w) = input.shape.hw();
     let c = input.shape.channels;
-    
+
     if c != 1 {
-        return Err(crate::Error::NotSupported("GPU NMS currently only for single-channel".into()));
+        return Err(crate::Error::NotSupported(
+            "GPU NMS currently only for single-channel".into(),
+        ));
     }
 
     let out_len = w * h;
     let byte_size = (out_len * 4) as u64;
-    let usages = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
+    let usages =
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
     let output_buffer = ctx.get_buffer(byte_size, usages);
 
     let params = NmsPixelParams {
@@ -126,11 +153,13 @@ pub fn nms_pixel(
         window_radius: (window_size / 2) as i32,
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("NMS Pixel Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("NMS Pixel Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/nms.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -139,15 +168,31 @@ pub fn nms_pixel(
         label: Some("NMS Pixel Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: output_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: output_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("NMS Pixel Dispatch") });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("NMS Pixel Dispatch"),
+        });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         let x = (w as u32 + 15) / 16;
@@ -155,9 +200,7 @@ pub fn nms_pixel(
         pass.dispatch_workgroups(x, y, 1);
     }
     ctx.submit(encoder);
-    
-    
-    
+
     use std::marker::PhantomData;
 
     Ok(Tensor {

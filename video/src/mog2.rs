@@ -5,11 +5,11 @@
 
 #![allow(deprecated)]
 
-use cv_core::{storage::CpuStorage, storage::Storage, CpuTensor, Tensor, TensorShape, Error};
+use crate::Result;
+use cv_core::{storage::CpuStorage, storage::Storage, CpuTensor, Error, Tensor, TensorShape};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::context::{ComputeContext, Mog2Params};
 use cv_hal::tensor_ext::{TensorCast, TensorToCpu, TensorToGpu};
-use crate::Result;
 
 /// MOG2 (Mixture of Gaussians) background subtraction model
 ///
@@ -216,19 +216,33 @@ impl Mog2 {
             ComputeDevice::Gpu(gpu) => {
                 use cv_hal::storage::GpuStorage;
                 // For GPU, we need TensorCast to do GPU-side casting
-                let frame_gpu = frame.to_gpu_ctx(gpu)
-                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Upload to GPU failed: {:?}", e))))?;
+                let frame_gpu = frame.to_gpu_ctx(gpu).map_err(|e| {
+                    Error::VideoError(format!(
+                        "Invalid parameters: {}",
+                        format!("Upload to GPU failed: {:?}", e)
+                    ))
+                })?;
                 let frame_f32 =
                     <Tensor<u8, GpuStorage<u8>> as TensorCast>::to_f32_ctx(&frame_gpu, gpu)
-                        .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("GPU cast failed: {:?}", e))))?;
+                        .map_err(|e| {
+                            Error::VideoError(format!(
+                                "Invalid parameters: {}",
+                                format!("GPU cast failed: {:?}", e)
+                            ))
+                        })?;
 
                 if self.model.is_none() || self.width != width || self.height != height {
                     self.width = width;
                     self.height = height;
                     let mut data = vec![0.0f32; width * height * self.n_mixtures * 3];
-                    let frame_cpu = frame.to_cpu()
-                        .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Download to CPU failed: {:?}", e))))?;
-                    let frame_raw = frame_cpu.as_slice()
+                    let frame_cpu = frame.to_cpu().map_err(|e| {
+                        Error::VideoError(format!(
+                            "Invalid parameters: {}",
+                            format!("Download to CPU failed: {:?}", e)
+                        ))
+                    })?;
+                    let frame_raw = frame_cpu
+                        .as_slice()
                         .map_err(|_| Error::VideoError("Failed to get frame slice".to_string()))?;
                     for i in 0..(width * height) {
                         let base = i * self.n_mixtures * 3;
@@ -240,9 +254,19 @@ impl Mog2 {
                         data,
                         TensorShape::new(1, 1, width * height * self.n_mixtures * 3),
                     )
-                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create model tensor: {:?}", e))))?
+                    .map_err(|e| {
+                        Error::VideoError(format!(
+                            "Invalid parameters: {}",
+                            format!("Failed to create model tensor: {:?}", e)
+                        ))
+                    })?
                     .to_gpu_ctx(gpu)
-                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Upload model to GPU failed: {:?}", e))))?;
+                    .map_err(|e| {
+                        Error::VideoError(format!(
+                            "Invalid parameters: {}",
+                            format!("Upload model to GPU failed: {:?}", e)
+                        ))
+                    })?;
                     self.model = Some(Box::new(model_gpu));
                 }
 
@@ -256,42 +280,74 @@ impl Mog2 {
                     vec![0u32; width * height],
                     TensorShape::new(1, height, width),
                 )
-                .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create mask tensor: {:?}", e))))?
+                .map_err(|e| {
+                    Error::VideoError(format!(
+                        "Invalid parameters: {}",
+                        format!("Failed to create mask tensor: {:?}", e)
+                    ))
+                })?
                 .to_gpu_ctx(gpu)
-                .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Upload mask to GPU failed: {:?}", e))))?;
+                .map_err(|e| {
+                    Error::VideoError(format!(
+                        "Invalid parameters: {}",
+                        format!("Upload mask to GPU failed: {:?}", e)
+                    ))
+                })?;
 
                 gpu.mog2_update(&frame_f32, model_gpu, &mut mask_gpu, &params)
-                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("MOG2 GPU update failed: {:?}", e))))?;
+                    .map_err(|e| {
+                        Error::VideoError(format!(
+                            "Invalid parameters: {}",
+                            format!("MOG2 GPU update failed: {:?}", e)
+                        ))
+                    })?;
 
-                let mask_cpu = mask_gpu
-                    .to_cpu_ctx(gpu)
-                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Download mask to CPU failed: {:?}", e))))?;
+                let mask_cpu = mask_gpu.to_cpu_ctx(gpu).map_err(|e| {
+                    Error::VideoError(format!(
+                        "Invalid parameters: {}",
+                        format!("Download mask to CPU failed: {:?}", e)
+                    ))
+                })?;
                 let u8_data: Vec<u8> = mask_cpu
                     .as_slice()
                     .map_err(|_| Error::VideoError("Failed to get mask slice".to_string()))?
                     .iter()
                     .map(|&v| v as u8)
                     .collect();
-                CpuTensor::from_vec(u8_data, frame.shape)
-                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create final result tensor: {:?}", e))))
+                CpuTensor::from_vec(u8_data, frame.shape).map_err(|e| {
+                    Error::VideoError(format!(
+                        "Invalid parameters: {}",
+                        format!("Failed to create final result tensor: {:?}", e)
+                    ))
+                })
             }
             ComputeDevice::Cpu(cpu) => {
-                let frame_cpu = frame.to_cpu()
-                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Download frame to CPU failed: {:?}", e))))?;
+                let frame_cpu = frame.to_cpu().map_err(|e| {
+                    Error::VideoError(format!(
+                        "Invalid parameters: {}",
+                        format!("Download frame to CPU failed: {:?}", e)
+                    ))
+                })?;
                 let frame_f32_vec: Vec<f32> = frame_cpu
                     .as_slice()
                     .map_err(|_| Error::VideoError("Failed to get frame slice".to_string()))?
                     .iter()
                     .map(|&v| v as f32 / 255.0)
                     .collect();
-                let frame_tensor = CpuTensor::from_vec(frame_f32_vec, frame.shape)
-                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create frame tensor: {:?}", e))))?;
+                let frame_tensor =
+                    CpuTensor::from_vec(frame_f32_vec, frame.shape).map_err(|e| {
+                        Error::VideoError(format!(
+                            "Invalid parameters: {}",
+                            format!("Failed to create frame tensor: {:?}", e)
+                        ))
+                    })?;
 
                 if self.model.is_none() || self.width != width || self.height != height {
                     self.width = width;
                     self.height = height;
                     let mut data = vec![0.0f32; width * height * self.n_mixtures * 3];
-                    let frame_raw = frame_cpu.as_slice()
+                    let frame_raw = frame_cpu
+                        .as_slice()
                         .map_err(|_| Error::VideoError("Failed to get frame slice".to_string()))?;
                     for i in 0..(width * height) {
                         let base = i * self.n_mixtures * 3;
@@ -304,7 +360,12 @@ impl Mog2 {
                             data,
                             TensorShape::new(1, 1, width * height * self.n_mixtures * 3),
                         )
-                        .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create model tensor: {:?}", e))))?,
+                        .map_err(|e| {
+                            Error::VideoError(format!(
+                                "Invalid parameters: {}",
+                                format!("Failed to create model tensor: {:?}", e)
+                            ))
+                        })?,
                     ));
                 }
 
@@ -318,10 +379,20 @@ impl Mog2 {
                     vec![0u32; width * height],
                     frame.shape,
                 )
-                .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create mask tensor: {:?}", e))))?;
+                .map_err(|e| {
+                    Error::VideoError(format!(
+                        "Invalid parameters: {}",
+                        format!("Failed to create mask tensor: {:?}", e)
+                    ))
+                })?;
 
                 cpu.mog2_update(&frame_tensor, model_cpu, &mut mask_cpu, &params)
-                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("MOG2 CPU update failed: {:?}", e))))?;
+                    .map_err(|e| {
+                        Error::VideoError(format!(
+                            "Invalid parameters: {}",
+                            format!("MOG2 CPU update failed: {:?}", e)
+                        ))
+                    })?;
 
                 let u8_data: Vec<u8> = mask_cpu
                     .as_slice()
@@ -329,13 +400,21 @@ impl Mog2 {
                     .iter()
                     .map(|&v| v as u8)
                     .collect();
-                CpuTensor::from_vec(u8_data, frame.shape)
-                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create final result tensor: {:?}", e))))
+                CpuTensor::from_vec(u8_data, frame.shape).map_err(|e| {
+                    Error::VideoError(format!(
+                        "Invalid parameters: {}",
+                        format!("Failed to create final result tensor: {:?}", e)
+                    ))
+                })
             }
             ComputeDevice::Mlx(_) => {
                 eprintln!("Warning: MOG2 not implemented for MLX backend, returning empty mask");
-                CpuTensor::from_vec(vec![0u8; width * height], frame.shape)
-                    .map_err(|e| Error::VideoError(format!("Invalid parameters: {}", format!("Failed to create empty result tensor: {:?}", e))))
+                CpuTensor::from_vec(vec![0u8; width * height], frame.shape).map_err(|e| {
+                    Error::VideoError(format!(
+                        "Invalid parameters: {}",
+                        format!("Failed to create empty result tensor: {:?}", e)
+                    ))
+                })
             }
         }
     }
@@ -565,16 +644,22 @@ mod tests {
 
         let width1 = 32usize;
         let height1 = 32usize;
-        let frame1: CpuTensor<u8> =
-            CpuTensor::from_vec(vec![128u8; width1 * height1], TensorShape::new(1, height1, width1)).unwrap();
+        let frame1: CpuTensor<u8> = CpuTensor::from_vec(
+            vec![128u8; width1 * height1],
+            TensorShape::new(1, height1, width1),
+        )
+        .unwrap();
 
         let _ = mog2.apply_ctx(&frame1, -1.0, &device);
 
         // Process frame with different dimensions
         let width2 = 48usize;
         let height2 = 48usize;
-        let frame2: CpuTensor<u8> =
-            CpuTensor::from_vec(vec![128u8; width2 * height2], TensorShape::new(1, height2, width2)).unwrap();
+        let frame2: CpuTensor<u8> = CpuTensor::from_vec(
+            vec![128u8; width2 * height2],
+            TensorShape::new(1, height2, width2),
+        )
+        .unwrap();
 
         let mask = mog2.apply_ctx(&frame2, -1.0, &device).unwrap();
         assert_eq!(mask.shape.height, height2);

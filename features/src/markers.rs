@@ -139,7 +139,11 @@ pub fn draw_charuco_board(board: &CharucoBoard, pixel_per_square: u32) -> Result
     let margin = ((pixel_per_square - marker_px) / 2).max(1);
 
     for (i, &(cx, cy)) in board.marker_cells.iter().enumerate() {
-        let marker = draw_aruco_marker(board.dictionary, board.marker_ids[i], (marker_px / 6).max(1))?;
+        let marker = draw_aruco_marker(
+            board.dictionary,
+            board.marker_ids[i],
+            (marker_px / 6).max(1),
+        )?;
         let marker_scaled = resize_nearest_gray(&marker, marker_px, marker_px);
         let x0 = cx * pixel_per_square + margin;
         let y0 = cy * pixel_per_square + margin;
@@ -149,7 +153,10 @@ pub fn draw_charuco_board(board: &CharucoBoard, pixel_per_square: u32) -> Result
     Ok(img)
 }
 
-pub fn detect_charuco_corners(image: &GrayImage, board: &CharucoBoard) -> Result<Vec<CharucoCorner>> {
+pub fn detect_charuco_corners(
+    image: &GrayImage,
+    board: &CharucoBoard,
+) -> Result<Vec<CharucoCorner>> {
     let detections = detect_aruco_markers(image, board.dictionary)?;
     if detections.is_empty() {
         return Ok(Vec::new());
@@ -162,7 +169,10 @@ pub fn detect_charuco_corners(image: &GrayImage, board: &CharucoBoard) -> Result
             let obj = marker_object_corners(board, cell_x, cell_y);
             for k in 0..4 {
                 src.push(Point2::new(obj[k].x as f64, obj[k].y as f64));
-                dst.push(Point2::new(det.corners[k].x as f64, det.corners[k].y as f64));
+                dst.push(Point2::new(
+                    det.corners[k].x as f64,
+                    det.corners[k].y as f64,
+                ));
             }
         }
     }
@@ -180,10 +190,7 @@ pub fn detect_charuco_corners(image: &GrayImage, board: &CharucoBoard) -> Result
                 (y + 1) as f32 * board.square_length,
             );
             let p = project_homography(&h, &Point2::new(obj.x as f64, obj.y as f64));
-            if p.x >= 0.0
-                && p.y >= 0.0
-                && p.x < image.width() as f64
-                && p.y < image.height() as f64
+            if p.x >= 0.0 && p.y >= 0.0 && p.x < image.width() as f64 && p.y < image.height() as f64
             {
                 out.push(CharucoCorner {
                     id,
@@ -209,7 +216,10 @@ pub fn draw_aruco_marker(
     Ok(draw_marker_bits(code, payload_bits, border_bits, cell_size))
 }
 
-pub fn detect_aruco_markers(image: &GrayImage, dictionary: ArucoDictionary) -> Result<Vec<ArucoDetection>> {
+pub fn detect_aruco_markers(
+    image: &GrayImage,
+    dictionary: ArucoDictionary,
+) -> Result<Vec<ArucoDetection>> {
     let payload_bits = 4usize;
     let border_bits = 1usize;
     let codes = aruco_dictionary_codes(dictionary);
@@ -218,7 +228,9 @@ pub fn detect_aruco_markers(image: &GrayImage, dictionary: ArucoDictionary) -> R
     // Try GPU path if available
     #[cfg(feature = "gpu")]
     if gpu::gpu_available() && gpu::is_gpu_enabled() {
-        if let Ok(gpu_detections) = detect_aruco_markers_gpu(image, &candidates, &codes, payload_bits, border_bits) {
+        if let Ok(gpu_detections) =
+            detect_aruco_markers_gpu(image, &candidates, &codes, payload_bits, border_bits)
+        {
             return Ok(gpu_detections);
         }
         // Fall through to CPU if GPU fails
@@ -241,7 +253,14 @@ fn detect_aruco_markers_cpu(
     let detections = candidates
         .par_iter()
         .filter_map(|c| {
-            let bits = sample_grid_bits(image, c.min_x, c.min_y, c.max_x, c.max_y, payload_bits + 2 * border_bits);
+            let bits = sample_grid_bits(
+                image,
+                c.min_x,
+                c.min_y,
+                c.max_x,
+                c.max_y,
+                payload_bits + 2 * border_bits,
+            );
             if !border_is_black(&bits, payload_bits + 2 * border_bits) {
                 return None;
             }
@@ -307,10 +326,7 @@ fn run_marker_detection_gpu(
     )?;
 
     // Return results paired with candidate indices
-    Ok(gpu_results
-        .into_iter()
-        .enumerate()
-        .collect())
+    Ok(gpu_results.into_iter().enumerate().collect())
 }
 
 #[cfg(feature = "gpu")]
@@ -321,7 +337,8 @@ fn detect_aruco_markers_gpu(
     payload_bits: usize,
     border_bits: usize,
 ) -> Result<Vec<ArucoDetection>> {
-    let gpu_results = run_marker_detection_gpu(image, candidates, codes, payload_bits, border_bits, 0)?;
+    let gpu_results =
+        run_marker_detection_gpu(image, candidates, codes, payload_bits, border_bits, 0)?;
 
     // Convert GPU results to ArucoDetection
     let detections: Vec<ArucoDetection> = gpu_results
@@ -354,7 +371,10 @@ pub fn draw_apriltag(family: AprilTagFamily, id: u16, cell_size: u32) -> Result<
     Ok(draw_marker_bits(code, payload_bits, border_bits, cell_size))
 }
 
-pub fn detect_apriltags(image: &GrayImage, family: AprilTagFamily) -> Result<Vec<AprilTagDetection>> {
+pub fn detect_apriltags(
+    image: &GrayImage,
+    family: AprilTagFamily,
+) -> Result<Vec<AprilTagDetection>> {
     let (payload_bits, codes) = apriltag_family_codes(family);
     let border_bits = 1usize;
     let candidates = find_marker_candidates(image, payload_bits + 2 * border_bits)?;
@@ -362,7 +382,9 @@ pub fn detect_apriltags(image: &GrayImage, family: AprilTagFamily) -> Result<Vec
     // Try GPU path if available
     #[cfg(feature = "gpu")]
     if gpu::gpu_available() && gpu::is_gpu_enabled() {
-        if let Ok(gpu_detections) = detect_apriltags_gpu(image, &candidates, &codes, payload_bits, border_bits) {
+        if let Ok(gpu_detections) =
+            detect_apriltags_gpu(image, &candidates, &codes, payload_bits, border_bits)
+        {
             return Ok(gpu_detections);
         }
         // Fall through to CPU if GPU fails
@@ -425,7 +447,8 @@ fn detect_apriltags_gpu(
     border_bits: usize,
 ) -> Result<Vec<AprilTagDetection>> {
     // AprilTag allows up to 1-bit error (Hamming distance <= 1)
-    let gpu_results = run_marker_detection_gpu(image, candidates, codes, payload_bits, border_bits, 1)?;
+    let gpu_results =
+        run_marker_detection_gpu(image, candidates, codes, payload_bits, border_bits, 1)?;
 
     // Convert GPU results to AprilTagDetection
     let detections: Vec<AprilTagDetection> = gpu_results
@@ -457,7 +480,12 @@ struct Candidate {
     max_y: u32,
 }
 
-fn draw_marker_bits(code: u64, payload_bits: usize, border_bits: usize, cell_size: u32) -> GrayImage {
+fn draw_marker_bits(
+    code: u64,
+    payload_bits: usize,
+    border_bits: usize,
+    cell_size: u32,
+) -> GrayImage {
     let grid = payload_bits + 2 * border_bits;
     let size = (grid as u32) * cell_size;
     let mut img = GrayImage::from_pixel(size, size, Luma([255]));
@@ -632,7 +660,11 @@ fn extract_payload(bits: &[u8], payload_bits: usize, border_bits: usize) -> u64 
     code
 }
 
-fn decode_code_with_rotations(code: &u64, dict: &[u64], payload_side: usize) -> (usize, usize, u32) {
+fn decode_code_with_rotations(
+    code: &u64,
+    dict: &[u64],
+    payload_side: usize,
+) -> (usize, usize, u32) {
     let mut best_id = 0usize;
     let mut best_rot = 0usize;
     let mut best_dist = u32::MAX;
@@ -690,7 +722,11 @@ fn apriltag_family_codes(family: AprilTagFamily) -> (usize, Vec<u64>) {
 fn generate_dictionary_codes(bits: usize, count: usize, seed: u64) -> Vec<u64> {
     let mut out = Vec::with_capacity(count);
     let mut state = seed;
-    let mask = if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
+    let mask = if bits == 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    };
     while out.len() < count {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
         let mut code = state & mask;
@@ -818,9 +854,12 @@ fn resize_nearest_gray(src: &GrayImage, width: u32, height: u32) -> GrayImage {
     let sy = src.height() as f32 / height as f32;
     for y in 0..height {
         for x in 0..width {
-            let px = ((x as f32 + 0.5) * sx).floor().clamp(0.0, (src.width() - 1) as f32) as u32;
-            let py =
-                ((y as f32 + 0.5) * sy).floor().clamp(0.0, (src.height() - 1) as f32) as u32;
+            let px = ((x as f32 + 0.5) * sx)
+                .floor()
+                .clamp(0.0, (src.width() - 1) as f32) as u32;
+            let py = ((y as f32 + 0.5) * sy)
+                .floor()
+                .clamp(0.0, (src.height() - 1) as f32) as u32;
             out.put_pixel(x, y, *src.get_pixel(px, py));
         }
     }
@@ -1054,7 +1093,7 @@ mod tests {
     #[test]
     fn rayon_thread_pool_initialization() {
         // Test that thread pool is initialized (respects RUSTCV_CPU_THREADS)
-        use cv_core::{init_global_thread_pool, current_cpu_threads};
+        use cv_core::{current_cpu_threads, init_global_thread_pool};
 
         // Initialize thread pool (may already be initialized by other tests)
         let _ = init_global_thread_pool(None);
@@ -1071,9 +1110,18 @@ mod tests {
         use cv_hal::gpu_utils;
 
         // Test parsing various formats
-        assert_eq!(gpu_utils::parse_bytes_with_suffix("100MB").unwrap(), 100 * 1024 * 1024);
-        assert_eq!(gpu_utils::parse_bytes_with_suffix("1GB").unwrap(), 1024 * 1024 * 1024);
-        assert_eq!(gpu_utils::parse_bytes_with_suffix("512KB").unwrap(), 512 * 1024);
+        assert_eq!(
+            gpu_utils::parse_bytes_with_suffix("100MB").unwrap(),
+            100 * 1024 * 1024
+        );
+        assert_eq!(
+            gpu_utils::parse_bytes_with_suffix("1GB").unwrap(),
+            1024 * 1024 * 1024
+        );
+        assert_eq!(
+            gpu_utils::parse_bytes_with_suffix("512KB").unwrap(),
+            512 * 1024
+        );
 
         // Test memory fitting in budget
         assert!(gpu_utils::fits_in_budget(100, Some(200)));

@@ -1,11 +1,11 @@
-use cv_core::{Tensor, TensorShape};
+use crate::context::TemplateMatchMethod;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
-use crate::context::TemplateMatchMethod;
 use crate::Result;
-use wgpu::util::DeviceExt;
-use std::sync::Arc;
+use cv_core::{Tensor, TensorShape};
 use std::marker::PhantomData;
+use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -29,7 +29,7 @@ pub fn match_template(
     let out_w = img_w - templ_w + 1;
     let out_h = img_h - templ_h + 1;
     let out_len = out_w * out_h;
-    
+
     let byte_size = (out_len * 4) as u64;
     let usages = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
     let output_buffer = ctx.get_buffer(byte_size, usages);
@@ -49,11 +49,13 @@ pub fn match_template(
         },
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Match Template Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Match Template Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/match_template.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -62,16 +64,35 @@ pub fn match_template(
         label: Some("Match Template Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: image.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: template.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: output_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: image.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: template.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: output_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Match Template Dispatch") });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Match Template Dispatch"),
+        });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         let x = (out_w as u32 + 15) / 16;

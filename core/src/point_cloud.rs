@@ -21,11 +21,14 @@ impl<T: Scalar> PointCloud<T> {
             self.colors = Some(colors);
             Ok(self)
         } else {
-            Err(crate::Error::InvalidInput(format!(
-                "Color count {} does not match point count {}",
-                colors.len(),
-                self.points.len()
-            ).into()))
+            Err(crate::Error::InvalidInput(
+                format!(
+                    "Color count {} does not match point count {}",
+                    colors.len(),
+                    self.points.len()
+                )
+                .into(),
+            ))
         }
     }
 
@@ -34,11 +37,14 @@ impl<T: Scalar> PointCloud<T> {
             self.normals = Some(normals);
             Ok(self)
         } else {
-            Err(crate::Error::InvalidInput(format!(
-                "Normal count {} does not match point count {}",
-                normals.len(),
-                self.points.len()
-            ).into()))
+            Err(crate::Error::InvalidInput(
+                format!(
+                    "Normal count {} does not match point count {}",
+                    normals.len(),
+                    self.points.len()
+                )
+                .into(),
+            ))
         }
     }
 

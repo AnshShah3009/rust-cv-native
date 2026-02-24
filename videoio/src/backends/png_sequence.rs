@@ -1,7 +1,7 @@
-use crate::{Result, VideoWriter, VideoCapture, VideoError};
+use crate::{Result, VideoCapture, VideoError, VideoWriter};
 use image::GrayImage;
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub struct PngSequenceWriter {
@@ -15,7 +15,7 @@ impl PngSequenceWriter {
         if !directory.exists() {
             fs::create_dir_all(directory).map_err(VideoError::Io)?;
         }
-        
+
         Ok(Self {
             directory: directory.to_path_buf(),
             prefix: prefix.to_string(),
@@ -28,8 +28,10 @@ impl VideoWriter for PngSequenceWriter {
     fn write(&mut self, frame: &GrayImage) -> Result<()> {
         let filename = format!("{}_{:06}.png", self.prefix, self.frame_count);
         let path = self.directory.join(filename);
-        
-        frame.save(&path).map_err(|e| VideoError::Backend(format!("Failed to save frame: {}", e)))?;
+
+        frame
+            .save(&path)
+            .map_err(|e| VideoError::Backend(format!("Failed to save frame: {}", e)))?;
         self.frame_count += 1;
         Ok(())
     }
@@ -58,11 +60,13 @@ impl PngSequenceCapture {
             }
         }
         files.sort();
-        
+
         if files.is_empty() {
-            return Err(VideoError::Backend("No image files found in directory".to_string()));
+            return Err(VideoError::Backend(
+                "No image files found in directory".to_string(),
+            ));
         }
-        
+
         Ok(Self {
             files,
             current_index: 0,
@@ -87,7 +91,9 @@ impl VideoCapture for PngSequenceCapture {
         if self.current_index < self.files.len() {
             let path = &self.files[self.current_index];
             let img = image::open(path)
-                .map_err(|e| VideoError::Backend(format!("Failed to open image {}: {}", path.display(), e)))?
+                .map_err(|e| {
+                    VideoError::Backend(format!("Failed to open image {}: {}", path.display(), e))
+                })?
                 .to_luma8();
             self.current_index += 1;
             Ok(img)

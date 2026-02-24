@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::registration::{
-        registration_icp_point_to_plane, registration_icp_point_to_plane_ctx,
-        RobustLoss, GNCOptimizer,
+        registration_icp_point_to_plane, registration_icp_point_to_plane_ctx, GNCOptimizer,
+        RobustLoss,
     };
     use cv_core::point_cloud::PointCloud;
     use cv_hal::compute::ComputeDevice;

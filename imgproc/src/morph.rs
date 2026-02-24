@@ -1,11 +1,11 @@
 use crate::convolve::BorderMode;
+use cv_core::{storage::Storage, TensorShape};
+use cv_hal::compute::ComputeDevice;
+use cv_hal::context::MorphologyType as HalMorphType;
+use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
+use cv_runtime::orchestrator::{scheduler, ResourceGroup};
 use image::GrayImage;
 use rayon::prelude::*;
-use cv_core::{TensorShape, storage::Storage};
-use cv_hal::compute::{ComputeDevice};
-use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
-use cv_hal::context::MorphologyType as HalMorphType;
-use cv_runtime::orchestrator::{ResourceGroup, scheduler};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MorphShape {
@@ -192,7 +192,14 @@ pub fn dilate_with_border(
 ) -> GrayImage {
     if let Ok(s) = scheduler() {
         if let Ok(group) = s.get_default_group() {
-            return morphology_ctx(src, HalMorphType::Dilate, kernel, iterations, border, &group);
+            return morphology_ctx(
+                src,
+                HalMorphType::Dilate,
+                kernel,
+                iterations,
+                border,
+                &group,
+            );
         }
     }
     // Fallback to basic parallel CPU if scheduler fails
@@ -234,13 +241,13 @@ pub fn morphology_ctx(
         }
         _ => {}
     }
-    
+
     // CPU fallback
     let mut out = GrayImage::new(src.width(), src.height());
     match typ {
         HalMorphType::Dilate => dilate_with_border_into(src, &mut out, kernel, iterations, _border),
         HalMorphType::Erode => erode_with_border_into(src, &mut out, kernel, iterations, _border),
-        _ => {} 
+        _ => {}
     }
     out
 }
@@ -253,15 +260,20 @@ fn morphology_gpu(
     iterations: u32,
 ) -> cv_hal::Result<GrayImage> {
     use cv_hal::context::ComputeContext;
-    
-    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), TensorShape::new(1, src.height() as usize, src.width() as usize))
-        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+
+    let input_tensor = cv_core::CpuTensor::from_vec(
+        src.as_raw().to_vec(),
+        TensorShape::new(1, src.height() as usize, src.width() as usize),
+    )
+    .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
-    
+
     // Convert (i32, i32) kernel to Tensor<u8> mask
-    let (min_kx, max_kx, min_ky, max_ky) = kernel.iter().fold((0, 0, 0, 0), |(mix, max, miy, may), &(x, y)| {
-        (mix.min(x), max.max(x), miy.min(y), may.max(y))
-    });
+    let (min_kx, max_kx, min_ky, max_ky) = kernel
+        .iter()
+        .fold((0, 0, 0, 0), |(mix, max, miy, may), &(x, y)| {
+            (mix.min(x), max.max(x), miy.min(y), may.max(y))
+        });
     let kw = (max_kx - min_kx + 1).max(1) as usize;
     let kh = (max_ky - min_ky + 1).max(1) as usize;
     let mut k_data = vec![0u8; kw * kh];
@@ -275,10 +287,10 @@ fn morphology_gpu(
     let kernel_tensor = cv_core::CpuTensor::from_vec(k_data, TensorShape::new(1, kh, kw))
         .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let kernel_gpu = kernel_tensor.to_gpu_ctx(gpu)?;
-    
+
     let output_gpu = gpu.morphology(&input_gpu, typ, &kernel_gpu, iterations)?;
     let output_cpu = output_gpu.to_cpu_ctx(gpu)?;
-    
+
     let data = output_cpu.storage.as_slice().unwrap().to_vec();
     GrayImage::from_raw(src.width(), src.height(), data)
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))

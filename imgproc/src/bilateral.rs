@@ -2,8 +2,8 @@
 //!
 //! Edge-preserving smoothing filter that uses both spatial and range (intensity) distance.
 
-use rayon::prelude::*;
 use cv_runtime::orchestrator::RuntimeRunner;
+use rayon::prelude::*;
 
 /// Bilateral filter parameters
 #[derive(Debug, Clone)]
@@ -52,15 +52,16 @@ pub fn bilateral_filter_depth(
     params: BilateralFilterParams,
 ) -> Vec<f32> {
     let runner = cv_runtime::scheduler()
-        .and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput).map(cv_runtime::RuntimeRunner::Group))
+        .and_then(|s| {
+            s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)
+                .map(cv_runtime::RuntimeRunner::Group)
+        })
         .or_else(|_| cv_runtime::default_runner())
         .unwrap_or_else(|_| {
             // Absolute fallback: use the CPU registry if available
             cv_runtime::registry()
                 .ok()
-                .and_then(|reg| {
-                    Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
-                })
+                .and_then(|reg| Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id())))
                 .unwrap_or_else(|| {
                     // If even registry fails, create a minimal CPU runner (id = 0)
                     cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0))
@@ -157,15 +158,16 @@ pub fn bilateral_filter_rgb(
     params: BilateralFilterParams,
 ) -> Vec<u8> {
     let runner = cv_runtime::scheduler()
-        .and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput).map(cv_runtime::RuntimeRunner::Group))
+        .and_then(|s| {
+            s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)
+                .map(cv_runtime::RuntimeRunner::Group)
+        })
         .or_else(|_| cv_runtime::default_runner())
         .unwrap_or_else(|_| {
             // Absolute fallback: use the CPU registry if available
             cv_runtime::registry()
                 .ok()
-                .and_then(|reg| {
-                    Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
-                })
+                .and_then(|reg| Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id())))
                 .unwrap_or_else(|| {
                     // If even registry fails, create a minimal CPU runner (id = 0)
                     cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0))
@@ -189,64 +191,67 @@ fn bilateral_filter_rgb_internal(
     let channels = 3;
     let stride = width as usize * channels;
 
-    output.par_chunks_mut(stride).enumerate().for_each(|(y, row)| {
-        let y = y as i32;
-        for x in 0..width as usize {
-            let pixel_offset = x * channels;
-            let idx = (y as usize * width as usize + x) * channels;
+    output
+        .par_chunks_mut(stride)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let y = y as i32;
+            for x in 0..width as usize {
+                let pixel_offset = x * channels;
+                let idx = (y as usize * width as usize + x) * channels;
 
-            let center_r = image[idx] as f32;
-            let center_g = image[idx + 1] as f32;
-            let center_b = image[idx + 2] as f32;
+                let center_r = image[idx] as f32;
+                let center_g = image[idx + 1] as f32;
+                let center_b = image[idx + 2] as f32;
 
-            let mut sum_r = 0.0f32;
-            let mut sum_g = 0.0f32;
-            let mut sum_b = 0.0f32;
-            let mut weight_sum = 0.0f32;
+                let mut sum_r = 0.0f32;
+                let mut sum_g = 0.0f32;
+                let mut sum_b = 0.0f32;
+                let mut weight_sum = 0.0f32;
 
-            for ky in -half_kernel..=half_kernel {
-                for kx in -half_kernel..=half_kernel {
-                    let nx = x as i32 + kx;
-                    let ny = y + ky;
+                for ky in -half_kernel..=half_kernel {
+                    for kx in -half_kernel..=half_kernel {
+                        let nx = x as i32 + kx;
+                        let ny = y + ky;
 
-                    if nx < 0 || nx >= width as i32 || ny < 0 || ny >= height as i32 {
-                        continue;
+                        if nx < 0 || nx >= width as i32 || ny < 0 || ny >= height as i32 {
+                            continue;
+                        }
+
+                        let nidx = (ny as usize * width as usize + nx as usize) * channels;
+
+                        let nr = image[nidx] as f32;
+                        let ng = image[nidx + 1] as f32;
+                        let nb = image[nidx + 2] as f32;
+
+                        let spatial_dist = (kx * kx + ky * ky) as f32;
+                        let spatial_weight = (-spatial_dist / sigma_space_sq).exp();
+
+                        let range_dist = ((center_r - nr).powi(2)
+                            + (center_g - ng).powi(2)
+                            + (center_b - nb).powi(2))
+                        .sqrt();
+                        let range_weight = (-range_dist * range_dist / sigma_range_sq).exp();
+
+                        let weight = spatial_weight * range_weight;
+                        sum_r += nr * weight;
+                        sum_g += ng * weight;
+                        sum_b += nb * weight;
+                        weight_sum += weight;
                     }
+                }
 
-                    let nidx = (ny as usize * width as usize + nx as usize) * channels;
-
-                    let nr = image[nidx] as f32;
-                    let ng = image[nidx + 1] as f32;
-                    let nb = image[nidx + 2] as f32;
-
-                    let spatial_dist = (kx * kx + ky * ky) as f32;
-                    let spatial_weight = (-spatial_dist / sigma_space_sq).exp();
-
-                    let range_dist = ((center_r - nr).powi(2)
-                        + (center_g - ng).powi(2)
-                        + (center_b - nb).powi(2))
-                    .sqrt();
-                    let range_weight = (-range_dist * range_dist / sigma_range_sq).exp();
-
-                    let weight = spatial_weight * range_weight;
-                    sum_r += nr * weight;
-                    sum_g += ng * weight;
-                    sum_b += nb * weight;
-                    weight_sum += weight;
+                if weight_sum > 0.0 {
+                    row[pixel_offset] = (sum_r / weight_sum).round() as u8;
+                    row[pixel_offset + 1] = (sum_g / weight_sum).round() as u8;
+                    row[pixel_offset + 2] = (sum_b / weight_sum).round() as u8;
+                } else {
+                    row[pixel_offset] = image[idx];
+                    row[pixel_offset + 1] = image[idx + 1];
+                    row[pixel_offset + 2] = image[idx + 2];
                 }
             }
-
-            if weight_sum > 0.0 {
-                row[pixel_offset] = (sum_r / weight_sum).round() as u8;
-                row[pixel_offset + 1] = (sum_g / weight_sum).round() as u8;
-                row[pixel_offset + 2] = (sum_b / weight_sum).round() as u8;
-            } else {
-                row[pixel_offset] = image[idx];
-                row[pixel_offset + 1] = image[idx + 1];
-                row[pixel_offset + 2] = image[idx + 2];
-            }
-        }
-    });
+        });
 }
 
 pub fn bilateral_filter_rgb_ctx(
@@ -272,15 +277,16 @@ pub fn joint_bilateral_filter(
     params: BilateralFilterParams,
 ) -> Vec<f32> {
     let runner = cv_runtime::scheduler()
-        .and_then(|s| s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput).map(cv_runtime::RuntimeRunner::Group))
+        .and_then(|s| {
+            s.best_gpu_or_cpu_for(cv_runtime::orchestrator::WorkloadHint::Throughput)
+                .map(cv_runtime::RuntimeRunner::Group)
+        })
         .or_else(|_| cv_runtime::default_runner())
         .unwrap_or_else(|_| {
             // Absolute fallback: use the CPU registry if available
             cv_runtime::registry()
                 .ok()
-                .and_then(|reg| {
-                    Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
-                })
+                .and_then(|reg| Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id())))
                 .unwrap_or_else(|| {
                     // If even registry fails, create a minimal CPU runner (id = 0)
                     cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0))

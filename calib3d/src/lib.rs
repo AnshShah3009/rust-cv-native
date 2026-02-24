@@ -739,7 +739,10 @@ mod tests {
         let mut left_sets = Vec::new();
         let mut right_sets = Vec::new();
         for ext_l in &board_poses {
-            let ext_r = Pose::new(r_lr * ext_l.rotation_matrix(), r_lr * ext_l.translation + t_lr);
+            let ext_r = Pose::new(
+                r_lr * ext_l.rotation_matrix(),
+                r_lr * ext_l.translation + t_lr,
+            );
             obj_sets.push(board.clone());
             left_sets.push(
                 board

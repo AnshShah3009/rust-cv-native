@@ -1,11 +1,11 @@
-use cv_core::Tensor;
+use crate::context::StereoMatchParams;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
-use crate::context::StereoMatchParams;
 use crate::Result;
-use wgpu::util::DeviceExt;
-use std::sync::Arc;
+use cv_core::Tensor;
 use std::marker::PhantomData;
+use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -42,11 +42,13 @@ pub fn stereo_match(
         },
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Stereo Match Params"),
-        contents: bytemuck::bytes_of(&gpu_params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Stereo Match Params"),
+            contents: bytemuck::bytes_of(&gpu_params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/stereo_match.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -55,16 +57,35 @@ pub fn stereo_match(
         label: Some("Stereo Match Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: left.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: right.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: output_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: left.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: right.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: output_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Stereo Match Dispatch") });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Stereo Match Dispatch"),
+        });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         let x = (w as u32 + 15) / 16;

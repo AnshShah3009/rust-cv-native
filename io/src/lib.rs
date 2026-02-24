@@ -1,21 +1,21 @@
 //! 3D File I/O Module
-//! 
+//!
 //! Supports reading and writing point clouds and meshes in various formats:
 //! - PLY (Polygon File Format)
 //! - OBJ (Wavefront Object)
 //! - STL (STereoLithography)
 //! - PCD (Point Cloud Data - PCL format)
 
-pub mod ply;
-pub mod obj;
-pub mod stl;
-pub mod pcd;
 pub mod mesh;
+pub mod obj;
+pub mod pcd;
+pub mod ply;
+pub mod stl;
 
-pub use ply::{read_ply, write_ply};
 pub use obj::{read_obj, write_obj, ObjMesh};
-pub use stl::{read_stl, write_stl, write_stl_ascii, write_stl_binary};
 pub use pcd::{read_pcd, write_pcd, PcdData};
+pub use ply::{read_ply, write_ply};
+pub use stl::{read_stl, write_stl, write_stl_ascii, write_stl_binary};
 // TriangleMesh is now the authoritative definition from cv-3d, re-exported here for convenience
 pub use mesh::TriangleMesh;
 

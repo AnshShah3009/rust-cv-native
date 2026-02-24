@@ -1,10 +1,10 @@
-use cv_core::Tensor;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
-use wgpu::util::DeviceExt;
+use cv_core::Tensor;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -24,7 +24,9 @@ pub fn fast_detect(
     let c = input.shape.channels;
 
     if c != 1 {
-        return Err(crate::Error::NotSupported("GPU FAST currently only for grayscale".into()));
+        return Err(crate::Error::NotSupported(
+            "GPU FAST currently only for grayscale".into(),
+        ));
     }
 
     let out_len = w * h;
@@ -42,11 +44,13 @@ pub fn fast_detect(
         threshold: threshold as u32,
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("FAST Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("FAST Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/fast.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -55,15 +59,29 @@ pub fn fast_detect(
         label: Some("FAST Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: output_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: output_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         let x = ((w as u32 + 3) / 4 + 15) / 16;
@@ -94,15 +112,29 @@ pub fn fast_detect(
             label: Some("FAST NMS Bind Group"),
             layout: &nms_pipeline.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: score_map.storage.buffer().as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: nms_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: score_map.storage.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: nms_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
 
-        let mut nms_encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut nms_encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
-            let mut pass = nms_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+            let mut pass = nms_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: None,
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&nms_pipeline);
             pass.set_bind_group(0, &nms_bind_group, &[]);
             let x = ((w as u32 + 3) / 4 + 15) / 16;
@@ -143,7 +175,8 @@ pub fn extract_keypoints(
     let num_u32 = (num_pixels + 3) / 4;
 
     // 1. Count pass
-    let usages = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
+    let usages =
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
     let counts_buffer = ctx.get_buffer((num_u32 as u64) * 4, usages);
 
     let params = CollectParams {
@@ -153,36 +186,55 @@ pub fn extract_keypoints(
         padding: 0,
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Collect Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Collect Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("feature_collection.wgsl");
-    let shader = ctx.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Feature Collection Shader"),
-        source: wgpu::ShaderSource::Wgsl(shader_source.into()),
-    });
+    let shader = ctx
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Feature Collection Shader"),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+        });
 
-    let count_pipeline = ctx.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Count Points Pipeline"),
-        layout: None,
-        module: &shader,
-        entry_point: Some("count_points"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
+    let count_pipeline = ctx
+        .device
+        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Count Points Pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: Some("count_points"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Count Points") });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Count Points"),
+        });
     {
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Count Bind Group"),
             layout: &count_pipeline.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: score_map.storage.buffer().as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: counts_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: score_map.storage.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: counts_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
@@ -201,28 +253,33 @@ pub fn extract_keypoints(
         0,
         (num_u32 as usize) * 4,
     ))?;
-    
+
     let mut total = 0u32;
     let mut indices = Vec::with_capacity(num_u32 as usize);
     for &c in &counts_data {
         indices.push(total);
-        if c <= 4 { // packed u32 check
+        if c <= 4 {
+            // packed u32 check
             total += c;
         }
     }
-    
+
     if total == 0 {
         ctx.return_buffer(counts_buffer, usages);
         return Ok(Vec::new());
     }
-    
+
     if total > 1000000 {
-         ctx.return_buffer(counts_buffer, usages);
-         return Err(crate::Error::InvalidInput(format!("Too many keypoints detected: {}", total)));
+        ctx.return_buffer(counts_buffer, usages);
+        return Err(crate::Error::InvalidInput(format!(
+            "Too many keypoints detected: {}",
+            total
+        )));
     }
 
     // Upload scanned indices
-    ctx.queue.write_buffer(&counts_buffer, 0, bytemuck::cast_slice(&indices));
+    ctx.queue
+        .write_buffer(&counts_buffer, 0, bytemuck::cast_slice(&indices));
 
     // 3. Collect pass
     let kp_size = std::mem::size_of::<cv_core::KeyPointF32>();
@@ -233,25 +290,43 @@ pub fn extract_keypoints(
         mapped_at_creation: false,
     });
 
-    let collect_pipeline = ctx.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("Collect Points Pipeline"),
-        layout: None,
-        module: &shader,
-        entry_point: Some("collect_points"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
+    let collect_pipeline = ctx
+        .device
+        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Collect Points Pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: Some("collect_points"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Collect Points") });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Collect Points"),
+        });
     {
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Collect Bind Group"),
             layout: &collect_pipeline.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: score_map.storage.buffer().as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: counts_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: kp_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: score_map.storage.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: counts_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: kp_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: params_buffer.as_entire_binding(),
+                },
             ],
         });
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());

@@ -1,5 +1,5 @@
-pub mod hog;
 pub mod haar;
+pub mod hog;
 
-pub use hog::*;
 pub use haar::*;
+pub use hog::*;

@@ -1,7 +1,7 @@
-use cv_core::{Tensor, KeyPointF32};
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
+use cv_core::{KeyPointF32, Tensor};
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
@@ -37,17 +37,21 @@ pub fn compute_brief(
     let num_pairs = pattern.len() as u32;
 
     // Create buffers
-    let kp_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Brief Keypoints"),
-        contents: bytemuck::cast_slice(keypoints),
-        usage: wgpu::BufferUsages::STORAGE,
-    });
+    let kp_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Brief Keypoints"),
+            contents: bytemuck::cast_slice(keypoints),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
 
-    let pattern_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Brief Pattern"),
-        contents: bytemuck::cast_slice(pattern),
-        usage: wgpu::BufferUsages::STORAGE,
-    });
+    let pattern_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Brief Pattern"),
+            contents: bytemuck::cast_slice(pattern),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
 
     let desc_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Brief Descriptors"),
@@ -63,11 +67,13 @@ pub fn compute_brief(
         num_pairs,
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Brief Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Brief Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("brief.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -76,17 +82,37 @@ pub fn compute_brief(
         label: Some("Brief Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: image.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: kp_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: pattern_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: desc_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 4, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: image.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: kp_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: pattern_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: desc_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups((num_kp + 255) / 256, 1, 1);

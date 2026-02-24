@@ -1,5 +1,5 @@
-use cv_optimize::pose_graph::{PoseGraph, Edge};
-use nalgebra::{Isometry3, Vector3, Matrix6};
+use cv_optimize::pose_graph::{Edge, PoseGraph};
+use nalgebra::{Isometry3, Matrix6, Vector3};
 
 #[test]
 fn test_pose_graph_simple_loop() {

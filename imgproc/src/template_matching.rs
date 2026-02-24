@@ -1,10 +1,10 @@
+use cv_core::{storage::Storage, Tensor};
+use cv_hal::compute::ComputeDevice;
+use cv_hal::context::TemplateMatchMethod;
+use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
+use cv_runtime::orchestrator::RuntimeRunner;
 use image::GrayImage;
 use rayon::prelude::*;
-use cv_hal::context::TemplateMatchMethod;
-use cv_runtime::orchestrator::RuntimeRunner;
-use cv_hal::compute::ComputeDevice;
-use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
-use cv_core::{Tensor, storage::Storage};
 
 #[derive(Debug, Clone)]
 pub struct MatchResult {
@@ -28,9 +28,7 @@ pub fn match_template(
         // Fallback: use CPU registry if available
         cv_runtime::registry()
             .ok()
-            .and_then(|reg| {
-                Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id()))
-            })
+            .and_then(|reg| Some(cv_runtime::RuntimeRunner::Sync(reg.default_cpu().id())))
             .unwrap_or_else(|| cv_runtime::RuntimeRunner::Sync(cv_hal::DeviceId(0)))
     });
     match_template_ctx(image, templ, method, &runner)
@@ -160,25 +158,36 @@ fn match_template_gpu(
     method: TemplateMatchMethod,
 ) -> cv_hal::Result<MatchResult> {
     use cv_hal::context::ComputeContext;
-    let img_tensor = cv_core::CpuTensor::from_vec(image.as_raw().to_vec(), cv_core::TensorShape::new(1, image.height() as usize, image.width() as usize))
-        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
-    let templ_tensor = cv_core::CpuTensor::from_vec(templ.as_raw().to_vec(), cv_core::TensorShape::new(1, templ.height() as usize, templ.width() as usize))
-        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
-    
+    let img_tensor = cv_core::CpuTensor::from_vec(
+        image.as_raw().to_vec(),
+        cv_core::TensorShape::new(1, image.height() as usize, image.width() as usize),
+    )
+    .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+    let templ_tensor = cv_core::CpuTensor::from_vec(
+        templ.as_raw().to_vec(),
+        cv_core::TensorShape::new(1, templ.height() as usize, templ.width() as usize),
+    )
+    .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+
     let img_gpu = img_tensor.to_gpu_ctx(gpu)?;
     let templ_gpu = templ_tensor.to_gpu_ctx(gpu)?;
-    
+
     // Output is f32 score map
-    let res_gpu: Tensor<f32, cv_hal::storage::GpuStorage<f32>> = gpu.match_template(&img_gpu, &templ_gpu, method)?;
+    let res_gpu: Tensor<f32, cv_hal::storage::GpuStorage<f32>> =
+        gpu.match_template(&img_gpu, &templ_gpu, method)?;
     let res_cpu = res_gpu.to_cpu_ctx(gpu)?;
-    
+
     let out_w = image.width() - templ.width() + 1;
     let out_h = image.height() - templ.height() + 1;
-    
-    let data = res_cpu.storage.as_slice()
-        .ok_or_else(|| cv_hal::Error::RuntimeError(
-            "Template match GPU result not accessible as CPU slice".to_string()
-        ))?
+
+    let data = res_cpu
+        .storage
+        .as_slice()
+        .ok_or_else(|| {
+            cv_hal::Error::RuntimeError(
+                "Template match GPU result not accessible as CPU slice".to_string(),
+            )
+        })?
         .to_vec();
     Ok(MatchResult {
         data,

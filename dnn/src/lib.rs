@@ -106,18 +106,22 @@ impl DnnNet {
             .model_for_path(path)
             .map_err(|e| cv_core::Error::RuntimeError(format!("Failed to load ONNX model: {}", e)))?
             .into_optimized()
-            .map_err(|e| cv_core::Error::RuntimeError(format!("Failed to optimize ONNX model: {}", e)))?
+            .map_err(|e| {
+                cv_core::Error::RuntimeError(format!("Failed to optimize ONNX model: {}", e))
+            })?
             .into_runnable()
-            .map_err(|e| cv_core::Error::RuntimeError(format!("Failed to create runnable ONNX model: {}", e)))?;
-        
+            .map_err(|e| {
+                cv_core::Error::RuntimeError(format!("Failed to create runnable ONNX model: {}", e))
+            })?;
+
         // Inspect input facts to determine shape
         // model.model() returns reference to Graph
         let input_shape = if let Some(_input_node_idx) = model.model().inputs.first() {
-             // Basic heuristic: check if shape is fixed
-             // For now, default to standard image net
-             vec![1, 3, 224, 224] 
+            // Basic heuristic: check if shape is fixed
+            // For now, default to standard image net
+            vec![1, 3, 224, 224]
         } else {
-             vec![1, 3, 224, 224]
+            vec![1, 3, 224, 224]
         };
 
         Ok(Self {
@@ -161,24 +165,31 @@ impl DnnNet {
             self.input_shape[0],
             self.input_shape[1],
             self.input_shape[2],
-            self.input_shape[3]
+            self.input_shape[3],
         ];
-        
-        let slice = input.as_slice().map_err(|e| Error::DnnError(e.to_string()))?;
+
+        let slice = input
+            .as_slice()
+            .map_err(|e| Error::DnnError(e.to_string()))?;
         // Create tract tensor from slice
         let tensor = tract_onnx::prelude::Tensor::from_shape(&input_shape_vec, slice)
             .map_err(|e| Error::DnnError(format!("Failed to create tensor from shape: {}", e)))?;
 
-        let result = self.model.run(tvec!(tensor.into()))
+        let result = self
+            .model
+            .run(tvec!(tensor.into()))
             .map_err(|e| Error::DnnError(format!("Model forward pass failed: {}", e)))?;
 
         let mut outputs = Vec::new();
         for t in result {
             let shape = t.shape();
-            let data = t.as_slice::<f32>()
-                .map_err(|e| Error::DnnError(format!("Failed to extract slice from tensor: {}", e)))?
+            let data = t
+                .as_slice::<f32>()
+                .map_err(|e| {
+                    Error::DnnError(format!("Failed to extract slice from tensor: {}", e))
+                })?
                 .to_vec();
-            
+
             let tensor_shape = match shape.len() {
                 1 => cv_core::TensorShape::new(1, 1, shape[0]),
                 2 => cv_core::TensorShape::new(1, shape[0], shape[1]),
@@ -186,8 +197,10 @@ impl DnnNet {
                 4 => cv_core::TensorShape::new(shape[1], shape[2], shape[3]), // Assuming NCHW
                 _ => cv_core::TensorShape::new(1, 1, shape.iter().product()),
             };
-            
-            outputs.push(Tensor::from_vec(data, tensor_shape).map_err(|e| Error::DnnError(e.to_string()))?);
+
+            outputs.push(
+                Tensor::from_vec(data, tensor_shape).map_err(|e| Error::DnnError(e.to_string()))?,
+            );
         }
 
         Ok(outputs)
@@ -229,10 +242,20 @@ impl DnnNet {
         let channels = self.input_shape[1];
 
         let gray = img.to_luma8();
-        let resized = cv_imgproc::resize_ctx(&gray, target_w as u32, target_h as u32, cv_imgproc::Interpolation::Linear, runner);
+        let resized = cv_imgproc::resize_ctx(
+            &gray,
+            target_w as u32,
+            target_h as u32,
+            cv_imgproc::Interpolation::Linear,
+            runner,
+        );
 
         let data: Vec<f32> = resized.as_raw().iter().map(|&v| v as f32 / 255.0).collect();
 
-        Tensor::from_vec(data, cv_core::TensorShape::new(channels, target_h, target_w)).map_err(|e| Error::DnnError(e.to_string()))
+        Tensor::from_vec(
+            data,
+            cv_core::TensorShape::new(channels, target_h, target_w),
+        )
+        .map_err(|e| Error::DnnError(e.to_string()))
     }
 }

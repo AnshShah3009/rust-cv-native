@@ -20,12 +20,12 @@ pub mod gnc;
 pub type RegistrationResult<T> = cv_core::Result<T>;
 
 pub use colored::{registration_colored_icp, ColoredICPResult};
+pub use cv_core::{Error, Result, RobustLoss};
 pub use global::{
     registration_fgr_based_on_feature_matching, registration_ransac_based_on_feature_matching,
     FPFHFeature, FastGlobalRegistrationOption, GlobalRegistrationResult,
 };
 pub use gnc::{registration_gnc, GNCOptimizer, GNCResult};
-pub use cv_core::{Error, Result, RobustLoss};
 
 use cv_core::point_cloud::PointCloud;
 use nalgebra::{Matrix4, Point3};
@@ -306,12 +306,18 @@ pub fn registration_icp_point_to_plane_ctx(
     // If using GPU, upload once
     let (s_gpu, t_gpu, n_gpu) = if let cv_hal::compute::ComputeDevice::Gpu(gpu) = ctx {
         (
-            source_tensor.to_gpu_ctx(gpu)
-                .map_err(|e| Error::RuntimeError(format!("Failed to upload source tensor to GPU: {:?}", e)))?,
-            target_tensor.to_gpu_ctx(gpu)
-                .map_err(|e| Error::RuntimeError(format!("Failed to upload target tensor to GPU: {:?}", e)))?,
-            target_normals_tensor.to_gpu_ctx(gpu)
-                .map_err(|e| Error::RuntimeError(format!("Failed to upload target normals tensor to GPU: {:?}", e)))?,
+            source_tensor.to_gpu_ctx(gpu).map_err(|e| {
+                Error::RuntimeError(format!("Failed to upload source tensor to GPU: {:?}", e))
+            })?,
+            target_tensor.to_gpu_ctx(gpu).map_err(|e| {
+                Error::RuntimeError(format!("Failed to upload target tensor to GPU: {:?}", e))
+            })?,
+            target_normals_tensor.to_gpu_ctx(gpu).map_err(|e| {
+                Error::RuntimeError(format!(
+                    "Failed to upload target normals tensor to GPU: {:?}",
+                    e
+                ))
+            })?,
         )
     } else {
         // CPU fallback: we'll use the tensors directly but it's less efficient than specialized CPU code
@@ -329,7 +335,9 @@ pub fn registration_icp_point_to_plane_ctx(
         // Find correspondences on device
         let correspondences_raw = ctx
             .icp_correspondences(&s_gpu, &t_gpu, max_correspondence_distance)
-            .map_err(|e| Error::RuntimeError(format!("Failed to compute correspondences: {:?}", e)))?;
+            .map_err(|e| {
+                Error::RuntimeError(format!("Failed to compute correspondences: {:?}", e))
+            })?;
 
         if correspondences_raw.len() < 3 {
             break;
@@ -343,7 +351,9 @@ pub fn registration_icp_point_to_plane_ctx(
         // Accumulate Normal Equations on device
         let (ata, atb): (nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>) = ctx
             .icp_accumulate(&s_gpu, &t_gpu, &n_gpu, &correspondences, &transformation)
-            .map_err(|e| Error::RuntimeError(format!("Failed to accumulate normal equations: {:?}", e)))?;
+            .map_err(|e| {
+                Error::RuntimeError(format!("Failed to accumulate normal equations: {:?}", e))
+            })?;
 
         // Solve for update on CPU (Matrix6 is small)
         if let Some(ata_inv) = ata.try_inverse() {

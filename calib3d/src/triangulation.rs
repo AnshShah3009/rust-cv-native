@@ -84,7 +84,9 @@ pub fn recover_pose_from_essential(
         cv_core::Error::CalibrationError("SVD U missing in recover_pose_from_essential".to_string())
     })?;
     let mut vt = svd.v_t.ok_or_else(|| {
-        cv_core::Error::CalibrationError("SVD V^T missing in recover_pose_from_essential".to_string())
+        cv_core::Error::CalibrationError(
+            "SVD V^T missing in recover_pose_from_essential".to_string(),
+        )
     })?;
 
     if u.determinant() < 0.0 {
@@ -163,5 +165,7 @@ pub fn recover_pose_from_essential(
         }
     }
 
-    best.ok_or_else(|| cv_core::Error::CalibrationError("No valid pose candidate found".to_string()))
+    best.ok_or_else(|| {
+        cv_core::Error::CalibrationError("No valid pose candidate found".to_string())
+    })
 }

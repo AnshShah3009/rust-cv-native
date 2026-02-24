@@ -30,21 +30,24 @@ pub fn laplacian_smooth(mesh: &mut TriangleMesh, iterations: usize, lambda: f32)
         // Compute new positions
         let mut new_positions = mesh.vertices.clone();
 
-        new_positions.par_iter_mut().enumerate().for_each(|(i, vertex)| {
-            if neighbors[i].is_empty() {
-                return;
-            }
+        new_positions
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(i, vertex)| {
+                if neighbors[i].is_empty() {
+                    return;
+                }
 
-            let mut centroid = Point3::origin();
-            for &neighbor_idx in &neighbors[i] {
-                centroid += mesh.vertices[neighbor_idx].coords;
-            }
-            centroid /= neighbors[i].len() as f32;
+                let mut centroid = Point3::origin();
+                for &neighbor_idx in &neighbors[i] {
+                    centroid += mesh.vertices[neighbor_idx].coords;
+                }
+                centroid /= neighbors[i].len() as f32;
 
-            // Move vertex toward centroid
-            let displacement = centroid - mesh.vertices[i];
-            *vertex = mesh.vertices[i] + displacement * lambda;
-        });
+                // Move vertex toward centroid
+                let displacement = centroid - mesh.vertices[i];
+                *vertex = mesh.vertices[i] + displacement * lambda;
+            });
 
         mesh.vertices = new_positions;
     }

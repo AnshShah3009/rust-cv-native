@@ -4,8 +4,8 @@
 /// given a set of 3D object points and their 2D image projections.
 use crate::Result;
 use cv_core::{CameraIntrinsics, Pose};
-use cv_runtime::RuntimeRunner;
 use cv_hal;
+use cv_runtime::RuntimeRunner;
 use nalgebra::{DMatrix, Matrix3, Matrix3x4, Point2, Point3, Rotation3, Vector3};
 use rayon::prelude::*;
 
@@ -61,9 +61,9 @@ pub fn solve_pnp_dlt(
     }
 
     let svd = a.svd(true, true);
-    let vt = svd
-        .v_t
-        .ok_or_else(|| cv_core::Error::CalibrationError("SVD failed in solve_pnp_dlt".to_string()))?;
+    let vt = svd.v_t.ok_or_else(|| {
+        cv_core::Error::CalibrationError("SVD failed in solve_pnp_dlt".to_string())
+    })?;
     let p = vt.row(vt.nrows() - 1);
 
     let mut pmat = Matrix3x4::<f64>::zeros();

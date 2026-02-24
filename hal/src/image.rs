@@ -1,5 +1,5 @@
-use wgpu::{Texture, TextureFormat, TextureView};
 use std::sync::Arc;
+use wgpu::{Texture, TextureFormat, TextureView};
 
 /// A GPU-resident image
 #[derive(Debug)]

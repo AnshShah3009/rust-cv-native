@@ -6,19 +6,19 @@
 use image::GrayImage;
 
 pub mod block_matching;
-pub mod sgm;
 pub mod depth;
 pub mod rectification;
+pub mod sgm;
 pub use cv_calib3d as calib3d;
 
 #[cfg(feature = "gpu")]
 pub mod gpu;
 
 pub use block_matching::*;
-pub use sgm::*;
+pub use calib3d::*;
 pub use depth::*;
 pub use rectification::*;
-pub use calib3d::*;
+pub use sgm::*;
 
 #[cfg(feature = "gpu")]
 pub use gpu::*;
@@ -48,7 +48,12 @@ pub trait StereoMatcher {
 
 /// Stereo matching algorithm trait with explicit context
 pub trait StereoMatcherCtx {
-    fn compute_ctx(&self, left: &GrayImage, right: &GrayImage, group: &RuntimeRunner) -> Result<DisparityMap>;
+    fn compute_ctx(
+        &self,
+        left: &GrayImage,
+        right: &GrayImage,
+        group: &RuntimeRunner,
+    ) -> Result<DisparityMap>;
 }
 
 /// Disparity map representation
@@ -92,12 +97,12 @@ impl DisparityMap {
     /// Convert to a grayscale image for visualization
     pub fn to_image(&self) -> GrayImage {
         let mut img = GrayImage::new(self.width, self.height);
-        
+
         // Find min/max for normalization
         let min_val = self.data.iter().copied().fold(f32::INFINITY, f32::min);
         let max_val = self.data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let range = max_val - min_val;
-        
+
         for y in 0..self.height {
             for x in 0..self.width {
                 let disparity = self.get(x, y);
@@ -109,7 +114,7 @@ impl DisparityMap {
                 img.put_pixel(x, y, image::Luma([normalized]));
             }
         }
-        
+
         img
     }
 }
@@ -145,7 +150,9 @@ impl StereoParams {
 
 /// Compute disparity validity mask
 pub fn compute_validity_mask(disparity: &DisparityMap, threshold: f32) -> Vec<bool> {
-    disparity.data.iter()
+    disparity
+        .data
+        .iter()
         .map(|&d| d >= threshold && d < (disparity.max_disparity as f32))
         .collect()
 }
@@ -157,10 +164,10 @@ mod tests {
     #[test]
     fn test_disparity_map() {
         let mut disp = DisparityMap::new(10, 10, 0, 64);
-        
+
         disp.set(5, 5, 32.0);
         assert_eq!(disp.get(5, 5), 32.0);
-        
+
         let img = disp.to_image();
         assert_eq!(img.width(), 10);
         assert_eq!(img.height(), 10);
@@ -169,11 +176,11 @@ mod tests {
     #[test]
     fn test_stereo_params() {
         let params = StereoParams::new(500.0, 0.1, 320.0, 240.0);
-        
+
         // Test depth computation: depth = (f * B) / disparity
         let disparity = 50.0;
         let expected_depth = (500.0 * 0.1) / 50.0;
-        
+
         assert_eq!(params.disparity_to_depth(disparity), Some(expected_depth));
         assert_eq!(params.disparity_to_depth(0.0), None);
     }

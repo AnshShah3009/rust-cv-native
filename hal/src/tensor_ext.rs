@@ -1,10 +1,10 @@
-use cv_core::{Tensor, CpuStorage};
-use crate::storage::GpuStorage;
 use crate::gpu::GpuContext;
 use crate::gpu_kernels::buffer_utils;
-use wgpu::util::DeviceExt;
-use std::sync::Arc;
+use crate::storage::GpuStorage;
+use cv_core::{CpuStorage, Tensor};
 use std::marker::PhantomData;
+use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 /// Extension trait for transferring data to the GPU.
 pub trait TensorToGpu<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> {
@@ -14,18 +14,24 @@ pub trait TensorToGpu<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> {
     fn to_gpu_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, GpuStorage<T>>>;
 }
 
-impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T> for Tensor<T, CpuStorage<T>> {
+impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T>
+    for Tensor<T, CpuStorage<T>>
+{
     fn to_gpu(&self) -> crate::Result<Tensor<T, GpuStorage<T>>> {
         let ctx = GpuContext::global()?;
         self.to_gpu_ctx(ctx)
     }
 
     fn to_gpu_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, GpuStorage<T>>> {
-        let buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Tensor Upload"),
-            contents: bytemuck::cast_slice(self.as_slice()?),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-        });
+        let buffer = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Tensor Upload"),
+                contents: bytemuck::cast_slice(self.as_slice()?),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+            });
 
         Ok(Tensor {
             storage: GpuStorage::from_buffer(Arc::new(buffer), self.shape.len()),
@@ -36,9 +42,15 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T> for Tenso
     }
 }
 
-impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T> for Tensor<T, GpuStorage<T>> {
-    fn to_gpu(&self) -> crate::Result<Tensor<T, GpuStorage<T>>> { Ok(self.clone()) }
-    fn to_gpu_ctx(&self, _ctx: &GpuContext) -> crate::Result<Tensor<T, GpuStorage<T>>> { Ok(self.clone()) }
+impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug> TensorToGpu<T>
+    for Tensor<T, GpuStorage<T>>
+{
+    fn to_gpu(&self) -> crate::Result<Tensor<T, GpuStorage<T>>> {
+        Ok(self.clone())
+    }
+    fn to_gpu_ctx(&self, _ctx: &GpuContext) -> crate::Result<Tensor<T, GpuStorage<T>>> {
+        Ok(self.clone())
+    }
 }
 
 /// Extension trait for transferring data back to the CPU.
@@ -55,7 +67,9 @@ pub trait TensorToCpu<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync +
     async fn to_cpu_ctx_async(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>>;
 }
 
-impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCpu<T> for Tensor<T, GpuStorage<T>> {
+impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCpu<T>
+    for Tensor<T, GpuStorage<T>>
+{
     fn to_cpu(&self) -> crate::Result<Tensor<T, CpuStorage<T>>> {
         let ctx = GpuContext::global()?;
         self.to_cpu_ctx(ctx)
@@ -63,7 +77,7 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCp
 
     fn to_cpu_ctx(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>> {
         let byte_size = self.storage.len * std::mem::size_of::<T>();
-        
+
         let data: Vec<T> = pollster::block_on(buffer_utils::read_buffer(
             ctx.device.clone(),
             &ctx.queue,
@@ -82,25 +96,36 @@ impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCp
 
     async fn to_cpu_ctx_async(&self, ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>> {
         let byte_size = self.storage.len * std::mem::size_of::<T>();
-        
+
         let data: Vec<T> = buffer_utils::read_buffer(
             ctx.device.clone(),
             &ctx.queue,
             self.storage.buffer(),
             0,
             byte_size,
-        ).await?;
+        )
+        .await?;
 
         Tensor::from_vec(data, self.shape).map_err(|e| crate::Error::RuntimeError(e.to_string()))
     }
 }
 
-impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCpu<T> for Tensor<T, CpuStorage<T>> {
-    fn to_cpu(&self) -> crate::Result<Tensor<T, CpuStorage<T>>> { Ok(self.clone()) }
-    fn to_cpu_ctx(&self, _ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>> { Ok(self.clone()) }
-    
-    async fn to_cpu_async(&self) -> crate::Result<Tensor<T, CpuStorage<T>>> { Ok(self.clone()) }
-    async fn to_cpu_ctx_async(&self, _ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>> { Ok(self.clone()) }
+impl<T: Clone + Copy + bytemuck::Pod + std::fmt::Debug + Sync + Send> TensorToCpu<T>
+    for Tensor<T, CpuStorage<T>>
+{
+    fn to_cpu(&self) -> crate::Result<Tensor<T, CpuStorage<T>>> {
+        Ok(self.clone())
+    }
+    fn to_cpu_ctx(&self, _ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>> {
+        Ok(self.clone())
+    }
+
+    async fn to_cpu_async(&self) -> crate::Result<Tensor<T, CpuStorage<T>>> {
+        Ok(self.clone())
+    }
+    async fn to_cpu_ctx_async(&self, _ctx: &GpuContext) -> crate::Result<Tensor<T, CpuStorage<T>>> {
+        Ok(self.clone())
+    }
 }
 
 /// Extension trait for type casting on GPU
@@ -127,14 +152,25 @@ impl TensorCast for Tensor<u8, GpuStorage<u8>> {
             label: Some("Cast u8->f32 Bind Group"),
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.storage.buffer().as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: output_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.storage.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: output_buffer.as_entire_binding(),
+                },
             ],
         });
 
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: None,
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             let workgroups = (size as u32 + 255) / 256;
@@ -178,14 +214,25 @@ impl TensorCast for Tensor<f32, GpuStorage<f32>> {
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[
                 // Note: Bindings 2 and 3 in shader
-                wgpu::BindGroupEntry { binding: 2, resource: self.storage.buffer().as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: output_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.storage.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: output_buffer.as_entire_binding(),
+                },
             ],
         });
 
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: None,
+                timestamp_writes: None,
+            });
             pass.set_pipeline(&pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             let workgroups = ((size as u32 / 4) + 255) / 256;

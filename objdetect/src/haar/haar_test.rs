@@ -56,7 +56,9 @@ fn test_haar_detection_simple() {
 
     assert!(!detections.is_empty());
     // Check if at least one detection is near (40, 40)
-    let found = detections.iter().any(|r| (r.x - 40.0).abs() < 5.0 && (r.y - 40.0).abs() < 5.0);
+    let found = detections
+        .iter()
+        .any(|r| (r.x - 40.0).abs() < 5.0 && (r.y - 40.0).abs() < 5.0);
     assert!(found);
 }
 
@@ -186,7 +188,7 @@ fn test_haar_scale_factor_impact() {
     };
 
     // Test with different scale factors
-    let detections_fast = cascade.detect(&img, 1.5, 0).expect("Detection failed");  // Larger scale factor
+    let detections_fast = cascade.detect(&img, 1.5, 0).expect("Detection failed"); // Larger scale factor
     let detections_slow = cascade.detect(&img, 1.05, 0).expect("Detection failed"); // Smaller scale factor
 
     // Smaller scale factor should check more scales, potentially finding more

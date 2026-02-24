@@ -1,5 +1,5 @@
-use std::fmt::Debug;
 use std::any::Any;
+use std::fmt::Debug;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Enumeration of supported compute devices.
@@ -38,7 +38,9 @@ pub trait Storage<T: 'static>: Debug + Clone + Any {
     fn as_mut_slice(&mut self) -> Option<&mut [T]>;
 
     /// Creates a new storage with the given size and default value.
-    fn new(size: usize, default_value: T) -> std::result::Result<Self, String> where T: Clone;
+    fn new(size: usize, default_value: T) -> std::result::Result<Self, String>
+    where
+        T: Clone;
 
     /// Creates a new storage from a vector.
     fn from_vec(data: Vec<T>) -> std::result::Result<Self, String>;

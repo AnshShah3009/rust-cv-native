@@ -1,8 +1,8 @@
 use crate::{Result, VideoCapture, VideoError};
-use image::{GrayImage, AnimationDecoder};
+use image::{AnimationDecoder, GrayImage};
 use std::fs::File;
-use std::path::Path;
 use std::io::BufReader;
+use std::path::Path;
 
 pub struct GifCapture {
     frames: Vec<image::Frame>,
@@ -24,8 +24,10 @@ impl GifCapture {
         let reader = BufReader::new(file);
         let decoder = image::codecs::gif::GifDecoder::new(reader)
             .map_err(|e| VideoError::Backend(format!("Failed to decode GIF: {}", e)))?;
-        
-        let frames = decoder.into_frames().collect_frames()
+
+        let frames = decoder
+            .into_frames()
+            .collect_frames()
             .map_err(|e| VideoError::Backend(format!("Failed to collect frames: {}", e)))?;
 
         if frames.is_empty() {
@@ -56,10 +58,10 @@ impl VideoCapture for GifCapture {
         if self.current_idx >= self.frames.len() {
             return Err(VideoError::CaptureFailed("End of stream".to_string()));
         }
-        
+
         let frame = &self.frames[self.current_idx];
         self.current_idx += 1;
-        
+
         // Convert to GrayImage
         let img = image::DynamicImage::ImageRgba8(frame.buffer().clone());
         Ok(img.into_luma8())

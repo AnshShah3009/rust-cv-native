@@ -1,11 +1,11 @@
-use cv_core::Tensor;
 use crate::context::ThresholdType;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
 use crate::Result;
-use wgpu::util::DeviceExt;
-use std::sync::Arc;
+use cv_core::Tensor;
 use std::marker::PhantomData;
+use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -24,10 +24,10 @@ pub fn threshold(
     typ: ThresholdType,
 ) -> Result<Tensor<u8, GpuStorage<u8>>> {
     let len = input.shape.len();
-    
+
     // Create output buffer
     // Byte size should be multiple of 4 for u32 packing in shader
-    let byte_size = ((len + 3) / 4 * 4) as u64; 
+    let byte_size = ((len + 3) / 4 * 4) as u64;
     let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Threshold Output Buffer Unique"),
         size: byte_size,
@@ -51,11 +51,13 @@ pub fn threshold(
         len: len as u32,
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Threshold Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Threshold Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     // Pipeline setup
     let shader_source = include_str!("../../shaders/threshold.wgsl");
@@ -82,10 +84,12 @@ pub fn threshold(
     });
 
     // Dispatch
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("Threshold Dispatch"),
-    });
-    
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Threshold Dispatch"),
+        });
+
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Threshold Pass"),
@@ -93,7 +97,7 @@ pub fn threshold(
         });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        
+
         let wg_x = ((len as u32 + 3) / 4 + 63) / 64;
         pass.dispatch_workgroups(wg_x, 1, 1);
     }

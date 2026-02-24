@@ -105,7 +105,12 @@ mod tests {
                 let orig_val = original.get_pixel(x, y)[0] as f32;
                 let recov_val = recovered.get_pixel(x, y)[0] as f32;
                 let error = (orig_val - recov_val).abs();
-                assert!(error <= 1.0, "Round trip error too large: {} vs {}", orig_val, recov_val);
+                assert!(
+                    error <= 1.0,
+                    "Round trip error too large: {} vs {}",
+                    orig_val,
+                    recov_val
+                );
             }
         }
     }

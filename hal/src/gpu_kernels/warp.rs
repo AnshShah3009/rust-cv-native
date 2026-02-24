@@ -1,11 +1,11 @@
-use cv_core::{Tensor, TensorShape};
+use crate::context::WarpType;
 use crate::gpu::GpuContext;
 use crate::storage::GpuStorage;
-use crate::context::WarpType;
 use crate::Result;
-use wgpu::util::DeviceExt;
+use cv_core::{Tensor, TensorShape};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -29,12 +29,15 @@ pub fn warp(
     let c = input.shape.channels;
 
     if c != 1 {
-        return Err(crate::Error::NotSupported("GPU Warp currently only for grayscale".into()));
+        return Err(crate::Error::NotSupported(
+            "GPU Warp currently only for grayscale".into(),
+        ));
     }
 
     let out_len = dst_w * dst_h;
     let byte_size = ((out_len + 3) / 4 * 4) as u64;
-    let usages = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
+    let usages =
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
     let output_buffer = ctx.get_buffer(byte_size, usages);
 
     let params = WarpParams {
@@ -48,11 +51,13 @@ pub fn warp(
         },
     };
 
-    let params_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Warp Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let params_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Warp Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     // We need to flatten the 3x3 matrix for the shader
     // WGSL mat3x3 expects column-major or 12-byte aligned rows?
@@ -66,11 +71,13 @@ pub fn warp(
         }
     }
 
-    let matrix_buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Warp Matrix"),
-        contents: bytemuck::cast_slice(&matrix_data),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let matrix_buffer = ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Warp Matrix"),
+            contents: bytemuck::cast_slice(&matrix_data),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
     let shader_source = include_str!("../../shaders/warp.wgsl");
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
@@ -79,16 +86,35 @@ pub fn warp(
         label: Some("Warp Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: input.storage.buffer().as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: output_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: matrix_buffer.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: params_buffer.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input.storage.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: output_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: matrix_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: params_buffer.as_entire_binding(),
+            },
         ],
     });
 
-    let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Warp Dispatch") });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Warp Dispatch"),
+        });
     {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: None,
+            timestamp_writes: None,
+        });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         let x = ((dst_w as u32 + 3) / 4 + 15) / 16;

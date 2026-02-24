@@ -45,9 +45,9 @@ impl DynamicKalmanFilter {
         if let Some(u) = control {
             self.state_pre += &self.control_matrix * u;
         }
-        self.error_cov_pre = &self.trans_matrix * &self.error_cov_post
-            * self.trans_matrix.transpose()
-            + &self.process_noise_cov;
+        self.error_cov_pre =
+            &self.trans_matrix * &self.error_cov_post * self.trans_matrix.transpose()
+                + &self.process_noise_cov;
         &self.state_pre
     }
 
@@ -56,7 +56,9 @@ impl DynamicKalmanFilter {
             + &self.meas_noise_cov;
         // Fixed: capture dimensions before moving s
         let s_dims = (s.nrows(), s.ncols());
-        let s_inv = s.pseudo_inverse(1e-6).unwrap_or_else(|_| DMatrix::identity(s_dims.0, s_dims.1));
+        let s_inv = s
+            .pseudo_inverse(1e-6)
+            .unwrap_or_else(|_| DMatrix::identity(s_dims.0, s_dims.1));
         self.gain = &self.error_cov_pre * self.meas_matrix.transpose() * s_inv;
         let innovation = measurement - &self.meas_matrix * &self.state_pre;
         self.state_post = &self.state_pre + &self.gain * innovation;
@@ -77,11 +79,18 @@ pub struct KalmanFilterState<const N: usize> {
 }
 
 impl<const N: usize> KalmanFilterState<N> {
-    pub fn new(x: SVector<f64, N>, p: SMatrix<f64, N, N>) -> Self { Self { x, p } }
-    pub fn zero() -> Self {
-        Self { x: SVector::zeros(), p: SMatrix::identity() * 1000.0 }
+    pub fn new(x: SVector<f64, N>, p: SMatrix<f64, N, N>) -> Self {
+        Self { x, p }
     }
-    pub fn std_dev(&self) -> SVector<f64, N> { self.p.diagonal().map(|v| v.sqrt()) }
+    pub fn zero() -> Self {
+        Self {
+            x: SVector::zeros(),
+            p: SMatrix::identity() * 1000.0,
+        }
+    }
+    pub fn std_dev(&self) -> SVector<f64, N> {
+        self.p.diagonal().map(|v| v.sqrt())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -94,8 +103,13 @@ pub struct KalmanFilter<const N: usize, const M: usize> {
 }
 
 impl<const N: usize, const M: usize> KalmanFilter<N, M> {
-    pub fn new(f: SMatrix<f64, N, N>, b: SMatrix<f64, N, N>, h: SMatrix<f64, M, N>,
-               q: SMatrix<f64, N, N>, r: SMatrix<f64, M, M>) -> Self {
+    pub fn new(
+        f: SMatrix<f64, N, N>,
+        b: SMatrix<f64, N, N>,
+        h: SMatrix<f64, M, N>,
+        q: SMatrix<f64, N, N>,
+        r: SMatrix<f64, M, M>,
+    ) -> Self {
         Self { f, b, h, q, r }
     }
 
@@ -126,18 +140,26 @@ pub struct ExtendedKalmanFilter<const N: usize, const M: usize> {
 }
 
 impl<const N: usize, const M: usize> ExtendedKalmanFilter<N, M> {
-    pub fn new(q: SMatrix<f64, N, N>, r: SMatrix<f64, M, M>) -> Self { Self { q, r } }
+    pub fn new(q: SMatrix<f64, N, N>, r: SMatrix<f64, M, M>) -> Self {
+        Self { q, r }
+    }
 
     pub fn predict<F: Fn(&SVector<f64, N>) -> SVector<f64, N>>(
-        &self, state: &mut KalmanFilterState<N>, f: F, jacobian_f: &SMatrix<f64, N, N>,
+        &self,
+        state: &mut KalmanFilterState<N>,
+        f: F,
+        jacobian_f: &SMatrix<f64, N, N>,
     ) {
         state.x = f(&state.x);
         state.p = jacobian_f * state.p * jacobian_f.transpose() + self.q;
     }
 
     pub fn update<H: Fn(&SVector<f64, N>) -> SVector<f64, M>>(
-        &self, state: &mut KalmanFilterState<N>, h: H,
-        jacobian_h: &SMatrix<f64, M, N>, z: &SVector<f64, M>,
+        &self,
+        state: &mut KalmanFilterState<N>,
+        h: H,
+        jacobian_h: &SMatrix<f64, M, N>,
+        z: &SVector<f64, M>,
     ) {
         let y = z - h(&state.x);
         let s = jacobian_h * state.p * jacobian_h.transpose() + self.r;
@@ -152,12 +174,13 @@ impl<const N: usize, const M: usize> ExtendedKalmanFilter<N, M> {
 pub mod utils {
     use super::*;
 
-    pub fn constant_velocity_2d(dt: f64, process_noise: f64, measurement_noise: f64) -> KalmanFilter<4, 2> {
+    pub fn constant_velocity_2d(
+        dt: f64,
+        process_noise: f64,
+        measurement_noise: f64,
+    ) -> KalmanFilter<4, 2> {
         let f = SMatrix::<f64, 4, 4>::new(
-            1.0, 0.0, dt,  0.0,
-            0.0, 1.0, 0.0, dt,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, dt, 0.0, 0.0, 1.0, 0.0, dt, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         );
         let b = SMatrix::<f64, 4, 4>::identity();
         let h = SMatrix::<f64, 2, 4>::new(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0);
@@ -166,18 +189,20 @@ pub mod utils {
         KalmanFilter::new(f, b, h, q, r)
     }
 
-    pub fn constant_acceleration_2d(dt: f64, process_noise: f64, measurement_noise: f64) -> KalmanFilter<6, 2> {
+    pub fn constant_acceleration_2d(
+        dt: f64,
+        process_noise: f64,
+        measurement_noise: f64,
+    ) -> KalmanFilter<6, 2> {
         let dt2 = dt * dt / 2.0;
         let f = SMatrix::<f64, 6, 6>::new(
-            1.0, 0.0, dt,  0.0, dt2, 0.0,
-            0.0, 1.0, 0.0, dt,  0.0, dt2,
-            0.0, 0.0, 1.0, 0.0, dt,  0.0,
-            0.0, 0.0, 0.0, 1.0, 0.0, dt,
-            0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            1.0, 0.0, dt, 0.0, dt2, 0.0, 0.0, 1.0, 0.0, dt, 0.0, dt2, 0.0, 0.0, 1.0, 0.0, dt, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0, dt, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            1.0,
         );
         let b = SMatrix::<f64, 6, 6>::identity();
-        let h = SMatrix::<f64, 2, 6>::new(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0);
+        let h =
+            SMatrix::<f64, 2, 6>::new(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0);
         let q = SMatrix::<f64, 6, 6>::identity() * process_noise;
         let r = SMatrix::<f64, 2, 2>::identity() * measurement_noise;
         KalmanFilter::new(f, b, h, q, r)

@@ -1,40 +1,43 @@
-pub mod orchestrator;
-pub mod memory;
 pub mod device_registry;
-pub mod executor;
-pub mod memory_manager;
 pub mod distributed;
+pub mod executor;
+pub mod memory;
+pub mod memory_manager;
+pub mod orchestrator;
 pub mod pipeline;
 
-pub use orchestrator::{TaskScheduler, ResourceGroup, GroupPolicy, scheduler, RuntimeRunner, best_runner, default_runner, try_best_runner, try_default_runner, WorkloadHint, TaskPriority};
+pub use device_registry::{registry, DeviceRegistry, DeviceRuntime, SubmissionIndex};
 pub use memory::UnifiedBuffer;
-pub use device_registry::{SubmissionIndex, DeviceRuntime, DeviceRegistry, registry};
-pub use pipeline::{Pipeline, PipelineNode, BufferId};
-pub use pipeline::{ExecutionGraph, NodeId, NodeDependency};
-pub use pipeline::{TransientBufferPool, BufferAlloc};
-pub use pipeline::{AsyncPipelineHandle, PipelineResult, ExecutionEvent};
-pub use pipeline::{KernelFuser, FusionPattern, FusedKernel};
+pub use orchestrator::{
+    best_runner, default_runner, scheduler, try_best_runner, try_default_runner, GroupPolicy,
+    ResourceGroup, RuntimeRunner, TaskPriority, TaskScheduler, WorkloadHint,
+};
+pub use pipeline::{AsyncPipelineHandle, ExecutionEvent, PipelineResult};
+pub use pipeline::{BufferAlloc, TransientBufferPool};
+pub use pipeline::{BufferId, Pipeline, PipelineNode};
+pub use pipeline::{ExecutionGraph, NodeDependency, NodeId};
+pub use pipeline::{FusedKernel, FusionPattern, KernelFuser};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Runtime error: {0}")]
     RuntimeError(String),
-    
+
     #[error("Memory error: {0}")]
     MemoryError(String),
-    
+
     #[error("Concurrency error: {0}")]
     ConcurrencyError(String),
 
     #[error("Not supported: {0}")]
     NotSupported(String),
-    
+
     #[error("HAL error: {0}")]
     HalError(#[from] cv_hal::Error),
 
     #[error("Core error: {0}")]
     CoreError(#[from] cv_core::Error),
-    
+
     #[error("Initialization error: {0}")]
     InitError(String),
 }
@@ -45,7 +48,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 macro_rules! submit_to {
     ($group_name:expr, $f:block) => {
         match $crate::scheduler() {
-            Ok(s) => s.submit($group_name, move || { $f }),
+            Ok(s) => s.submit($group_name, move || $f),
             Err(e) => Err(e),
         }
     };

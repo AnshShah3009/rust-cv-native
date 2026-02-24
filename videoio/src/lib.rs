@@ -47,7 +47,7 @@ pub mod backends;
 /// Open a video file
 pub fn open_video(path: &str) -> Result<Box<dyn VideoCapture>> {
     let p = std::path::Path::new(path);
-    
+
     // 1. Try Pure Rust GIF
     if let Some(ext) = p.extension() {
         if ext.to_string_lossy().to_lowercase() == "gif" {
@@ -84,6 +84,8 @@ pub fn open_camera(_path: &str, _width: u32, _height: u32) -> Result<Box<dyn Vid
     }
     #[cfg(not(all(target_os = "linux", feature = "v4l2")))]
     {
-        Err(VideoError::Backend("Camera backend disabled or not supported on this platform.".to_string()))
+        Err(VideoError::Backend(
+            "Camera backend disabled or not supported on this platform.".to_string(),
+        ))
     }
 }

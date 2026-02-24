@@ -6,8 +6,8 @@
 use nalgebra::{Matrix3, Matrix4, Point3, Vector3};
 use rayon::prelude::*;
 
-use cv_runtime::orchestrator::RuntimeRunner;
 use cv_hal::compute::ComputeDevice;
+use cv_runtime::orchestrator::RuntimeRunner;
 
 /// RGBD Odometry result
 #[derive(Debug, Clone)]
@@ -37,7 +37,17 @@ pub fn compute_rgbd_odometry(
     method: OdometryMethod,
 ) -> Option<OdometryResult> {
     let runner = cv_runtime::best_runner().ok()?;
-    compute_rgbd_odometry_ctx(source_depth, target_depth, source_color, target_color, intrinsics, width, height, method, &runner)
+    compute_rgbd_odometry_ctx(
+        source_depth,
+        target_depth,
+        source_color,
+        target_color,
+        intrinsics,
+        width,
+        height,
+        method,
+        &runner,
+    )
 }
 
 /// Compute RGBD odometry between two frames with explicit context
@@ -180,8 +190,10 @@ fn compute_point_to_plane_ctx(
                         let target_point = transformation.transform_point(&source_point);
 
                         // Project to target image
-                        let tu = (target_point.x * intrinsics.fx / target_point.z + intrinsics.cx) as i32;
-                        let tv = (target_point.y * intrinsics.fy / target_point.z + intrinsics.cy) as i32;
+                        let tu = (target_point.x * intrinsics.fx / target_point.z + intrinsics.cx)
+                            as i32;
+                        let tv = (target_point.y * intrinsics.fy / target_point.z + intrinsics.cy)
+                            as i32;
 
                         if tu < 0 || tu >= width as i32 || tv < 0 || tv >= height as i32 {
                             continue;
@@ -277,14 +289,17 @@ fn downsample_depth(input: &[f32], width: usize, height: usize, scale: f32) -> V
     let new_height = (height as f32 * scale) as usize;
     let mut output = vec![0.0; new_width * new_height];
 
-    output.par_chunks_mut(new_width).enumerate().for_each(|(y, row)| {
-        for x in 0..new_width {
-            let src_x = (x as f32 / scale) as usize;
-            let src_y = (y as f32 / scale) as usize;
-            let src_idx = (src_y.min(height - 1)) * width + (src_x.min(width - 1));
-            row[x] = input[src_idx];
-        }
-    });
+    output
+        .par_chunks_mut(new_width)
+        .enumerate()
+        .for_each(|(y, row)| {
+            for x in 0..new_width {
+                let src_x = (x as f32 / scale) as usize;
+                let src_y = (y as f32 / scale) as usize;
+                let src_idx = (src_y.min(height - 1)) * width + (src_x.min(width - 1));
+                row[x] = input[src_idx];
+            }
+        });
 
     output
 }
@@ -316,23 +331,28 @@ fn compute_vertex_normal_map_ctx(
 
         // Compute normals using central differences in parallel
         let vertices_ref = &vertices;
-        normals.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
-            if y == 0 || y == height - 1 { return; }
-            for x in 1..width - 1 {
-                let idx = y * width + x;
-
-                let left = vertices_ref[idx - 1];
-                let right = vertices_ref[idx + 1];
-                let up = vertices_ref[(y - 1) * width + x];
-                let down = vertices_ref[(y + 1) * width + x];
-
-                if left.z > 0.0 && right.z > 0.0 && up.z > 0.0 && down.z > 0.0 {
-                    let dx = right.coords - left.coords;
-                    let dy = down.coords - up.coords;
-                    row[x] = dx.cross(&dy).normalize();
+        normals
+            .par_chunks_mut(width)
+            .enumerate()
+            .for_each(|(y, row)| {
+                if y == 0 || y == height - 1 {
+                    return;
                 }
-            }
-        });
+                for x in 1..width - 1 {
+                    let idx = y * width + x;
+
+                    let left = vertices_ref[idx - 1];
+                    let right = vertices_ref[idx + 1];
+                    let up = vertices_ref[(y - 1) * width + x];
+                    let down = vertices_ref[(y + 1) * width + x];
+
+                    if left.z > 0.0 && right.z > 0.0 && up.z > 0.0 && down.z > 0.0 {
+                        let dx = right.coords - left.coords;
+                        let dy = down.coords - up.coords;
+                        row[x] = dx.cross(&dy).normalize();
+                    }
+                }
+            });
     });
 
     (vertices, normals)

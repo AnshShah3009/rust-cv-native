@@ -1,7 +1,7 @@
+use cv_hal::compute::ComputeDevice;
+use cv_runtime::orchestrator::ResourceGroup;
 use image::{GrayImage, RgbImage};
 use rayon::prelude::*;
-use cv_runtime::orchestrator::ResourceGroup;
-use cv_hal::compute::ComputeDevice;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interpolation {
@@ -11,12 +11,7 @@ pub enum Interpolation {
     Lanczos,
 }
 
-pub fn resize(
-    src: &GrayImage,
-    width: u32,
-    height: u32,
-    interpolation: Interpolation,
-) -> GrayImage {
+pub fn resize(src: &GrayImage, width: u32, height: u32, interpolation: Interpolation) -> GrayImage {
     // Attempt to get a default group, fallback to CPU only if scheduler fails (unlikely in initialized app)
     // For now, we can create a temporary CPU-only group or panic if init failed.
     // Better: use scheduler if available.
@@ -60,18 +55,25 @@ fn resize_gpu(
     width: u32,
     height: u32,
 ) -> cv_hal::Result<GrayImage> {
-    use cv_hal::context::ComputeContext;
     use cv_core::storage::Storage;
-    use cv_hal::tensor_ext::{TensorToGpu, TensorToCpu};
+    use cv_hal::context::ComputeContext;
+    use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
 
-    let input_tensor = cv_core::CpuTensor::from_vec(src.as_raw().to_vec(), cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize))
-        .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
+    let input_tensor = cv_core::CpuTensor::from_vec(
+        src.as_raw().to_vec(),
+        cv_core::TensorShape::new(1, src.height() as usize, src.width() as usize),
+    )
+    .map_err(|e| cv_hal::Error::RuntimeError(e.to_string()))?;
     let input_gpu = input_tensor.to_gpu_ctx(gpu)?;
-    
+
     let output_gpu = gpu.resize(&input_gpu, (width as usize, height as usize))?;
     let output_cpu = output_gpu.to_cpu_ctx(gpu)?;
-    
-    let data = output_cpu.storage.as_slice().ok_or_else(|| cv_hal::Error::MemoryError("Download failed".into()))?.to_vec();
+
+    let data = output_cpu
+        .storage
+        .as_slice()
+        .ok_or_else(|| cv_hal::Error::MemoryError("Download failed".into()))?
+        .to_vec();
     GrayImage::from_raw(width, height, data)
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
 }
@@ -91,7 +93,8 @@ fn resize_nearest(src: &GrayImage, width: u32, height: u32) -> GrayImage {
             let y = y as u32;
             for x in 0..width {
                 let sx = ((x as f32 * src_width / dst_width).floor() as u32).min(src.width() - 1);
-                let sy = ((y as f32 * src_height / dst_height).floor() as u32).min(src.height() - 1);
+                let sy =
+                    ((y as f32 * src_height / dst_height).floor() as u32).min(src.height() - 1);
                 let val = src.get_pixel(sx, sy)[0];
                 row[x as usize] = val;
             }

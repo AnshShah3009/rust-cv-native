@@ -198,7 +198,8 @@ fn benchmark_feature_detection(c: &mut Criterion) {
             &img,
             |b, i| {
                 b.iter(|| {
-                    let _ = cv_features::fast::fast_detect(black_box(i), black_box(20), black_box(500));
+                    let _ =
+                        cv_features::fast::fast_detect(black_box(i), black_box(20), black_box(500));
                 });
             },
         );
@@ -241,7 +242,8 @@ fn benchmark_optical_flow(c: &mut Criterion) {
             &(prev.clone(), next.clone(), points.clone()),
             |b, (p, n, pts)| {
                 b.iter(|| {
-                    let _ = cv_video::calc_optical_flow_lk(black_box(p), black_box(n), black_box(pts));
+                    let _ =
+                        cv_video::calc_optical_flow_lk(black_box(p), black_box(n), black_box(pts));
                 });
             },
         );

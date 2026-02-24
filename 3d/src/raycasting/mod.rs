@@ -5,8 +5,8 @@
 use crate::mesh::TriangleMesh;
 use nalgebra::{Point3, Vector3};
 
-use cv_runtime::orchestrator::RuntimeRunner;
 use cv_hal::compute::ComputeDevice;
+use cv_runtime::orchestrator::RuntimeRunner;
 
 /// Ray representation
 #[derive(Debug, Clone, Copy)]
@@ -75,7 +75,11 @@ pub fn cast_rays_mesh(rays: &[Ray], mesh: &TriangleMesh) -> Vec<Option<RayHit>> 
 }
 
 /// Cast multiple rays against a mesh with explicit context
-pub fn cast_rays_mesh_ctx(rays: &[Ray], mesh: &TriangleMesh, group: &RuntimeRunner) -> Vec<Option<RayHit>> {
+pub fn cast_rays_mesh_ctx(
+    rays: &[Ray],
+    mesh: &TriangleMesh,
+    group: &RuntimeRunner,
+) -> Vec<Option<RayHit>> {
     // GPU Path
     if let Ok(ComputeDevice::Gpu(_gpu)) = group.device() {
         // TODO: Dispatch to HAL raycast_mesh

@@ -75,7 +75,11 @@ pub fn adjust_brightness(src: &GrayImage, factor: f32) -> GrayImage {
     adjust_brightness_in_pool(src, factor, None)
 }
 
-pub fn adjust_brightness_in_pool(src: &GrayImage, factor: f32, pool: Option<&ThreadPool>) -> GrayImage {
+pub fn adjust_brightness_in_pool(
+    src: &GrayImage,
+    factor: f32,
+    pool: Option<&ThreadPool>,
+) -> GrayImage {
     let run = || {
         let mut output = src.clone();
         output.as_mut().par_iter_mut().for_each(|p| {
@@ -95,7 +99,11 @@ pub fn adjust_contrast(src: &GrayImage, factor: f32) -> GrayImage {
     adjust_contrast_in_pool(src, factor, None)
 }
 
-pub fn adjust_contrast_in_pool(src: &GrayImage, factor: f32, pool: Option<&ThreadPool>) -> GrayImage {
+pub fn adjust_contrast_in_pool(
+    src: &GrayImage,
+    factor: f32,
+    pool: Option<&ThreadPool>,
+) -> GrayImage {
     let run = || {
         let mut output = src.clone();
         let mean = compute_mean_intensity(src);

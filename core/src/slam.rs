@@ -1,5 +1,5 @@
+use crate::{Descriptors, KeyPoints, TypedPose};
 use nalgebra::Point3;
-use crate::{KeyPoints, Descriptors, TypedPose};
 use std::sync::{Arc, RwLock};
 
 /// A 3D point in the world map.
