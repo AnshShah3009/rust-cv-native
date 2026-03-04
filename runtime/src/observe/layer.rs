@@ -1,4 +1,4 @@
-use super::{RuntimeEvent, Metrics, MemoryEventKind};
+use super::{RuntimeEvent, Metrics};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Global observability layer
@@ -75,6 +75,7 @@ pub fn observability() -> &'static ObservabilityLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::observe::MemoryEventKind;
 
     #[test]
     fn test_observability_singleton() {
