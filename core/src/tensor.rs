@@ -519,6 +519,70 @@ impl Tensor<f32, CpuStorage<f32>> {
     }
 }
 
+/// CPU-specific convenience APIs for Tensor<T, CpuStorage<T>>.
+///
+/// This impl block provides convenience methods for working with CPU-based tensors,
+/// enabling easier access patterns and migration from older code.
+impl<T: Clone + Copy + Default + fmt::Debug + 'static> Tensor<T, CpuStorage<T>> {
+    /// Get an immutable reference to the underlying data as a slice.
+    ///
+    /// This is a convenience wrapper that extracts the data from CPU storage
+    /// without requiring pattern matching on `as_slice()`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the storage is not a CpuStorage (should never happen in normal use).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let tensor = Tensor::from_vec(vec![1.0f32, 2.0, 3.0], shape)?;
+    /// let data = tensor.cpu_as_slice();
+    /// assert_eq!(data.len(), 3);
+    /// ```
+    pub fn cpu_as_slice(&self) -> &[T] {
+        self.storage
+            .as_slice()
+            .expect("CpuStorage should always provide a slice")
+    }
+
+    /// Get a mutable reference to the underlying data as a slice.
+    ///
+    /// This is a convenience wrapper that extracts mutable data from CPU storage.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the storage is not a CpuStorage (should never happen in normal use).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut tensor = Tensor::from_vec(vec![1.0f32, 2.0, 3.0], shape)?;
+    /// let data = tensor.cpu_as_mut_slice();
+    /// data[0] = 42.0;
+    /// ```
+    pub fn cpu_as_mut_slice(&mut self) -> &mut [T] {
+        self.storage
+            .as_mut_slice()
+            .expect("CpuStorage should always provide a mutable slice")
+    }
+
+    /// Clone the stored data into a new vector.
+    ///
+    /// This creates an independent copy of the tensor's data.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let tensor = Tensor::from_vec(vec![1.0f32, 2.0, 3.0], shape)?;
+    /// let vec = tensor.cpu_to_vec();
+    /// assert_eq!(vec, vec![1.0, 2.0, 3.0]);
+    /// ```
+    pub fn cpu_to_vec(&self) -> Vec<T> {
+        self.storage.to_vec()
+    }
+}
+
 impl Tensor<f32> {
     pub fn from_image_gray(data: &[u8], width: usize, height: usize) -> crate::Result<Self> {
         let mut float_data = Vec::with_capacity(width * height);
@@ -1040,6 +1104,73 @@ mod tests {
             // Should have new storage but same shape and data
             assert_eq!(tensor2.shape, shape);
             assert_eq!(tensor2.as_slice().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+        }
+    }
+
+    mod cpu_convenience_api_tests {
+        use super::*;
+
+        #[test]
+        fn test_cpu_as_slice() {
+            let data = vec![1.0f32, 2.0, 3.0, 4.0];
+            let shape = TensorShape::new(1, 2, 2);
+            let tensor = Tensor::<f32, CpuStorage<f32>>::from_vec(data.clone(), shape).unwrap();
+
+            let slice = tensor.cpu_as_slice();
+            assert_eq!(slice, &[1.0, 2.0, 3.0, 4.0]);
+        }
+
+        #[test]
+        fn test_cpu_as_mut_slice() {
+            let data = vec![1.0f32, 2.0, 3.0, 4.0];
+            let shape = TensorShape::new(1, 2, 2);
+            let mut tensor =
+                Tensor::<f32, CpuStorage<f32>>::from_vec(data, shape).unwrap();
+
+            let slice = tensor.cpu_as_mut_slice();
+            slice[0] = 42.0;
+            slice[1] = 99.0;
+
+            assert_eq!(tensor.cpu_as_slice()[0], 42.0);
+            assert_eq!(tensor.cpu_as_slice()[1], 99.0);
+        }
+
+        #[test]
+        fn test_cpu_to_vec() {
+            let data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0];
+            let shape = TensorShape::new(1, 1, 5);
+            let tensor = Tensor::<f32, CpuStorage<f32>>::from_vec(data.clone(), shape).unwrap();
+
+            let vec = tensor.cpu_to_vec();
+            assert_eq!(vec, data);
+
+            // Verify it's a clone, not the same reference
+            assert_eq!(vec, tensor.cpu_as_slice());
+        }
+
+        #[test]
+        fn test_cpu_to_vec_independence() {
+            let data = vec![1.0f32, 2.0, 3.0];
+            let shape = TensorShape::new(1, 1, 3);
+            let tensor = Tensor::<f32, CpuStorage<f32>>::from_vec(data, shape).unwrap();
+
+            let mut vec = tensor.cpu_to_vec();
+            vec[0] = 999.0;
+
+            // Modifying the vec should not affect the tensor
+            assert_ne!(vec[0], tensor.cpu_as_slice()[0]);
+            assert_eq!(tensor.cpu_as_slice()[0], 1.0);
+        }
+
+        #[test]
+        fn test_cpu_convenience_with_different_types() {
+            let data_i32 = vec![1i32, 2, 3, 4];
+            let shape = TensorShape::new(2, 2, 1);
+            let tensor = Tensor::<i32, CpuStorage<i32>>::from_vec(data_i32.clone(), shape)
+                .unwrap();
+
+            assert_eq!(tensor.cpu_as_slice(), &[1, 2, 3, 4]);
+            assert_eq!(tensor.cpu_to_vec(), data_i32);
         }
     }
 }
