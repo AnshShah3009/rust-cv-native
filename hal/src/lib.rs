@@ -7,6 +7,7 @@ pub mod device;
 pub mod gpu;
 pub mod gpu_kernels;
 pub mod gpu_sparse;
+pub mod gpu_storage;
 pub mod gpu_utils;
 pub mod image;
 pub mod mlx;
@@ -15,6 +16,7 @@ pub mod tensor_ext;
 
 pub use gpu::*;
 pub use gpu_kernels::*;
+pub use gpu_storage::GpuStorage;
 
 pub use backend::{
     BackendType, Capability, ComputeBackend, DeviceId, QueueId, QueueType, SubmissionIndex,

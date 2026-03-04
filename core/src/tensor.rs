@@ -417,6 +417,7 @@ impl One for i32 {
     }
 }
 
+
 impl Tensor<f32, CpuStorage<f32>> {
     /// SIMD-accelerated element-wise addition.
     pub fn add(&self, other: &Self) -> crate::Result<Self> {
@@ -902,6 +903,143 @@ mod tests {
             assert_eq!(tensor.shape.channels, 3);
             assert_eq!(tensor.shape.height, 10);
             assert_eq!(tensor.shape.width, 20);
+        }
+    }
+
+    mod tensor_storage_generic_tests {
+        use super::*;
+        use crate::storage::DeviceType;
+
+        #[test]
+        fn test_tensor_cpu_storage_creation() {
+            let data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+            let shape = TensorShape::new(1, 2, 3);
+            let tensor: Tensor<f32, CpuStorage<f32>> =
+                Tensor::from_vec(data.clone(), shape).unwrap();
+
+            assert_eq!(tensor.storage.len(), 6);
+            assert_eq!(tensor.shape, shape);
+            assert_eq!(tensor.as_slice().unwrap(), &data[..]);
+        }
+
+        #[test]
+        fn test_tensor_storage_access() {
+            let data = vec![1.0f32, 2.0, 3.0, 4.0];
+            let shape = TensorShape::new(1, 2, 2);
+            let mut tensor: Tensor<f32, CpuStorage<f32>> =
+                Tensor::from_vec(data.clone(), shape).unwrap();
+
+            // Test immutable access through storage
+            let slice = tensor.as_slice().unwrap();
+            assert_eq!(slice.len(), 4);
+
+            // Test mutable access through storage
+            let mut_slice = tensor.as_mut_slice().unwrap();
+            mut_slice[0] = 10.0;
+
+            // Verify mutation
+            let updated = tensor.as_slice().unwrap();
+            assert!((updated[0] - 10.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_tensor_from_vec_cpu_storage() {
+            let data = vec![5.0f32; 12];
+            let shape = TensorShape::new(3, 2, 2);
+            let tensor: Tensor<f32, CpuStorage<f32>> =
+                Tensor::from_vec(data.clone(), shape).unwrap();
+
+            // Verify the storage is CpuStorage
+            assert_eq!(tensor.storage.len(), 12);
+            assert_eq!(tensor.storage.device(), DeviceType::Cpu);
+        }
+
+        #[test]
+        fn test_tensor_slice_access_f32() {
+            let data = vec![1.0f32, 2.0, 3.0];
+            let shape = TensorShape::new(1, 1, 3);
+            let tensor: Tensor<f32, CpuStorage<f32>> =
+                Tensor::from_vec(data.clone(), shape).unwrap();
+
+            // Should be able to access slice through existing API
+            let slice = tensor.as_slice().unwrap();
+            assert_eq!(slice, &data[..]);
+        }
+
+        #[test]
+        fn test_tensor_mut_slice_access_f32() {
+            let data = vec![1.0f32, 2.0, 3.0];
+            let shape = TensorShape::new(1, 1, 3);
+            let mut tensor: Tensor<f32, CpuStorage<f32>> =
+                Tensor::from_vec(data.clone(), shape).unwrap();
+
+            // Should be able to access mutable slice through existing API
+            {
+                let mut_slice = tensor.as_mut_slice().unwrap();
+                for v in mut_slice.iter_mut() {
+                    *v *= 2.0;
+                }
+            }
+
+            let updated = tensor.as_slice().unwrap();
+            assert!((updated[0] - 2.0).abs() < 1e-5);
+            assert!((updated[1] - 4.0).abs() < 1e-5);
+            assert!((updated[2] - 6.0).abs() < 1e-5);
+        }
+
+        #[test]
+        fn test_tensor_reshape_generic_storage() {
+            let data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+            let shape1 = TensorShape::new(1, 2, 3);
+            let tensor: Tensor<f32, CpuStorage<f32>> =
+                Tensor::from_vec(data.clone(), shape1).unwrap();
+
+            let shape2 = TensorShape::new(1, 3, 2);
+            let reshaped = tensor.reshape(shape2).unwrap();
+
+            assert_eq!(reshaped.shape, shape2);
+            assert_eq!(reshaped.as_slice().unwrap(), &data[..]);
+        }
+
+        #[test]
+        fn test_tensor_storage_device_type() {
+            let data = vec![1.0f32; 24];
+            let shape = TensorShape::new(2, 3, 4);
+            let tensor: Tensor<f32, CpuStorage<f32>> =
+                Tensor::from_vec(data, shape).unwrap();
+
+            // Verify the storage is CPU-based
+            assert_eq!(tensor.storage.device(), DeviceType::Cpu);
+        }
+
+        #[test]
+        fn test_tensor_storage_capacity() {
+            let data = vec![1.0f32, 2.0, 3.0];
+            let shape = TensorShape::new(1, 1, 3);
+            let tensor: Tensor<f32, CpuStorage<f32>> =
+                Tensor::from_vec(data, shape).unwrap();
+
+            // Verify storage capacity matches data length
+            assert_eq!(tensor.storage.capacity(), 3);
+            assert_eq!(tensor.storage.len(), 3);
+        }
+
+        #[test]
+        fn test_tensor_with_storage_conversion() {
+            let data = vec![1.0f32, 2.0, 3.0, 4.0];
+            let shape = TensorShape::new(1, 2, 2);
+            let tensor1: Tensor<f32, CpuStorage<f32>> =
+                Tensor::from_vec(data.clone(), shape).unwrap();
+
+            // Create a new storage with same data
+            let storage2: CpuStorage<f32> = CpuStorage::from_vec(data).unwrap();
+
+            // Use with_storage to change storage
+            let tensor2 = tensor1.with_storage(storage2);
+
+            // Should have new storage but same shape and data
+            assert_eq!(tensor2.shape, shape);
+            assert_eq!(tensor2.as_slice().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
         }
     }
 }
