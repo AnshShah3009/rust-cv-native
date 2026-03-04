@@ -1,5 +1,6 @@
 pub mod device_registry;
 pub mod distributed;
+pub mod error;
 pub mod executor;
 pub mod memory;
 pub mod memory_manager;
@@ -7,6 +8,7 @@ pub mod orchestrator;
 pub mod pipeline;
 
 pub use device_registry::{registry, DeviceRegistry, DeviceRuntime, SubmissionIndex};
+pub use error::ErrorContext;
 pub use memory::UnifiedBuffer;
 pub use orchestrator::{
     best_runner, default_runner, scheduler, try_best_runner, try_default_runner, GroupPolicy,
