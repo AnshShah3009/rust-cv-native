@@ -5,19 +5,22 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-/// GPU storage using wgpu buffers.
+/// GPU storage using wgpu buffers (legacy wgpu-based implementation).
 ///
 /// This storage holds data on the GPU. Accessing it as a slice on the CPU is not supported directly.
 /// Use `to_cpu()` to download data (not part of Storage trait).
+///
+/// Note: This is a legacy implementation. For new code, use cv_hal::GpuStorage which uses
+/// a handle-based design.
 #[derive(Clone)]
-pub struct GpuStorage<T> {
+pub struct WgpuGpuStorage<T> {
     pub buffer: Option<Arc<wgpu::Buffer>>,
     pub len: usize,
     pub usage: wgpu::BufferUsages,
     _phantom: PhantomData<T>,
 }
 
-impl<T> GpuStorage<T> {
+impl<T> WgpuGpuStorage<T> {
     pub fn from_buffer(buffer: Arc<wgpu::Buffer>, len: usize) -> Self {
         Self::from_buffer_with_usage(
             buffer,
@@ -45,7 +48,7 @@ impl<T> GpuStorage<T> {
     pub fn buffer(&self) -> &wgpu::Buffer {
         self.buffer
             .as_ref()
-            .expect("GpuStorage buffer accessed after drop")
+            .expect("WgpuGpuStorage buffer accessed after drop")
     }
 
     /// Try to access the underlying buffer. Returns None if the buffer has been dropped.
@@ -54,7 +57,7 @@ impl<T> GpuStorage<T> {
     }
 }
 
-impl<T> Drop for GpuStorage<T> {
+impl<T> Drop for WgpuGpuStorage<T> {
     fn drop(&mut self) {
         if let Some(arc_buf) = self.buffer.take() {
             if let Ok(buffer) = Arc::try_unwrap(arc_buf) {
@@ -66,13 +69,34 @@ impl<T> Drop for GpuStorage<T> {
     }
 }
 
-impl<T: bytemuck::Pod + fmt::Debug + Any> Storage<T> for GpuStorage<T> {
-    fn device(&self) -> DeviceType {
-        DeviceType::Vulkan
+impl<T: bytemuck::Pod + fmt::Debug + Any + 'static> Storage<T> for WgpuGpuStorage<T> {
+    fn handle(&self) -> cv_core::BufferHandle {
+        // For legacy wgpu storage, use a dummy handle based on buffer pointer
+        if let Some(buf) = &self.buffer {
+            cv_core::BufferHandle(buf.as_ref() as *const _ as u64)
+        } else {
+            cv_core::BufferHandle(0)
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.len
+    }
+
+    fn shape(&self) -> &[usize] {
+        &[]
     }
 
     fn len(&self) -> usize {
         self.len
+    }
+
+    fn data_type_name(&self) -> &'static str {
+        std::any::type_name::<T>()
+    }
+
+    fn device(&self) -> DeviceType {
+        DeviceType::Vulkan
     }
 
     fn as_slice(&self) -> Option<&[T]> {
@@ -83,65 +107,18 @@ impl<T: bytemuck::Pod + fmt::Debug + Any> Storage<T> for GpuStorage<T> {
         None
     }
 
-    fn new(size: usize, _default_value: T) -> std::result::Result<Self, String>
-    where
-        T: Clone,
-    {
-        let ctx = GpuContext::global().map_err(|e| e.to_string())?;
-        let byte_size = (size * std::mem::size_of::<T>()) as u64;
-        let usage = wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_DST
-            | wgpu::BufferUsages::COPY_SRC;
-
-        let buffer = ctx.get_buffer(byte_size, usage);
-
-        Ok(Self {
-            buffer: Some(Arc::new(buffer)),
-            len: size,
-            usage,
-            _phantom: PhantomData,
-        })
-    }
-
-    fn from_vec(data: Vec<T>) -> std::result::Result<Self, String> {
-        let ctx = GpuContext::global().map_err(|e| e.to_string())?;
-        let byte_size = (data.len() * std::mem::size_of::<T>()) as u64;
-        let usage = wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_DST
-            | wgpu::BufferUsages::COPY_SRC;
-
-        let buffer = ctx.get_buffer(byte_size, usage);
-        ctx.queue
-            .write_buffer(&buffer, 0, bytemuck::cast_slice(&data));
-
-        Ok(Self {
-            buffer: Some(Arc::new(buffer)),
-            len: data.len(),
-            usage,
-            _phantom: PhantomData,
-        })
-    }
-
     fn as_any(&self) -> &dyn Any {
         self
     }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn boxed_any(self: Box<Self>) -> Box<dyn Any> {
-        self
-    }
 }
 
-impl<T> fmt::Debug for GpuStorage<T> {
+impl<T> fmt::Debug for WgpuGpuStorage<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "GpuStorage(len={})", self.len)
+        write!(f, "WgpuGpuStorage(len={})", self.len)
     }
 }
 
-impl<T> PartialEq for GpuStorage<T> {
+impl<T> PartialEq for WgpuGpuStorage<T> {
     fn eq(&self, other: &Self) -> bool {
         // Pointer equality for buffer
         match (&self.buffer, &other.buffer) {
@@ -152,4 +129,7 @@ impl<T> PartialEq for GpuStorage<T> {
     }
 }
 
-impl<T> Eq for GpuStorage<T> {}
+impl<T> Eq for WgpuGpuStorage<T> {}
+
+// Type alias for backward compatibility
+pub type GpuStorage<T> = WgpuGpuStorage<T>;
