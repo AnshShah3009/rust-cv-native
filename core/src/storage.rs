@@ -322,6 +322,34 @@ impl<T: Clone + Debug + 'static> StorageFactory<T> for CpuStorage<T> {
     }
 }
 
+impl<T: Clone + Debug + 'static> CpuStorage<T> {
+    /// Downcast a generic storage reference to CpuStorage<T> using Any.
+    ///
+    /// This helper method enables migration from trait objects to concrete storage types.
+    /// It safely attempts to downcast a storage reference to CpuStorage<T> by matching
+    /// against the Any representation.
+    ///
+    /// # Arguments
+    ///
+    /// * `any_ref` - A reference to a concrete storage's Any representation
+    ///
+    /// # Returns
+    ///
+    /// Some(&CpuStorage<T>) if the Any contains a CpuStorage<T>, None otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let cpu_storage = CpuStorage::from_vec(vec![1.0f32, 2.0, 3.0])?;
+    /// let any_ref = cpu_storage.as_any();
+    /// let downcast = CpuStorage::downcast_ref(any_ref);
+    /// assert!(downcast.is_some());
+    /// ```
+    pub fn downcast_ref(any_ref: &dyn std::any::Any) -> Option<&CpuStorage<T>> {
+        any_ref.downcast_ref::<CpuStorage<T>>()
+    }
+}
+
 #[cfg(test)]
 #[allow(missing_docs)]
 mod tests {
@@ -443,5 +471,52 @@ mod tests {
 
         assert_eq!(storage.shape(), &[2, 3, 4]);
         assert_eq!(storage.len(), 24);
+    }
+
+    // ===== Migration Shim Tests (Task 5) =====
+
+    #[test]
+    fn test_downcast_ref_succeeds_for_cpu_storage() {
+        let cpu_storage = CpuStorage::from_vec(vec![1.0f32, 2.0, 3.0]).unwrap();
+        let any_ref = cpu_storage.as_any();
+
+        let downcast: Option<&CpuStorage<f32>> = CpuStorage::downcast_ref(any_ref);
+        assert!(downcast.is_some());
+
+        let casted = downcast.unwrap();
+        assert_eq!(casted.len(), 3);
+        assert_eq!(casted.to_vec(), vec![1.0f32, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_downcast_ref_preserves_handle() {
+        let cpu_storage = CpuStorage::from_vec(vec![42i32]).unwrap();
+        let handle = cpu_storage.handle();
+        let any_ref = cpu_storage.as_any();
+
+        let downcast: Option<&CpuStorage<i32>> = CpuStorage::downcast_ref(any_ref);
+        let casted = downcast.unwrap();
+        assert_eq!(casted.handle(), handle);
+    }
+
+    #[test]
+    fn test_downcast_ref_preserves_shape() {
+        let cpu_storage =
+            CpuStorage::from_vec_with_shape(vec![1.0f32; 12], vec![3, 4]).unwrap();
+        let any_ref = cpu_storage.as_any();
+
+        let downcast: Option<&CpuStorage<f32>> = CpuStorage::downcast_ref(any_ref);
+        let casted = downcast.unwrap();
+        assert_eq!(casted.shape(), &[3, 4]);
+    }
+
+    #[test]
+    fn test_downcast_ref_different_type_fails() {
+        let cpu_storage_f32 = CpuStorage::from_vec(vec![1.0f32, 2.0]).unwrap();
+        let any_ref = cpu_storage_f32.as_any();
+
+        // Try to downcast to i32 storage (should fail)
+        let downcast: Option<&CpuStorage<i32>> = CpuStorage::downcast_ref(any_ref);
+        assert!(downcast.is_none());
     }
 }

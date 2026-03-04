@@ -1,9 +1,20 @@
 use crate::device_registry::{registry, SubmissionIndex};
 use crate::Result;
+use cv_core::BufferHandle;
 use cv_hal::DeviceId;
 use parking_lot::RwLock;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use wgpu::BufferUsages;
+
+/// Atomic counter for generating unique BufferHandle IDs for UnifiedBuffer.
+static NEXT_HANDLE_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Generate a unique BufferHandle ID.
+#[inline]
+fn generate_handle_id() -> u64 {
+    NEXT_HANDLE_ID.fetch_add(1, Ordering::SeqCst)
+}
 
 pub struct BufferSlice {
     pub offset: u64,
@@ -11,6 +22,8 @@ pub struct BufferSlice {
 }
 
 pub struct UnifiedBuffer<T> {
+    /// Unique handle for this buffer (for Storage trait integration)
+    handle: BufferHandle,
     host_data: Arc<RwLock<Vec<T>>>,
     device_data: Option<wgpu::Buffer>,
     device_id: Option<DeviceId>,
@@ -29,6 +42,7 @@ pub struct UnifiedBuffer<T> {
 impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> UnifiedBuffer<T> {
     pub fn new(len: usize) -> Self {
         Self {
+            handle: BufferHandle(generate_handle_id()),
             host_data: Arc::new(RwLock::new(vec![T::default(); len])),
             device_data: None,
             device_id: None,
@@ -44,6 +58,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
     pub fn with_data(data: Vec<T>) -> Self {
         let len = data.len();
         Self {
+            handle: BufferHandle(generate_handle_id()),
             host_data: Arc::new(RwLock::new(data)),
             device_data: None,
             device_id: None,
@@ -54,6 +69,32 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
             len,
             slices: Vec::new(),
         }
+    }
+
+    /// Get the unique handle for this buffer.
+    ///
+    /// The handle can be used for storage trait integration and tracking.
+    pub fn get_handle(&self) -> BufferHandle {
+        self.handle
+    }
+
+    /// Create a UnifiedBuffer from an existing CpuStorage.
+    ///
+    /// This enables integration with the cv-core Storage trait,
+    /// allowing data to flow between different storage backends.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - A CpuStorage<T> containing the initial data
+    ///
+    /// # Returns
+    ///
+    /// A new UnifiedBuffer with the data cloned from storage.
+    pub fn from_storage(storage: cv_core::CpuStorage<T>) -> Self
+    where
+        T: Clone,
+    {
+        Self::with_data(storage.to_vec())
     }
 
     pub fn len(&self) -> usize {
@@ -485,5 +526,40 @@ mod tests {
 
         buf.mark_host_dirty();
         assert!(buf.host_version() > v1);
+    }
+
+    // ===== Handle-Based Access Tests (Task 6) =====
+
+    #[test]
+    fn test_unified_buffer_get_handle() {
+        let buf: UnifiedBuffer<f32> = UnifiedBuffer::new(10);
+        let handle = buf.get_handle();
+
+        // Handle should be non-zero (from our generation function)
+        assert_ne!(handle.0, 0);
+    }
+
+    #[test]
+    fn test_unified_buffer_handle_uniqueness() {
+        let buf1: UnifiedBuffer<f32> = UnifiedBuffer::new(10);
+        let buf2: UnifiedBuffer<f32> = UnifiedBuffer::new(10);
+
+        let handle1 = buf1.get_handle();
+        let handle2 = buf2.get_handle();
+
+        // Each buffer should have a unique handle
+        assert_ne!(handle1, handle2);
+    }
+
+    #[test]
+    fn test_unified_buffer_from_storage() {
+        let cpu_storage =
+            cv_core::CpuStorage::from_vec(vec![1.0f32, 2.0, 3.0, 4.0]).unwrap();
+        let buf = UnifiedBuffer::from_storage(cpu_storage);
+
+        assert_eq!(buf.len(), 4);
+
+        let view = buf.host_view();
+        assert_eq!(*view, vec![1.0f32, 2.0, 3.0, 4.0]);
     }
 }
