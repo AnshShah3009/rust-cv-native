@@ -3,7 +3,7 @@ fn main() {
     // to be resolved at runtime when loaded by the Python interpreter.
     #[cfg(target_os = "macos")]
     {
-        println!("cargo:rustc-cdylib-link-arg=-undefined");
-        println!("cargo:rustc-cdylib-link-arg=dynamic_lookup");
+        println!("cargo:rustc-link-arg=-undefined");
+        println!("cargo:rustc-link-arg=dynamic_lookup");
     }
 }
