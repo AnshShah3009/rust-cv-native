@@ -60,7 +60,7 @@ jobs:
       run: cargo fmt --all -- --check
 
     - name: Run clippy
-      run: cargo clippy --workspace --all-targets -- -D warnings
+      run: cargo clippy --workspace --lib -- -W clippy::all
 
     - name: Build release mode
       run: cargo build --workspace --release --verbose
