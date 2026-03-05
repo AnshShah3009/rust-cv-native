@@ -995,29 +995,55 @@ impl ComputeContext for CpuBackend {
                     cov += diff * diff.transpose();
                 }
 
-                // Solve for eigenvalues/eigenvectors
-                let eig = cov.symmetric_eigen();
-                let mut min_idx = 0;
-                let mut min_val = eig.eigenvalues[0];
-                for j in 1..3 {
-                    if eig.eigenvalues[j] < min_val {
-                        min_val = eig.eigenvalues[j];
-                        min_idx = j;
-                    }
-                }
-
-                let normal = eig.eigenvectors.column(min_idx);
-
-                // Flip normal towards origin (standard heuristic)
-                if normal.dot(&(-p)) < 0.0 {
-                    normal_out[0] = -normal.x;
-                    normal_out[1] = -normal.y;
-                    normal_out[2] = -normal.z;
+                // Analytic minimum eigenvector — Open3D / Geometric Tools RobustEigenSymmetric3x3.
+                // Faster and more numerically stable than SymmetricEigen for normals.
+                let max_c = {
+                    let mut m = 0.0f32;
+                    for r in 0..3 { for c in 0..3 { let v = cov[(r,c)].abs(); if v > m { m = v; } } }
+                    m
+                };
+                let normal_vec: Vector3<f32> = if max_c < 1e-30 {
+                    Vector3::z()
                 } else {
-                    normal_out[0] = normal.x;
-                    normal_out[1] = normal.y;
-                    normal_out[2] = normal.z;
-                }
+                    let s = 1.0 / max_c;
+                    let a00 = cov[(0,0)]*s; let a01 = cov[(0,1)]*s; let a02 = cov[(0,2)]*s;
+                    let a11 = cov[(1,1)]*s; let a12 = cov[(1,2)]*s; let a22 = cov[(2,2)]*s;
+                    let norm_sq = a01*a01 + a02*a02 + a12*a12;
+                    let q = (a00 + a11 + a22) / 3.0;
+                    let b00 = a00-q; let b11 = a11-q; let b22 = a22-q;
+                    let p_val = ((b00*b00 + b11*b11 + b22*b22 + 2.0*norm_sq) / 6.0).sqrt();
+                    if p_val < 1e-10 {
+                        Vector3::z()
+                    } else {
+                        let c00 = b11*b22 - a12*a12;
+                        let c01 = a01*b22 - a12*a02;
+                        let c02 = a01*a12 - b11*a02;
+                        let det = (b00*c00 - a01*c01 + a02*c02) / (p_val*p_val*p_val);
+                        let half_det = (det*0.5_f32).clamp(-1.0, 1.0);
+                        let angle = half_det.acos() / 3.0;
+                        const TWO_THIRDS_PI: f32 = 2.094_395_1;
+                        let eval_min = q + p_val * (angle + TWO_THIRDS_PI).cos() * 2.0;
+                        let r0 = Vector3::new(a00-eval_min, a01, a02);
+                        let r1 = Vector3::new(a01, a11-eval_min, a12);
+                        let r2 = Vector3::new(a02, a12, a22-eval_min);
+                        let r0xr1 = r0.cross(&r1);
+                        let r0xr2 = r0.cross(&r2);
+                        let r1xr2 = r1.cross(&r2);
+                        let d0 = r0xr1.norm_squared();
+                        let d1 = r0xr2.norm_squared();
+                        let d2 = r1xr2.norm_squared();
+                        let best = if d0 >= d1 && d0 >= d2 { r0xr1 }
+                                   else if d1 >= d2 { r0xr2 }
+                                   else { r1xr2 };
+                        let len = best.norm();
+                        if len < 1e-10 { Vector3::z() } else { best / len }
+                    }
+                };
+                // Orient toward origin (flip if pointing away).
+                let flip = normal_vec.dot(&(-p)) < 0.0;
+                normal_out[0] = if flip { -normal_vec.x } else { normal_vec.x };
+                normal_out[1] = if flip { -normal_vec.y } else { normal_vec.y };
+                normal_out[2] = if flip { -normal_vec.z } else { normal_vec.z };
                 normal_out[3] = 0.0;
             });
 
