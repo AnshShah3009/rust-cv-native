@@ -8,5 +8,6 @@ description = "Unified point cloud operations crate"
 [dependencies]
 cv-scientific = { path = "../scientific" }
 cv-3d = { path = "../3d" }
+nalgebra = { workspace = true }
 
 [dev-dependencies]
