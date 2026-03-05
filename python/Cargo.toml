@@ -12,6 +12,8 @@ pyo3 = { version = "0.21", features = ["extension-module", "abi3-py37"] }
 cv-core = { path = "../core" }
 cv-features = { path = "../features" }
 cv-3d = { path = "../3d" }
+cv-point-cloud = { path = "../point-cloud" }
+cv-scientific = { path = "../scientific" }
 cv-runtime = { path = "../runtime" }
 cv-slam = { path = "../slam" }
 cv-videoio = { path = "../videoio" }

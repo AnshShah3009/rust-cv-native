@@ -1,4 +1,5 @@
 use cv_3d::mesh::reconstruction;
+use cv_point_cloud;
 use cv_core::point_cloud::PointCloud;
 use cv_core::{CameraIntrinsics, KeyPoint};
 use cv_dnn::DnnNet;
@@ -10,6 +11,16 @@ use cv_videoio::{open_video, VideoCapture};
 use nalgebra::{Point3, Vector3};
 use pyo3::prelude::*;
 use std::sync::Arc;
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+fn pts_from_py(points: &[(f32, f32, f32)]) -> Vec<Point3<f32>> {
+    points.iter().map(|&(x, y, z)| Point3::new(x, y, z)).collect()
+}
+
+fn normals_to_py(normals: Vec<Vector3<f32>>) -> Vec<(f32, f32, f32)> {
+    normals.into_iter().map(|n| (n.x, n.y, n.z)).collect()
+}
 
 #[pyclass]
 #[derive(Clone, Copy)]
@@ -377,6 +388,50 @@ impl PyPointCloud {
                 .collect(),
         );
     }
+
+    /// Get normals as a flat list: [nx0,ny0,nz0, nx1,ny1,nz1, ...].
+    /// Returns `None` if normals have not been estimated yet.
+    pub fn get_normals_flat(&self) -> Option<Vec<f32>> {
+        self.normals.as_ref().map(|ns| {
+            let mut out = Vec::with_capacity(ns.len() * 3);
+            for n in ns { out.push(n.x); out.push(n.y); out.push(n.z); }
+            out
+        })
+    }
+
+    /// Get normals as list of (nx, ny, nz) tuples.
+    pub fn get_normals(&self) -> Option<Vec<(f32, f32, f32)>> {
+        self.normals.as_ref().map(|ns| {
+            ns.iter().map(|n| (n.x, n.y, n.z)).collect()
+        })
+    }
+
+    /// Estimate normals in-place. `method` selects the algorithm:
+    ///
+    /// - `"auto"` (default) — GPU if available, else CPU
+    /// - `"cpu"` — voxel-hash kNN + analytic eigensolver
+    /// - `"gpu"` — Morton sort + WebGPU PCA (Metal on Apple Silicon)
+    /// - `"hybrid"` — CPU kNN + GPU batch eigenvectors
+    /// - `"approx_cross"` — fast 2-neighbour cross-product (~3× faster)
+    /// - `"approx_integral"` — fast ring cross-product (~2.5× faster)
+    #[pyo3(signature = (k=15, method="auto"))]
+    pub fn estimate_normals(&mut self, k: usize, method: &str) {
+        let normals = match method {
+            "cpu"              => cv_point_cloud::estimate_normals_cpu(&self.points, k),
+            "gpu"              => cv_point_cloud::estimate_normals_gpu(&self.points, k),
+            "hybrid"           => cv_point_cloud::estimate_normals_hybrid(&self.points, k),
+            "approx_cross"     => cv_point_cloud::estimate_normals_approx_cross(&self.points),
+            "approx_integral"  => cv_point_cloud::estimate_normals_approx_integral(&self.points),
+            _                  => cv_point_cloud::estimate_normals_auto(&self.points, k),
+        };
+        self.normals = Some(normals);
+    }
+
+    pub fn has_normals(&self) -> bool { self.normals.is_some() }
+
+    pub fn points_to_list(&self) -> Vec<(f32, f32, f32)> {
+        self.points.iter().map(|p| (p.x, p.y, p.z)).collect()
+    }
 }
 
 #[pyclass]
@@ -570,6 +625,72 @@ impl PyRuntime {
     }
 }
 
+// ── Module-level normal estimation functions ──────────────────────────────────
+//
+// These accept a list of (x,y,z) tuples and return a list of (nx,ny,nz) tuples,
+// making them easy to use with numpy:
+//   normals = np.array(cv_native.estimate_normals_auto(points.tolist(), k=15))
+
+/// Auto-select the fastest available backend (GPU → CPU).
+#[pyfunction]
+#[pyo3(signature = (points, k=15))]
+fn estimate_normals_auto(points: Vec<(f32,f32,f32)>, k: usize) -> Vec<(f32,f32,f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_auto(&pts_from_py(&points), k))
+}
+
+/// CPU-only: voxel-hash kNN + analytic eigensolver. ~19 ms / 40k pts.
+#[pyfunction]
+#[pyo3(signature = (points, k=15))]
+fn estimate_normals_cpu(points: Vec<(f32,f32,f32)>, k: usize) -> Vec<(f32,f32,f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_cpu(&pts_from_py(&points), k))
+}
+
+/// GPU: Morton sort (CPU) + WebGPU PCA. Uses Metal on Apple Silicon. ~17 ms / 40k pts.
+#[pyfunction]
+#[pyo3(signature = (points, k=15))]
+fn estimate_normals_gpu(points: Vec<(f32,f32,f32)>, k: usize) -> Vec<(f32,f32,f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_gpu(&pts_from_py(&points), k))
+}
+
+/// Hybrid: CPU kNN + GPU batch eigenvectors. Best for large clouds + discrete GPU.
+#[pyfunction]
+#[pyo3(signature = (points, k=15))]
+fn estimate_normals_hybrid(points: Vec<(f32,f32,f32)>, k: usize) -> Vec<(f32,f32,f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_hybrid(&pts_from_py(&points), k))
+}
+
+/// Fast approximate: 2-neighbour cross-product. ~3× faster, slightly less accurate.
+#[pyfunction]
+fn estimate_normals_approx_cross(points: Vec<(f32,f32,f32)>) -> Vec<(f32,f32,f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_approx_cross(&pts_from_py(&points)))
+}
+
+/// Fast approximate: ring cross-product average. ~2.5× faster, smooth results.
+#[pyfunction]
+fn estimate_normals_approx_integral(points: Vec<(f32,f32,f32)>) -> Vec<(f32,f32,f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_approx_integral(&pts_from_py(&points)))
+}
+
+/// O(n) normals from a structured depth image — ideal for RGBD / depth cameras.
+///
+/// Args:
+///     depth: flat list of depth values, row-major, H×W elements (metres or mm).
+///     width, height: image dimensions.
+///     fx, fy: focal lengths in pixels.
+///     cx, cy: principal point in pixels.
+///
+/// Returns list of (nx,ny,nz) tuples in camera space, one per pixel.
+#[pyfunction]
+fn estimate_normals_from_depth(
+    depth: Vec<f32>,
+    width: usize,
+    height: usize,
+    fx: f32, fy: f32,
+    cx: f32, cy: f32,
+) -> Vec<(f32,f32,f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_from_depth(&depth, width, height, fx, fy, cx, cy))
+}
+
 #[pymodule]
 fn cv_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyWorkloadHint>()?;
@@ -584,5 +705,13 @@ fn cv_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTriangleMesh>()?;
     m.add_class::<PyMeshReconstruction>()?;
     m.add_class::<PyTensor>()?;
+    // Normal estimation — direct functions
+    m.add_function(wrap_pyfunction!(estimate_normals_auto, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_normals_cpu, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_normals_gpu, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_normals_hybrid, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_normals_approx_cross, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_normals_approx_integral, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_normals_from_depth, m)?)?;
     Ok(())
 }
