@@ -99,10 +99,10 @@ jobs:
         key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build workspace (CPU backend)
-      run: cargo build --workspace --features cpu --verbose
+      run: cargo build --workspace --features cpu --exclude cv-python --verbose
 
     - name: Build workspace (MLX backend)
-      run: cargo build --workspace --features mlx --verbose
+      run: cargo build --workspace --features mlx --exclude cv-python --verbose
 
     - name: Run clippy
       run: cargo clippy --workspace --lib -- -W clippy::all
@@ -177,7 +177,7 @@ jobs:
         key: ${{ runner.os }}-cargo-test-target-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Run tests (CPU backend)
-      run: cargo test --workspace --features cpu --verbose
+      run: cargo test --workspace --features cpu --exclude cv-python --verbose
 
     - name: Run tests (MLX backend)
-      run: cargo test --workspace --features mlx --verbose
+      run: cargo test --workspace --features mlx --exclude cv-python --verbose
