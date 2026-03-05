@@ -14,7 +14,9 @@ pub fn compute_normals_morton_gpu_or_cpu(
     k: u32,
 ) -> Vec<nalgebra::Vector3<f32>> {
     if let Ok(gpu) = GpuContext::global() {
-        if let Ok(normals) = crate::gpu_kernels::pointcloud_gpu::compute_normals_morton_gpu(gpu, points, k) {
+        if let Ok(normals) =
+            crate::gpu_kernels::pointcloud_gpu::compute_normals_morton_gpu(gpu, points, k)
+        {
             return normals;
         }
     }
@@ -35,16 +37,20 @@ pub fn normals_cpu_analytic(
         return vec![nalgebra::Vector3::z(); points.len()];
     }
     let k = k.max(3).min(points.len().saturating_sub(1));
-    let pts_p: Vec<nalgebra::Point3<f32>> = points.iter().map(|v| nalgebra::Point3::from(*v)).collect();
+    let pts_p: Vec<nalgebra::Point3<f32>> =
+        points.iter().map(|v| nalgebra::Point3::from(*v)).collect();
 
     // Adaptive voxel size from bounding box (dimensionality-aware).
     let vs = {
         let (mut minx, mut miny, mut minz) = (f32::MAX, f32::MAX, f32::MAX);
         let (mut maxx, mut maxy, mut maxz) = (f32::MIN, f32::MIN, f32::MIN);
         for p in &pts_p {
-            minx = minx.min(p.x); maxx = maxx.max(p.x);
-            miny = miny.min(p.y); maxy = maxy.max(p.y);
-            minz = minz.min(p.z); maxz = maxz.max(p.z);
+            minx = minx.min(p.x);
+            maxx = maxx.max(p.x);
+            miny = miny.min(p.y);
+            maxy = maxy.max(p.y);
+            minz = minz.min(p.z);
+            maxz = maxz.max(p.z);
         }
         let sx = (maxx - minx).max(1e-9_f32);
         let sy = (maxy - miny).max(1e-9_f32);
@@ -63,68 +69,141 @@ pub fn normals_cpu_analytic(
         vs.clamp(1e-6, (s1 / 2.0).max(1e-6_f32))
     };
 
-    let mut grid: hashbrown::HashMap<(i32,i32,i32), Vec<usize>> =
+    let mut grid: hashbrown::HashMap<(i32, i32, i32), Vec<usize>> =
         hashbrown::HashMap::with_capacity(pts_p.len() / 8);
     for (i, p) in pts_p.iter().enumerate() {
-        grid.entry(((p.x/vs).floor() as i32, (p.y/vs).floor() as i32, (p.z/vs).floor() as i32))
-            .or_default().push(i);
+        grid.entry((
+            (p.x / vs).floor() as i32,
+            (p.y / vs).floor() as i32,
+            (p.z / vs).floor() as i32,
+        ))
+        .or_default()
+        .push(i);
     }
 
-    pts_p.par_iter().enumerate().map(|(i, center)| {
-        let (vx, vy, vz) = ((center.x/vs).floor() as i32, (center.y/vs).floor() as i32, (center.z/vs).floor() as i32);
-        let mut cands: Vec<(f32, usize)> = Vec::with_capacity(27 * k);
-        for dx in -1..=1i32 { for dy in -1..=1i32 { for dz in -1..=1i32 {
-            if let Some(b) = grid.get(&(vx+dx, vy+dy, vz+dz)) {
-                for &idx in b { if idx != i {
-                    let p = &pts_p[idx];
-                    let d = (center.x-p.x).powi(2) + (center.y-p.y).powi(2) + (center.z-p.z).powi(2);
-                    cands.push((d, idx));
-                }}
+    pts_p
+        .par_iter()
+        .enumerate()
+        .map(|(i, center)| {
+            let (vx, vy, vz) = (
+                (center.x / vs).floor() as i32,
+                (center.y / vs).floor() as i32,
+                (center.z / vs).floor() as i32,
+            );
+            let mut cands: Vec<(f32, usize)> = Vec::with_capacity(27 * k);
+            for dx in -1..=1i32 {
+                for dy in -1..=1i32 {
+                    for dz in -1..=1i32 {
+                        if let Some(b) = grid.get(&(vx + dx, vy + dy, vz + dz)) {
+                            for &idx in b {
+                                if idx != i {
+                                    let p = &pts_p[idx];
+                                    let d = (center.x - p.x).powi(2)
+                                        + (center.y - p.y).powi(2)
+                                        + (center.z - p.z).powi(2);
+                                    cands.push((d, idx));
+                                }
+                            }
+                        }
+                    }
+                }
             }
-        }}}
-        if cands.len() > k {
-            cands.select_nth_unstable_by(k-1, |a,b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-            cands.truncate(k);
-        }
-        if cands.len() < 3 { return nalgebra::Vector3::z(); }
+            if cands.len() > k {
+                cands.select_nth_unstable_by(k - 1, |a, b| {
+                    a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                cands.truncate(k);
+            }
+            if cands.len() < 3 {
+                return nalgebra::Vector3::z();
+            }
 
-        let mut cx=0.0f32; let mut cy=0.0f32; let mut cz=0.0f32;
-        for &(_, idx) in &cands { cx+=pts_p[idx].x; cy+=pts_p[idx].y; cz+=pts_p[idx].z; }
-        let inv = 1.0 / cands.len() as f32;
-        cx*=inv; cy*=inv; cz*=inv;
+            let mut cx = 0.0f32;
+            let mut cy = 0.0f32;
+            let mut cz = 0.0f32;
+            for &(_, idx) in &cands {
+                cx += pts_p[idx].x;
+                cy += pts_p[idx].y;
+                cz += pts_p[idx].z;
+            }
+            let inv = 1.0 / cands.len() as f32;
+            cx *= inv;
+            cy *= inv;
+            cz *= inv;
 
-        let mut cxx=0.0f32; let mut cxy=0.0f32; let mut cxz=0.0f32;
-        let mut cyy=0.0f32; let mut cyz=0.0f32; let mut czz=0.0f32;
-        for &(_, idx) in &cands {
-            let dx=pts_p[idx].x-cx; let dy=pts_p[idx].y-cy; let dz=pts_p[idx].z-cz;
-            cxx+=dx*dx; cxy+=dx*dy; cxz+=dx*dz; cyy+=dy*dy; cyz+=dy*dz; czz+=dz*dz;
-        }
+            let mut cxx = 0.0f32;
+            let mut cxy = 0.0f32;
+            let mut cxz = 0.0f32;
+            let mut cyy = 0.0f32;
+            let mut cyz = 0.0f32;
+            let mut czz = 0.0f32;
+            for &(_, idx) in &cands {
+                let dx = pts_p[idx].x - cx;
+                let dy = pts_p[idx].y - cy;
+                let dz = pts_p[idx].z - cz;
+                cxx += dx * dx;
+                cxy += dx * dy;
+                cxz += dx * dz;
+                cyy += dy * dy;
+                cyz += dy * dz;
+                czz += dz * dz;
+            }
 
-        // Analytic min eigenvector — Open3D / Geometric Tools algorithm.
-        let max_c = cxx.abs().max(cxy.abs()).max(cxz.abs()).max(cyy.abs()).max(cyz.abs()).max(czz.abs());
-        if max_c < 1e-30 { return nalgebra::Vector3::z(); }
-        let s=1.0/max_c;
-        let (a00,a01,a02,a11,a12,a22) = (cxx*s,cxy*s,cxz*s,cyy*s,cyz*s,czz*s);
-        let norm=a01*a01+a02*a02+a12*a12;
-        let q=(a00+a11+a22)/3.0;
-        let (b00,b11,b22) = (a00-q,a11-q,a22-q);
-        let p_val=((b00*b00+b11*b11+b22*b22+2.0*norm)/6.0).sqrt();
-        if p_val<1e-10 { return nalgebra::Vector3::z(); }
-        let (c00,c01,c02) = (b11*b22-a12*a12, a01*b22-a12*a02, a01*a12-b11*a02);
-        let det=(b00*c00-a01*c01+a02*c02)/(p_val*p_val*p_val);
-        let half_det=(det*0.5_f32).clamp(-1.0,1.0);
-        let angle=half_det.acos()/3.0;
-        const TPI: f32 = 2.094_395_1;
-        let eval_min=q+p_val*(angle+TPI).cos()*2.0;
-        let r0=nalgebra::Vector3::new(a00-eval_min,a01,a02);
-        let r1=nalgebra::Vector3::new(a01,a11-eval_min,a12);
-        let r2=nalgebra::Vector3::new(a02,a12,a22-eval_min);
-        let r0xr1=r0.cross(&r1); let r0xr2=r0.cross(&r2); let r1xr2=r1.cross(&r2);
-        let d0=r0xr1.norm_squared(); let d1=r0xr2.norm_squared(); let d2=r1xr2.norm_squared();
-        let best = if d0>=d1&&d0>=d2 { r0xr1 } else if d1>=d2 { r0xr2 } else { r1xr2 };
-        let len=best.norm();
-        if len<1e-10 { nalgebra::Vector3::z() } else { best/len }
-    }).collect()
+            // Analytic min eigenvector — Open3D / Geometric Tools algorithm.
+            let max_c = cxx
+                .abs()
+                .max(cxy.abs())
+                .max(cxz.abs())
+                .max(cyy.abs())
+                .max(cyz.abs())
+                .max(czz.abs());
+            if max_c < 1e-30 {
+                return nalgebra::Vector3::z();
+            }
+            let s = 1.0 / max_c;
+            let (a00, a01, a02, a11, a12, a22) =
+                (cxx * s, cxy * s, cxz * s, cyy * s, cyz * s, czz * s);
+            let norm = a01 * a01 + a02 * a02 + a12 * a12;
+            let q = (a00 + a11 + a22) / 3.0;
+            let (b00, b11, b22) = (a00 - q, a11 - q, a22 - q);
+            let p_val = ((b00 * b00 + b11 * b11 + b22 * b22 + 2.0 * norm) / 6.0).sqrt();
+            if p_val < 1e-10 {
+                return nalgebra::Vector3::z();
+            }
+            let (c00, c01, c02) = (
+                b11 * b22 - a12 * a12,
+                a01 * b22 - a12 * a02,
+                a01 * a12 - b11 * a02,
+            );
+            let det = (b00 * c00 - a01 * c01 + a02 * c02) / (p_val * p_val * p_val);
+            let half_det = (det * 0.5_f32).clamp(-1.0, 1.0);
+            let angle = half_det.acos() / 3.0;
+            const TPI: f32 = 2.094_395_1;
+            let eval_min = q + p_val * (angle + TPI).cos() * 2.0;
+            let r0 = nalgebra::Vector3::new(a00 - eval_min, a01, a02);
+            let r1 = nalgebra::Vector3::new(a01, a11 - eval_min, a12);
+            let r2 = nalgebra::Vector3::new(a02, a12, a22 - eval_min);
+            let r0xr1 = r0.cross(&r1);
+            let r0xr2 = r0.cross(&r2);
+            let r1xr2 = r1.cross(&r2);
+            let d0 = r0xr1.norm_squared();
+            let d1 = r0xr2.norm_squared();
+            let d2 = r1xr2.norm_squared();
+            let best = if d0 >= d1 && d0 >= d2 {
+                r0xr1
+            } else if d1 >= d2 {
+                r0xr2
+            } else {
+                r1xr2
+            };
+            let len = best.norm();
+            if len < 1e-10 {
+                nalgebra::Vector3::z()
+            } else {
+                best / len
+            }
+        })
+        .collect()
 }
 
 pub fn transform_points(
@@ -321,10 +400,7 @@ pub fn compute_normals(
         crate::gpu_kernels::pointcloud_gpu::compute_normals_morton_gpu(ctx, &pts, k_neighbors)?;
 
     // Upload resulting normals back as a GPU Tensor (vec4 layout).
-    let normals_data: Vec<[f32; 4]> = normals_vec
-        .iter()
-        .map(|n| [n.x, n.y, n.z, 0.0])
-        .collect();
+    let normals_data: Vec<[f32; 4]> = normals_vec.iter().map(|n| [n.x, n.y, n.z, 0.0]).collect();
 
     let buffer = ctx
         .device
@@ -373,36 +449,45 @@ pub fn compute_normals_from_covariances_gpu(
         .map(|c| [c[0], c[1], c[2], c[3], c[4], c[5], 0.0, 0.0])
         .collect();
 
-    let covs_buf   = create_buffer(&device, &packed, BufferUsages::STORAGE);
+    let covs_buf = create_buffer(&device, &packed, BufferUsages::STORAGE);
     let normals_buf = create_buffer_uninit(
         &device,
         n * 16, // vec4<f32> per point
         BufferUsages::STORAGE | BufferUsages::COPY_SRC,
     );
     let n_u32 = n as u32;
-    let n_buf  = create_buffer(&device, &[n_u32], BufferUsages::UNIFORM);
+    let n_buf = create_buffer(&device, &[n_u32], BufferUsages::UNIFORM);
 
     let shader_source = include_str!("pointcloud_normals_batch_pca.wgsl");
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label:  Some("Batch PCA Shader"),
+        label: Some("Batch PCA Shader"),
         source: wgpu::ShaderSource::Wgsl(shader_source.into()),
     });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label:               Some("Batch PCA Pipeline"),
-        layout:              None,
-        module:              &shader,
-        entry_point:         Some("main"),
+        label: Some("Batch PCA Pipeline"),
+        layout: None,
+        module: &shader,
+        entry_point: Some("main"),
         compilation_options: Default::default(),
-        cache:               None,
+        cache: None,
     });
 
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label:   Some("Batch PCA Bind Group"),
-        layout:  &pipeline.get_bind_group_layout(0),
+        label: Some("Batch PCA Bind Group"),
+        layout: &pipeline.get_bind_group_layout(0),
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: covs_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: normals_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: n_buf.as_entire_binding() },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: covs_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: normals_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: n_buf.as_entire_binding(),
+            },
         ],
     });
 
@@ -410,7 +495,8 @@ pub fn compute_normals_from_covariances_gpu(
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: None, timestamp_writes: None,
+            label: None,
+            timestamp_writes: None,
         });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
@@ -418,13 +504,8 @@ pub fn compute_normals_from_covariances_gpu(
     }
     queue.submit(std::iter::once(encoder.finish()));
 
-    let result_raw: Vec<[f32; 4]> = pollster::block_on(read_buffer(
-        device.clone(),
-        queue,
-        &normals_buf,
-        0,
-        n * 16,
-    ))?;
+    let result_raw: Vec<[f32; 4]> =
+        pollster::block_on(read_buffer(device.clone(), queue, &normals_buf, 0, n * 16))?;
 
     Ok(result_raw
         .into_iter()

@@ -117,9 +117,7 @@ pub mod point_cloud {
                 for dx in -1..=1i32 {
                     for dy in -1..=1i32 {
                         for dz in -1..=1i32 {
-                            if let Some(bucket) =
-                                voxel_grid.get(&(vx + dx, vy + dy, vz + dz))
-                            {
+                            if let Some(bucket) = voxel_grid.get(&(vx + dx, vy + dy, vz + dz)) {
                                 for &idx in bucket {
                                     if idx != i {
                                         let p = points[idx];
@@ -137,10 +135,9 @@ pub mod point_cloud {
                 // O(n) partial-select instead of O(n log n) full sort — we only need
                 // the k smallest, not a fully sorted list.
                 if candidates.len() > k {
-                    candidates.select_nth_unstable_by(
-                        k - 1,
-                        |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal),
-                    );
+                    candidates.select_nth_unstable_by(k - 1, |a, b| {
+                        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+                    });
                     candidates.truncate(k);
                 }
 
@@ -261,9 +258,12 @@ pub mod point_cloud {
         let (mut min_x, mut min_y, mut min_z) = (f32::MAX, f32::MAX, f32::MAX);
         let (mut max_x, mut max_y, mut max_z) = (f32::MIN, f32::MIN, f32::MIN);
         for p in points {
-            min_x = min_x.min(p.x); max_x = max_x.max(p.x);
-            min_y = min_y.min(p.y); max_y = max_y.max(p.y);
-            min_z = min_z.min(p.z); max_z = max_z.max(p.z);
+            min_x = min_x.min(p.x);
+            max_x = max_x.max(p.x);
+            min_y = min_y.min(p.y);
+            max_y = max_y.max(p.y);
+            min_z = min_z.min(p.z);
+            max_z = max_z.max(p.z);
         }
 
         let sx = (max_x - min_x).max(1e-9_f32);
@@ -348,11 +348,13 @@ pub mod point_cloud {
                         for dz in -1..=1i32 {
                             if let Some(b) = grid.get(&(vx + dx, vy + dy, vz + dz)) {
                                 for &idx in b {
-                                    if idx == i { continue; }
+                                    if idx == i {
+                                        continue;
+                                    }
                                     let p = points[idx];
-                                    let d = (c.x-p.x)*(c.x-p.x)
-                                          + (c.y-p.y)*(c.y-p.y)
-                                          + (c.z-p.z)*(c.z-p.z);
+                                    let d = (c.x - p.x) * (c.x - p.x)
+                                        + (c.y - p.y) * (c.y - p.y)
+                                        + (c.z - p.z) * (c.z - p.z);
                                     if d < best[0].0 {
                                         best[1] = best[0];
                                         best[0] = (d, idx);
@@ -364,14 +366,20 @@ pub mod point_cloud {
                         }
                     }
                 }
-                if best[1].0 == f32::MAX { return Vector3::z(); }
+                if best[1].0 == f32::MAX {
+                    return Vector3::z();
+                }
                 let p0 = points[best[0].1];
                 let p1 = points[best[1].1];
                 let v0 = Vector3::new(p0.x - c.x, p0.y - c.y, p0.z - c.z);
                 let v1 = Vector3::new(p1.x - c.x, p1.y - c.y, p1.z - c.z);
                 let n = v0.cross(&v1);
                 let len = n.norm();
-                if len < 1e-10 { Vector3::z() } else { n / len }
+                if len < 1e-10 {
+                    Vector3::z()
+                } else {
+                    n / len
+                }
             })
             .collect()
     }
@@ -423,12 +431,14 @@ pub mod point_cloud {
                 for dx in -1..=1i32 {
                     for dy in -1..=1i32 {
                         for dz in -1..=1i32 {
-                            if let Some(b) = grid.get(&(vx+dx, vy+dy, vz+dz)) {
+                            if let Some(b) = grid.get(&(vx + dx, vy + dy, vz + dz)) {
                                 for &idx in b {
                                     if idx != i {
                                         let p = points[idx];
                                         neighbours.push(Vector3::new(
-                                            p.x - c.x, p.y - c.y, p.z - c.z
+                                            p.x - c.x,
+                                            p.y - c.y,
+                                            p.z - c.z,
                                         ));
                                     }
                                 }
@@ -436,7 +446,9 @@ pub mod point_cloud {
                         }
                     }
                 }
-                if neighbours.len() < 2 { return Vector3::z(); }
+                if neighbours.len() < 2 {
+                    return Vector3::z();
+                }
                 // Accumulate cross products of consecutive pairs.
                 let mut acc = Vector3::zeros();
                 let n = neighbours.len();
@@ -446,7 +458,11 @@ pub mod point_cloud {
                     acc += a.cross(&b);
                 }
                 let len = acc.norm();
-                if len < 1e-10 { Vector3::z() } else { acc / len }
+                if len < 1e-10 {
+                    Vector3::z()
+                } else {
+                    acc / len
+                }
             })
             .collect()
     }
@@ -535,9 +551,7 @@ pub mod point_cloud {
                 for dx in -1..=1i32 {
                     for dy in -1..=1i32 {
                         for dz in -1..=1i32 {
-                            if let Some(bucket) =
-                                voxel_grid.get(&(vx + dx, vy + dy, vz + dz))
-                            {
+                            if let Some(bucket) = voxel_grid.get(&(vx + dx, vy + dy, vz + dz)) {
                                 for &idx in bucket {
                                     if idx != i {
                                         let p = points[idx];
@@ -552,10 +566,9 @@ pub mod point_cloud {
                     }
                 }
                 if cands.len() > k {
-                    cands.select_nth_unstable_by(
-                        k - 1,
-                        |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal),
-                    );
+                    cands.select_nth_unstable_by(k - 1, |a, b| {
+                        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+                    });
                     cands.truncate(k);
                 }
 
@@ -595,7 +608,14 @@ pub mod point_cloud {
                     cyz += dy * dz;
                     czz += dz * dz;
                 }
-                [cxx * inv_n, cxy * inv_n, cxz * inv_n, cyy * inv_n, cyz * inv_n, czz * inv_n]
+                [
+                    cxx * inv_n,
+                    cxy * inv_n,
+                    cxz * inv_n,
+                    cyy * inv_n,
+                    cyz * inv_n,
+                    czz * inv_n,
+                ]
             })
             .collect()
     }
@@ -885,7 +905,9 @@ mod normal_tests {
         assert!(
             pct_bad < 0.1,
             "{}: {:.0}% of normals not vertical (|z| < {})",
-            label, pct_bad * 100.0, tol
+            label,
+            pct_bad * 100.0,
+            tol
         );
     }
 
@@ -929,15 +951,17 @@ mod normal_tests {
         use super::point_cloud::min_eigenvector_3x3;
         // Build covariance matrix: large xy spread, zero z.
         let mut m = nalgebra::Matrix3::zeros();
-        m[(0, 0)] = 1.0;   // cxx
-        m[(1, 1)] = 1.0;   // cyy
-        m[(2, 2)] = 0.0;   // czz  ← zero → minimum eigenvalue
-        m[(0, 1)] = 0.0; m[(1, 0)] = 0.0;
-        m[(0, 2)] = 0.0; m[(2, 0)] = 0.0;
-        m[(1, 2)] = 0.0; m[(2, 1)] = 0.0;
+        m[(0, 0)] = 1.0; // cxx
+        m[(1, 1)] = 1.0; // cyy
+        m[(2, 2)] = 0.0; // czz  ← zero → minimum eigenvalue
+        m[(0, 1)] = 0.0;
+        m[(1, 0)] = 0.0;
+        m[(0, 2)] = 0.0;
+        m[(2, 0)] = 0.0;
+        m[(1, 2)] = 0.0;
+        m[(2, 1)] = 0.0;
 
         let n = min_eigenvector_3x3(&m);
         assert!(n.z.abs() > 0.99, "Expected z-normal, got {:?}", n);
     }
-
 }

@@ -205,9 +205,12 @@ pub enum ComputeMode {
     /// Functionally equivalent to `Gpu` on Apple Silicon.
     Mlx,
     // Legacy aliases kept for source compatibility.
-    #[doc(hidden)] CPU,
-    #[doc(hidden)] GPU,
-    #[doc(hidden)] Adaptive,
+    #[doc(hidden)]
+    CPU,
+    #[doc(hidden)]
+    GPU,
+    #[doc(hidden)]
+    Adaptive,
 }
 
 /// Configuration struct for the config-based `compute_normals` dispatcher.
@@ -232,24 +235,68 @@ pub struct NormalComputeConfig {
 }
 
 impl Default for NormalComputeConfig {
-    fn default() -> Self { Self::auto() }
+    fn default() -> Self {
+        Self::auto()
+    }
 }
 
 impl NormalComputeConfig {
     /// Auto-selects the fastest available path. Recommended starting point.
-    pub fn auto() -> Self { Self { k: 15, voxel_size: 0.0, mode: ComputeMode::Auto } }
+    pub fn auto() -> Self {
+        Self {
+            k: 15,
+            voxel_size: 0.0,
+            mode: ComputeMode::Auto,
+        }
+    }
     /// CPU-only path.
-    pub fn cpu() -> Self { Self { k: 15, voxel_size: 0.0, mode: ComputeMode::Cpu } }
+    pub fn cpu() -> Self {
+        Self {
+            k: 15,
+            voxel_size: 0.0,
+            mode: ComputeMode::Cpu,
+        }
+    }
     /// GPU path (Morton sort + WebGPU).
-    pub fn gpu() -> Self { Self { k: 15, voxel_size: 0.0, mode: ComputeMode::Gpu } }
+    pub fn gpu() -> Self {
+        Self {
+            k: 15,
+            voxel_size: 0.0,
+            mode: ComputeMode::Gpu,
+        }
+    }
     /// Hybrid CPU kNN + GPU batch eigenvectors.
-    pub fn hybrid() -> Self { Self { k: 15, voxel_size: 0.0, mode: ComputeMode::Hybrid } }
+    pub fn hybrid() -> Self {
+        Self {
+            k: 15,
+            voxel_size: 0.0,
+            mode: ComputeMode::Hybrid,
+        }
+    }
     /// Apple Silicon (Metal via wgpu).
-    pub fn mlx() -> Self { Self { k: 15, voxel_size: 0.0, mode: ComputeMode::Mlx } }
+    pub fn mlx() -> Self {
+        Self {
+            k: 15,
+            voxel_size: 0.0,
+            mode: ComputeMode::Mlx,
+        }
+    }
     /// Fast approximate: k=10, CPU cross-product method.
-    pub fn fast() -> Self { Self { k: 10, voxel_size: 0.0, mode: ComputeMode::Cpu } }
+    pub fn fast() -> Self {
+        Self {
+            k: 10,
+            voxel_size: 0.0,
+            mode: ComputeMode::Cpu,
+        }
+    }
     /// High quality: k=30 neighbours, auto backend.
-    pub fn high_quality() -> Self { Self { k: 30, voxel_size: 0.0, mode: ComputeMode::Auto } }
+    pub fn high_quality() -> Self {
+        Self {
+            k: 30,
+            voxel_size: 0.0,
+            mode: ComputeMode::Auto,
+        }
+    }
 }
 
 /// Config-based normal estimation dispatcher.
