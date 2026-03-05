@@ -15,4 +15,6 @@
 //! | [`orient_normals`] | Neighbour-voting propagation | O(nk log n) |
 //! | [`compute_normals_from_depth`] | Cross-product from structured depth | **O(n)** |
 
-pub use cv_scientific::point_cloud::{compute_normals_from_depth, estimate_normals, orient_normals};
+pub use cv_scientific::point_cloud::{
+    compute_normals_from_depth, estimate_normals, orient_normals,
+};

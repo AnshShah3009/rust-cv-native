@@ -23,8 +23,8 @@ fn sphere_cloud(n: usize) -> Vec<Point3<f32>> {
     (0..n)
         .map(|_| {
             let theta = rng.gen::<f32>() * std::f32::consts::TAU;
-            let phi   = (rng.gen::<f32>() * 2.0 - 1.0).acos();
-            let r     = 1.0 + rng.gen::<f32>() * 0.01;
+            let phi = (rng.gen::<f32>() * 2.0 - 1.0).acos();
+            let r = 1.0 + rng.gen::<f32>() * 0.01;
             Point3::new(
                 r * phi.sin() * theta.cos(),
                 r * phi.sin() * theta.sin(),
@@ -36,19 +36,23 @@ fn sphere_cloud(n: usize) -> Vec<Point3<f32>> {
 
 /// Synthetic depth image: H×W projection of the unit sphere onto the XY plane.
 fn sphere_depth(width: usize, height: usize) -> Vec<f32> {
-    let cx = width  as f32 / 2.0;
+    let cx = width as f32 / 2.0;
     let cy = height as f32 / 2.0;
-    let fx = width  as f32;          // focal length = image width (≈ 45° FoV)
+    let fx = width as f32; // focal length = image width (≈ 45° FoV)
     let fy = height as f32;
 
     (0..height * width)
         .map(|i| {
-            let px = (i % width)  as f32;
-            let py = (i / width)  as f32;
+            let px = (i % width) as f32;
+            let py = (i / width) as f32;
             let dx = (px - cx) / fx;
             let dy = (py - cy) / fy;
             let r2 = dx * dx + dy * dy;
-            if r2 < 1.0 { (1.0 - r2).sqrt() } else { 0.0 }
+            if r2 < 1.0 {
+                (1.0 - r2).sqrt()
+            } else {
+                0.0
+            }
         })
         .collect()
 }
@@ -80,9 +84,7 @@ fn bench_voxel_cpu(c: &mut Criterion) {
     for &n in &[1_000usize, 10_000, 100_000] {
         let pts = sphere_cloud(n);
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| {
-                gpu_pc::compute_normals_cpu(black_box(&pts), 15, 0.0)
-            });
+            b.iter(|| gpu_pc::compute_normals_cpu(black_box(&pts), 15, 0.0));
         });
     }
     group.finish();
@@ -96,9 +98,7 @@ fn bench_hybrid(c: &mut Criterion) {
     for &n in &[1_000usize, 10_000, 100_000] {
         let pts = sphere_cloud(n);
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| {
-                gpu_pc::compute_normals_hybrid(black_box(&pts), 15)
-            });
+            b.iter(|| gpu_pc::compute_normals_hybrid(black_box(&pts), 15));
         });
     }
     group.finish();
@@ -112,9 +112,7 @@ fn bench_morton_gpu(c: &mut Criterion) {
     for &n in &[1_000usize, 10_000, 100_000] {
         let pts = sphere_cloud(n);
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| {
-                gpu_pc::compute_normals(black_box(&pts), 15)
-            });
+            b.iter(|| gpu_pc::compute_normals(black_box(&pts), 15));
         });
     }
     group.finish();
@@ -133,10 +131,12 @@ fn bench_depth_image(c: &mut Criterion) {
             b.iter(|| {
                 sci_pc::compute_normals_from_depth(
                     black_box(&depth),
-                    w, h,
-                    w as f32, h as f32,    // fx=fy=width
-                    w as f32 / 2.0,        // cx
-                    h as f32 / 2.0,        // cy
+                    w,
+                    h,
+                    w as f32,
+                    h as f32,       // fx=fy=width
+                    w as f32 / 2.0, // cx
+                    h as f32 / 2.0, // cy
                 )
             });
         });
@@ -152,9 +152,7 @@ fn bench_approx_cross(c: &mut Criterion) {
     for &n in &[1_000usize, 10_000, 100_000] {
         let pts = sphere_cloud(n);
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| {
-                gpu_pc::compute_normals_approx_cross(black_box(&pts), 0.0)
-            });
+            b.iter(|| gpu_pc::compute_normals_approx_cross(black_box(&pts), 0.0));
         });
     }
     group.finish();
@@ -168,9 +166,7 @@ fn bench_approx_integral(c: &mut Criterion) {
     for &n in &[1_000usize, 10_000, 100_000] {
         let pts = sphere_cloud(n);
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| {
-                gpu_pc::compute_normals_approx_integral(black_box(&pts), 0.0)
-            });
+            b.iter(|| gpu_pc::compute_normals_approx_integral(black_box(&pts), 0.0));
         });
     }
     group.finish();

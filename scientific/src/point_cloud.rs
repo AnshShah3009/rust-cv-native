@@ -379,13 +379,25 @@ pub fn compute_normals_from_depth(
                 return Vector3::new(0.0, 0.0, 1.0);
             }
 
-            let l = match backproject(px - 1, py) { Some(v) => v, None => return Vector3::new(0.0, 0.0, 1.0) };
-            let r = match backproject(px + 1, py) { Some(v) => v, None => return Vector3::new(0.0, 0.0, 1.0) };
-            let u = match backproject(px, py - 1) { Some(v) => v, None => return Vector3::new(0.0, 0.0, 1.0) };
-            let d = match backproject(px, py + 1) { Some(v) => v, None => return Vector3::new(0.0, 0.0, 1.0) };
+            let l = match backproject(px - 1, py) {
+                Some(v) => v,
+                None => return Vector3::new(0.0, 0.0, 1.0),
+            };
+            let r = match backproject(px + 1, py) {
+                Some(v) => v,
+                None => return Vector3::new(0.0, 0.0, 1.0),
+            };
+            let u = match backproject(px, py - 1) {
+                Some(v) => v,
+                None => return Vector3::new(0.0, 0.0, 1.0),
+            };
+            let d = match backproject(px, py + 1) {
+                Some(v) => v,
+                None => return Vector3::new(0.0, 0.0, 1.0),
+            };
 
             let horizontal = r - l;
-            let vertical   = d - u;
+            let vertical = d - u;
             let n = horizontal.cross(&vertical);
             let len = n.norm();
             if len < 1e-8 {
@@ -393,7 +405,11 @@ pub fn compute_normals_from_depth(
             }
             // Orient toward camera (-Z in camera space means facing viewer).
             let normal = n / len;
-            if normal.z > 0.0 { -normal } else { normal }
+            if normal.z > 0.0 {
+                -normal
+            } else {
+                normal
+            }
         })
         .collect()
 }
@@ -1237,7 +1253,10 @@ mod tests {
                 let n = normals[r * w + c];
                 assert!(
                     n.z.abs() > 0.9,
-                    "flat-plane normal at ({},{}) = {:?}", r, c, n
+                    "flat-plane normal at ({},{}) = {:?}",
+                    r,
+                    c,
+                    n
                 );
             }
         }
@@ -1255,19 +1274,23 @@ mod tests {
                 let dx = (i % w) as f32 - cx;
                 let dy = (i / w) as f32 - cy;
                 let r2 = (dx * dx + dy * dy) / (cx * cx);
-                if r2 < 1.0 { (1.0 - r2).sqrt() } else { 0.0 }
+                if r2 < 1.0 {
+                    (1.0 - r2).sqrt()
+                } else {
+                    0.0
+                }
             })
             .collect();
         let normals = compute_normals_from_depth(
-            &depth, w, h,
-            w as f32, h as f32, // fx = fy = image width
+            &depth, w, h, w as f32, h as f32, // fx = fy = image width
             cx, cy,
         );
         // Centre of the cap should face the camera (z component ≈ -1 or 1).
         let centre = (h / 2) * w + w / 2;
         assert!(
             normals[centre].z.abs() > 0.7,
-            "sphere cap centre normal = {:?}", normals[centre]
+            "sphere cap centre normal = {:?}",
+            normals[centre]
         );
     }
 
@@ -1278,7 +1301,11 @@ mod tests {
         for n in &normals {
             let expected = nalgebra::Vector3::new(0.0, 0.0, 1.0);
             let diff = (n - expected).norm();
-            assert!(diff < 1e-6, "zero-depth pixel gave non-default normal {:?}", n);
+            assert!(
+                diff < 1e-6,
+                "zero-depth pixel gave non-default normal {:?}",
+                n
+            );
         }
     }
 

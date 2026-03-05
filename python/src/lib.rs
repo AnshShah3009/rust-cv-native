@@ -1,10 +1,10 @@
 use cv_3d::mesh::reconstruction;
-use cv_point_cloud;
 use cv_core::point_cloud::PointCloud;
 use cv_core::{CameraIntrinsics, KeyPoint};
 use cv_dnn::DnnNet;
 use cv_features::{fast, gftt, harris};
 use cv_optimize::isam2::Isam2;
+use cv_point_cloud;
 use cv_runtime::orchestrator::{scheduler, WorkloadHint};
 use cv_slam::Slam as RustSlam;
 use cv_videoio::{open_video, VideoCapture};
@@ -15,7 +15,10 @@ use std::sync::Arc;
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn pts_from_py(points: &[(f32, f32, f32)]) -> Vec<Point3<f32>> {
-    points.iter().map(|&(x, y, z)| Point3::new(x, y, z)).collect()
+    points
+        .iter()
+        .map(|&(x, y, z)| Point3::new(x, y, z))
+        .collect()
 }
 
 fn normals_to_py(normals: Vec<Vector3<f32>>) -> Vec<(f32, f32, f32)> {
@@ -394,16 +397,20 @@ impl PyPointCloud {
     pub fn get_normals_flat(&self) -> Option<Vec<f32>> {
         self.normals.as_ref().map(|ns| {
             let mut out = Vec::with_capacity(ns.len() * 3);
-            for n in ns { out.push(n.x); out.push(n.y); out.push(n.z); }
+            for n in ns {
+                out.push(n.x);
+                out.push(n.y);
+                out.push(n.z);
+            }
             out
         })
     }
 
     /// Get normals as list of (nx, ny, nz) tuples.
     pub fn get_normals(&self) -> Option<Vec<(f32, f32, f32)>> {
-        self.normals.as_ref().map(|ns| {
-            ns.iter().map(|n| (n.x, n.y, n.z)).collect()
-        })
+        self.normals
+            .as_ref()
+            .map(|ns| ns.iter().map(|n| (n.x, n.y, n.z)).collect())
     }
 
     /// Estimate normals in-place. `method` selects the algorithm:
@@ -417,17 +424,19 @@ impl PyPointCloud {
     #[pyo3(signature = (k=15, method="auto"))]
     pub fn estimate_normals(&mut self, k: usize, method: &str) {
         let normals = match method {
-            "cpu"              => cv_point_cloud::estimate_normals_cpu(&self.points, k),
-            "gpu"              => cv_point_cloud::estimate_normals_gpu(&self.points, k),
-            "hybrid"           => cv_point_cloud::estimate_normals_hybrid(&self.points, k),
-            "approx_cross"     => cv_point_cloud::estimate_normals_approx_cross(&self.points),
-            "approx_integral"  => cv_point_cloud::estimate_normals_approx_integral(&self.points),
-            _                  => cv_point_cloud::estimate_normals_auto(&self.points, k),
+            "cpu" => cv_point_cloud::estimate_normals_cpu(&self.points, k),
+            "gpu" => cv_point_cloud::estimate_normals_gpu(&self.points, k),
+            "hybrid" => cv_point_cloud::estimate_normals_hybrid(&self.points, k),
+            "approx_cross" => cv_point_cloud::estimate_normals_approx_cross(&self.points),
+            "approx_integral" => cv_point_cloud::estimate_normals_approx_integral(&self.points),
+            _ => cv_point_cloud::estimate_normals_auto(&self.points, k),
         };
         self.normals = Some(normals);
     }
 
-    pub fn has_normals(&self) -> bool { self.normals.is_some() }
+    pub fn has_normals(&self) -> bool {
+        self.normals.is_some()
+    }
 
     pub fn points_to_list(&self) -> Vec<(f32, f32, f32)> {
         self.points.iter().map(|p| (p.x, p.y, p.z)).collect()
@@ -634,41 +643,57 @@ impl PyRuntime {
 /// Auto-select the fastest available backend (GPU → CPU).
 #[pyfunction]
 #[pyo3(signature = (points, k=15))]
-fn estimate_normals_auto(points: Vec<(f32,f32,f32)>, k: usize) -> Vec<(f32,f32,f32)> {
-    normals_to_py(cv_point_cloud::estimate_normals_auto(&pts_from_py(&points), k))
+fn estimate_normals_auto(points: Vec<(f32, f32, f32)>, k: usize) -> Vec<(f32, f32, f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_auto(
+        &pts_from_py(&points),
+        k,
+    ))
 }
 
 /// CPU-only: voxel-hash kNN + analytic eigensolver. ~19 ms / 40k pts.
 #[pyfunction]
 #[pyo3(signature = (points, k=15))]
-fn estimate_normals_cpu(points: Vec<(f32,f32,f32)>, k: usize) -> Vec<(f32,f32,f32)> {
-    normals_to_py(cv_point_cloud::estimate_normals_cpu(&pts_from_py(&points), k))
+fn estimate_normals_cpu(points: Vec<(f32, f32, f32)>, k: usize) -> Vec<(f32, f32, f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_cpu(
+        &pts_from_py(&points),
+        k,
+    ))
 }
 
 /// GPU: Morton sort (CPU) + WebGPU PCA. Uses Metal on Apple Silicon. ~17 ms / 40k pts.
 #[pyfunction]
 #[pyo3(signature = (points, k=15))]
-fn estimate_normals_gpu(points: Vec<(f32,f32,f32)>, k: usize) -> Vec<(f32,f32,f32)> {
-    normals_to_py(cv_point_cloud::estimate_normals_gpu(&pts_from_py(&points), k))
+fn estimate_normals_gpu(points: Vec<(f32, f32, f32)>, k: usize) -> Vec<(f32, f32, f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_gpu(
+        &pts_from_py(&points),
+        k,
+    ))
 }
 
 /// Hybrid: CPU kNN + GPU batch eigenvectors. Best for large clouds + discrete GPU.
 #[pyfunction]
 #[pyo3(signature = (points, k=15))]
-fn estimate_normals_hybrid(points: Vec<(f32,f32,f32)>, k: usize) -> Vec<(f32,f32,f32)> {
-    normals_to_py(cv_point_cloud::estimate_normals_hybrid(&pts_from_py(&points), k))
+fn estimate_normals_hybrid(points: Vec<(f32, f32, f32)>, k: usize) -> Vec<(f32, f32, f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_hybrid(
+        &pts_from_py(&points),
+        k,
+    ))
 }
 
 /// Fast approximate: 2-neighbour cross-product. ~3× faster, slightly less accurate.
 #[pyfunction]
-fn estimate_normals_approx_cross(points: Vec<(f32,f32,f32)>) -> Vec<(f32,f32,f32)> {
-    normals_to_py(cv_point_cloud::estimate_normals_approx_cross(&pts_from_py(&points)))
+fn estimate_normals_approx_cross(points: Vec<(f32, f32, f32)>) -> Vec<(f32, f32, f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_approx_cross(&pts_from_py(
+        &points,
+    )))
 }
 
 /// Fast approximate: ring cross-product average. ~2.5× faster, smooth results.
 #[pyfunction]
-fn estimate_normals_approx_integral(points: Vec<(f32,f32,f32)>) -> Vec<(f32,f32,f32)> {
-    normals_to_py(cv_point_cloud::estimate_normals_approx_integral(&pts_from_py(&points)))
+fn estimate_normals_approx_integral(points: Vec<(f32, f32, f32)>) -> Vec<(f32, f32, f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_approx_integral(
+        &pts_from_py(&points),
+    ))
 }
 
 /// O(n) normals from a structured depth image — ideal for RGBD / depth cameras.
@@ -685,10 +710,14 @@ fn estimate_normals_from_depth(
     depth: Vec<f32>,
     width: usize,
     height: usize,
-    fx: f32, fy: f32,
-    cx: f32, cy: f32,
-) -> Vec<(f32,f32,f32)> {
-    normals_to_py(cv_point_cloud::estimate_normals_from_depth(&depth, width, height, fx, fy, cx, cy))
+    fx: f32,
+    fy: f32,
+    cx: f32,
+    cy: f32,
+) -> Vec<(f32, f32, f32)> {
+    normals_to_py(cv_point_cloud::estimate_normals_from_depth(
+        &depth, width, height, fx, fy, cx, cy,
+    ))
 }
 
 #[pymodule]

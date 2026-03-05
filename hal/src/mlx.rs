@@ -258,12 +258,13 @@ impl ComputeContext for MlxContext {
         points: &Tensor<f32, S>,
         k_neighbors: u32,
     ) -> Result<Tensor<f32, S>> {
-        let src = points
-            .storage
-            .as_slice()
-            .ok_or_else(|| Error::InvalidInput("Points not on CPU — transfer to CPU first".into()))?;
+        let src = points.storage.as_slice().ok_or_else(|| {
+            Error::InvalidInput("Points not on CPU — transfer to CPU first".into())
+        })?;
         let num_points = points.shape.height;
-        let k = (k_neighbors as usize).max(3).min(num_points.saturating_sub(1));
+        let k = (k_neighbors as usize)
+            .max(3)
+            .min(num_points.saturating_sub(1));
 
         // Convert flat vec4 storage → nalgebra Vector3 slice.
         let vecs: Vec<nalgebra::Vector3<f32>> = src
@@ -273,16 +274,14 @@ impl ComputeContext for MlxContext {
             .collect();
 
         // Try Metal (via wgpu GpuContext); fall back to fast CPU path.
-        let normals = crate::gpu_kernels::pointcloud::compute_normals_morton_gpu_or_cpu(
-            &vecs,
-            k as u32,
-        );
+        let normals =
+            crate::gpu_kernels::pointcloud::compute_normals_morton_gpu_or_cpu(&vecs, k as u32);
 
         // Write normals back to output storage (same type S).
         let mut out = S::new(num_points * 4, 0.0).map_err(|e| Error::MemoryError(e))?;
         if let Some(dst) = out.as_mut_slice() {
             for (i, n) in normals.iter().enumerate() {
-                dst[i * 4]     = n.x;
+                dst[i * 4] = n.x;
                 dst[i * 4 + 1] = n.y;
                 dst[i * 4 + 2] = n.z;
                 dst[i * 4 + 3] = 0.0;
