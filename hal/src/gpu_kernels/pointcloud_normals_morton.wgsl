@@ -118,6 +118,75 @@ fn find_neighbors_sorted(
     return neighbors;
 }
 
+// Analytic minimum eigenvector of a symmetric 3x3 covariance matrix.
+// Matches Open3D PointCloudImpl.h / Geometric Tools RobustEigenSymmetric3x3.
+// No iteration needed — exact closed-form solution in ~50 scalar ops.
+//
+// Algorithm:
+//   1. Normalize by max coefficient (numerical stability).
+//   2. Compute eigenvalues via trigonometric method (Cardano/Smith).
+//   3. For minimum eigenvalue: eigenvector = best cross-product of
+//      the rows of (A - lambda_min * I).
+fn analytic_min_eigenvector(
+    cxx: f32, cxy: f32, cxz: f32,
+    cyy: f32, cyz: f32, czz: f32,
+) -> vec3<f32> {
+    // Normalize to avoid overflow / underflow.
+    let max_c = max(max(abs(cxx), max(abs(cxy), abs(cxz))),
+                   max(abs(cyy), max(abs(cyz), abs(czz))));
+    if max_c < 1e-30 { return vec3<f32>(0.0, 0.0, 1.0); }
+    let s = 1.0 / max_c;
+    let a00 = cxx * s;  let a01 = cxy * s;  let a02 = cxz * s;
+    let a11 = cyy * s;  let a12 = cyz * s;  let a22 = czz * s;
+
+    // Off-diagonal norm squared.
+    let norm = a01 * a01 + a02 * a02 + a12 * a12;
+
+    // Shift: q = trace / 3.
+    let q = (a00 + a11 + a22) / 3.0;
+    let b00 = a00 - q;  let b11 = a11 - q;  let b22 = a22 - q;
+
+    // Scale of deviatoric part.
+    let p = sqrt((b00 * b00 + b11 * b11 + b22 * b22 + 2.0 * norm) / 6.0);
+    if p < 1e-10 { return vec3<f32>(0.0, 0.0, 1.0); }
+
+    // Determinant of (A - q*I) / p — should lie in [-1, 1].
+    let c00 = b11 * b22 - a12 * a12;
+    let c01 = a01 * b22 - a12 * a02;
+    let c02 = a01 * a12 - b11 * a02;
+    let det = (b00 * c00 - a01 * c01 + a02 * c02) / (p * p * p);
+
+    let half_det = clamp(det * 0.5, -1.0, 1.0);
+    let angle = acos(half_det) / 3.0;
+
+    // Minimum eigenvalue corresponds to angle + 2π/3.
+    let two_thirds_pi: f32 = 2.09439510239319549;
+    let eval_min = q + p * cos(angle + two_thirds_pi) * 2.0;
+
+    // Eigenvector for eval_min: use rows of (A - eval_min * I),
+    // pick the cross-product pair with the largest squared magnitude.
+    let r0 = vec3<f32>(a00 - eval_min, a01, a02);
+    let r1 = vec3<f32>(a01, a11 - eval_min, a12);
+    let r2 = vec3<f32>(a02, a12, a22 - eval_min);
+
+    let r0xr1 = cross(r0, r1);
+    let r0xr2 = cross(r0, r2);
+    let r1xr2 = cross(r1, r2);
+
+    let d0 = dot(r0xr1, r0xr1);
+    let d1 = dot(r0xr2, r0xr2);
+    let d2 = dot(r1xr2, r1xr2);
+
+    var best: vec3<f32>;
+    if d0 >= d1 && d0 >= d2      { best = r0xr1; }
+    else if d1 >= d2             { best = r0xr2; }
+    else                         { best = r1xr2; }
+
+    let blen = length(best);
+    if blen < 1e-10 { return vec3<f32>(0.0, 0.0, 1.0); }
+    return best / blen;
+}
+
 // Compute normal using PCA with power iteration
 fn compute_normal_pca(point: vec3<f32>, neighbors: array<u32, 32>, k: u32) -> vec3<f32> {
     // Count valid
@@ -156,23 +225,14 @@ fn compute_normal_pca(point: vec3<f32>, neighbors: array<u32, 32>, k: u32) -> ve
     cov_xx = cov_xx * inv_n; cov_xy = cov_xy * inv_n; cov_xz = cov_xz * inv_n;
     cov_yy = cov_yy * inv_n; cov_yz = cov_yz * inv_n; cov_zz = cov_zz * inv_n;
     
-    // Power iteration for smallest eigenvector
-    var normal = vec3<f32>(0.0, 0.0, 1.0);
-    for (var iter = 0u; iter < 10u; iter = iter + 1u) {
-        let x = cov_xx * normal.x + cov_xy * normal.y + cov_xz * normal.z;
-        let y = cov_xy * normal.x + cov_yy * normal.y + cov_yz * normal.z;
-        let z = cov_xz * normal.x + cov_yz * normal.y + cov_zz * normal.z;
-        let len = sqrt(x * x + y * y + z * z);
-        if len > 1e-8 {
-            normal = vec3<f32>(x / len, y / len, z / len);
-        }
-    }
-    
-    // Orient away from centroid
+    // Analytic minimum eigenvector (Open3D / Geometric Tools algorithm).
+    var normal = analytic_min_eigenvector(cov_xx, cov_xy, cov_xz, cov_yy, cov_yz, cov_zz);
+
+    // Orient away from centroid.
     if dot(normal, centroid - point) > 0.0 {
         normal = -normal;
     }
-    
+
     return normal;
 }
 

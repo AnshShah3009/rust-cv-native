@@ -209,6 +209,12 @@ pub mod shaders {
                 include_str!("pointcloud_normals_morton.wgsl"),
             );
 
+            // Point cloud normals - batch PCA (hybrid CPU kNN + GPU eigenvectors)
+            shaders.insert(
+                "pointcloud_normals_batch_pca",
+                include_str!("pointcloud_normals_batch_pca.wgsl"),
+            );
+
             // TSDF integration
             shaders.insert("tsdf_integrate", include_str!("tsdf_integrate.wgsl"));
 

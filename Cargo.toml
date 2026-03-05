@@ -23,9 +23,13 @@ criterion = { workspace = true }
 image = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 cv-3d = { path = "./3d" }
+cv-scientific = { path = "./scientific" }
+cv-point-cloud = { path = "./point-cloud" }
+cv-core = { path = "./core" }
 nalgebra = { workspace = true }
 futures = { workspace = true }
 wgpu = { workspace = true }
+rand = { workspace = true }
 
 [features]
 default = []
@@ -40,6 +44,11 @@ path = "benches/cv_benchmarks.rs"
 name = "async_bridge"
 harness = false
 path = "benches/async_bridge.rs"
+
+[[bench]]
+name = "normals"
+harness = false
+path = "benches/normals.rs"
 
 [workspace]
 resolver = "2"
