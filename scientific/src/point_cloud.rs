@@ -1,10 +1,80 @@
 use cv_core::PointCloud;
-use nalgebra::{Matrix3, Point3, SymmetricEigen, Vector3};
+use nalgebra::{Matrix3, Point3, Vector3};
 use rayon::prelude::*;
 use rstar::PointDistance;
 use rstar::{RTree, RTreeObject, AABB};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
+
+/// Analytic minimum eigenvector of a 3×3 symmetric matrix.
+///
+/// Matches Open3D `PointCloudImpl.h` / Geometric Tools `RobustEigenSymmetric3x3`.
+/// Uses the trigonometric (Cardano) method for eigenvalues and the best
+/// cross-product of shifted matrix rows for the eigenvector — no iteration,
+/// exact closed-form result in ~50 scalar operations.
+fn fast_eigen3x3_min(m: &Matrix3<f32>) -> Vector3<f32> {
+    // Normalize to prevent overflow / underflow.
+    let max_c = m.abs().max();
+    if max_c < 1e-30 {
+        return Vector3::z();
+    }
+    let s = 1.0 / max_c;
+    let a00 = m[(0, 0)] * s;
+    let a01 = m[(0, 1)] * s;
+    let a02 = m[(0, 2)] * s;
+    let a11 = m[(1, 1)] * s;
+    let a12 = m[(1, 2)] * s;
+    let a22 = m[(2, 2)] * s;
+
+    let norm = a01 * a01 + a02 * a02 + a12 * a12;
+    let q = (a00 + a11 + a22) / 3.0;
+    let b00 = a00 - q;
+    let b11 = a11 - q;
+    let b22 = a22 - q;
+    let p = ((b00 * b00 + b11 * b11 + b22 * b22 + 2.0 * norm) / 6.0).sqrt();
+    if p < 1e-10 {
+        return Vector3::z();
+    }
+
+    // Determinant of (A - q*I) / p.
+    let c00 = b11 * b22 - a12 * a12;
+    let c01 = a01 * b22 - a12 * a02;
+    let c02 = a01 * a12 - b11 * a02;
+    let det = (b00 * c00 - a01 * c01 + a02 * c02) / (p * p * p);
+    let half_det = (det * 0.5_f32).clamp(-1.0, 1.0);
+    let angle = half_det.acos() / 3.0;
+
+    // Minimum eigenvalue: q + p * cos(angle + 2π/3) * 2.
+    const TWO_THIRDS_PI: f32 = 2.094_395_1;
+    let eval_min = q + p * (angle + TWO_THIRDS_PI).cos() * 2.0;
+
+    // Eigenvector: best cross-product of rows of (A - eval_min * I).
+    let r0 = Vector3::new(a00 - eval_min, a01, a02);
+    let r1 = Vector3::new(a01, a11 - eval_min, a12);
+    let r2 = Vector3::new(a02, a12, a22 - eval_min);
+
+    let r0xr1 = r0.cross(&r1);
+    let r0xr2 = r0.cross(&r2);
+    let r1xr2 = r1.cross(&r2);
+
+    let d0 = r0xr1.norm_squared();
+    let d1 = r0xr2.norm_squared();
+    let d2 = r1xr2.norm_squared();
+
+    let best = if d0 >= d1 && d0 >= d2 {
+        r0xr1
+    } else if d1 >= d2 {
+        r0xr2
+    } else {
+        r1xr2
+    };
+
+    let len = best.norm();
+    if len < 1e-10 {
+        return Vector3::z();
+    }
+    best / len
+}
 
 /// Downsample a point cloud with a voxel grid.
 /// Returns a new point cloud with one point per voxel (the centroid).
@@ -185,21 +255,9 @@ pub fn estimate_normals(pc: &mut PointCloud, k: usize) {
             }
             cov /= neighbors.len() as f32;
 
-            // SVD / Eigen decomposition
-            let eigen = SymmetricEigen::new(cov);
-
-            // Find index of smallest eigenvalue explicitly to be robust
-            let mut min_val = f32::MAX;
-            let mut min_idx = 0;
-            for i in 0..3 {
-                let val = eigen.eigenvalues[i];
-                if val < min_val {
-                    min_val = val;
-                    min_idx = i;
-                }
-            }
-
-            eigen.eigenvectors.column(min_idx).into_owned()
+            // Analytic minimum eigenvector (Open3D / Geometric Tools algorithm).
+            // Faster and more numerically stable than full SymmetricEigen decomposition.
+            fast_eigen3x3_min(&cov)
         })
         .collect();
 
@@ -270,6 +328,74 @@ pub fn orient_normals(pc: &mut PointCloud, k: usize) {
     }
 
     pc.normals = Some(normals);
+}
+
+/// Compute surface normals from a depth image using the cross-product method.
+///
+/// For each pixel, back-projects itself and its four axis-aligned neighbours to
+/// 3-D, then takes `cross(right - left, down - up)` as the surface normal.
+/// This is **O(n)** per pixel — much faster than the k-NN PCA path which is
+/// O(nk) — and is the preferred approach for RGBD / structured-depth data.
+///
+/// # Parameters
+/// - `depth`: row-major depth map, H×W elements, metric units (m or mm).
+/// - `width`, `height`: image dimensions.
+/// - `fx`, `fy`, `cx`, `cy`: pinhole camera intrinsics.
+///
+/// # Returns
+/// Per-pixel normals in camera space, oriented toward the viewer (−Z direction).
+/// Border pixels and pixels with zero depth get a default `(0, 0, 1)` normal.
+pub fn compute_normals_from_depth(
+    depth: &[f32],
+    width: usize,
+    height: usize,
+    fx: f32,
+    fy: f32,
+    cx: f32,
+    cy: f32,
+) -> Vec<Vector3<f32>> {
+    assert_eq!(depth.len(), width * height);
+
+    let backproject = |px: usize, py: usize| -> Option<Vector3<f32>> {
+        let d = depth[py * width + px];
+        if d <= 0.0 {
+            return None;
+        }
+        Some(Vector3::new(
+            (px as f32 - cx) * d / fx,
+            (py as f32 - cy) * d / fy,
+            d,
+        ))
+    };
+
+    (0..height * width)
+        .into_par_iter()
+        .map(|i| {
+            let px = i % width;
+            let py = i / width;
+
+            // Skip border pixels — neighbours are not fully available.
+            if px == 0 || px + 1 >= width || py == 0 || py + 1 >= height {
+                return Vector3::new(0.0, 0.0, 1.0);
+            }
+
+            let l = match backproject(px - 1, py) { Some(v) => v, None => return Vector3::new(0.0, 0.0, 1.0) };
+            let r = match backproject(px + 1, py) { Some(v) => v, None => return Vector3::new(0.0, 0.0, 1.0) };
+            let u = match backproject(px, py - 1) { Some(v) => v, None => return Vector3::new(0.0, 0.0, 1.0) };
+            let d = match backproject(px, py + 1) { Some(v) => v, None => return Vector3::new(0.0, 0.0, 1.0) };
+
+            let horizontal = r - l;
+            let vertical   = d - u;
+            let n = horizontal.cross(&vertical);
+            let len = n.norm();
+            if len < 1e-8 {
+                return Vector3::new(0.0, 0.0, 1.0);
+            }
+            // Orient toward camera (-Z in camera space means facing viewer).
+            let normal = n / len;
+            if normal.z > 0.0 { -normal } else { normal }
+        })
+        .collect()
 }
 
 /// Simple PLY reader/writer using internal implementation or ply-rs.
@@ -1091,5 +1217,88 @@ mod tests {
 
         let pc_no_norm = PointCloud::new(vec![Point3::new(0.0, 0.0, 0.0)]);
         assert!(compute_fpfh_feature(&pc_no_norm, 0.1).is_none());
+    }
+
+    // ── depth image normal tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_depth_normals_flat_plane() {
+        // Flat depth image: all pixels at depth = 1.0.
+        // The "surface" is a plane parallel to the image sensor, so the
+        // normals should all point toward the camera (negative z in camera space).
+        let w = 16usize;
+        let h = 16usize;
+        let depth = vec![1.0f32; w * h];
+        let normals = compute_normals_from_depth(&depth, w, h, 16.0, 16.0, 8.0, 8.0);
+        assert_eq!(normals.len(), w * h);
+        // Check interior pixels (border returns default).
+        for r in 1..h - 1 {
+            for c in 1..w - 1 {
+                let n = normals[r * w + c];
+                assert!(
+                    n.z.abs() > 0.9,
+                    "flat-plane normal at ({},{}) = {:?}", r, c, n
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_depth_normals_sphere_cap() {
+        // Sphere cap: depth goes from 1 at centre to 0 at edge.
+        let w = 32usize;
+        let h = 32usize;
+        let cx = w as f32 / 2.0;
+        let cy = h as f32 / 2.0;
+        let depth: Vec<f32> = (0..h * w)
+            .map(|i| {
+                let dx = (i % w) as f32 - cx;
+                let dy = (i / w) as f32 - cy;
+                let r2 = (dx * dx + dy * dy) / (cx * cx);
+                if r2 < 1.0 { (1.0 - r2).sqrt() } else { 0.0 }
+            })
+            .collect();
+        let normals = compute_normals_from_depth(
+            &depth, w, h,
+            w as f32, h as f32, // fx = fy = image width
+            cx, cy,
+        );
+        // Centre of the cap should face the camera (z component ≈ -1 or 1).
+        let centre = (h / 2) * w + w / 2;
+        assert!(
+            normals[centre].z.abs() > 0.7,
+            "sphere cap centre normal = {:?}", normals[centre]
+        );
+    }
+
+    #[test]
+    fn test_depth_normals_zero_depth() {
+        // Zero-depth pixels should get the default normal (0,0,1).
+        let normals = compute_normals_from_depth(&[0.0f32; 16], 4, 4, 4.0, 4.0, 2.0, 2.0);
+        for n in &normals {
+            let expected = nalgebra::Vector3::new(0.0, 0.0, 1.0);
+            let diff = (n - expected).norm();
+            assert!(diff < 1e-6, "zero-depth pixel gave non-default normal {:?}", n);
+        }
+    }
+
+    #[test]
+    fn test_analytic_eigensolver_known() {
+        // A matrix with eigenvalues 2, 1, 0 along x, y, z axes.
+        // Minimum eigenvector should be (0, 0, ±1).
+        let mut m = nalgebra::Matrix3::zeros();
+        m[(0, 0)] = 2.0;
+        m[(1, 1)] = 1.0;
+        m[(2, 2)] = 0.0;
+        let n = fast_eigen3x3_min(&m);
+        assert!(n.z.abs() > 0.99, "Expected z-eigenvector, got {:?}", n);
+    }
+
+    #[test]
+    fn test_analytic_eigensolver_isotropic() {
+        // Isotropic matrix: all eigenvalues equal. Any unit vector is valid.
+        let m = nalgebra::Matrix3::identity() * 3.0;
+        let n = fast_eigen3x3_min(&m);
+        assert!((n.norm() - 1.0).abs() < 1e-5, "Not unit length: {:?}", n);
     }
 }

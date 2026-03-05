@@ -1198,6 +1198,7 @@ dependencies = [
  "cv-hal",
  "cv-runtime",
  "futures",
+ "hashbrown 0.16.1",
  "image",
  "nalgebra",
  "rand 0.8.5",
@@ -1288,6 +1289,7 @@ dependencies = [
  "bytemuck",
  "cv-core",
  "futures",
+ "hashbrown 0.16.1",
  "nalgebra",
  "pollster 0.4.0",
  "rayon",
@@ -1364,6 +1366,7 @@ version = "0.1.0"
 dependencies = [
  "cv-3d",
  "cv-scientific",
+ "nalgebra",
 ]
 
 [[package]]
@@ -1375,7 +1378,9 @@ dependencies = [
  "cv-dnn",
  "cv-features",
  "cv-optimize",
+ "cv-point-cloud",
  "cv-runtime",
+ "cv-scientific",
  "cv-slam",
  "cv-videoio",
  "image",
@@ -4952,7 +4957,9 @@ dependencies = [
  "cv-hal",
  "cv-imgproc",
  "cv-optimize",
+ "cv-point-cloud",
  "cv-runtime",
+ "cv-scientific",
  "cv-sfm",
  "cv-slam",
  "cv-stereo",
@@ -4960,6 +4967,7 @@ dependencies = [
  "futures",
  "image",
  "nalgebra",
+ "rand 0.8.5",
  "tokio",
  "wgpu 28.0.0",
 ]
