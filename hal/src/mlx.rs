@@ -243,14 +243,57 @@ impl ComputeContext for MlxContext {
         ))
     }
 
+    /// Compute point-cloud normals on Apple Silicon.
+    ///
+    /// Execution strategy:
+    /// 1. **Metal via wgpu** — if a `GpuContext` is available (which on Apple Silicon
+    ///    automatically uses the Metal backend), runs the Morton-sort GPU path.
+    /// 2. **CPU fallback** — voxel-hash kNN + analytic 3×3 eigensolver
+    ///    (Open3D / Geometric Tools algorithm), fully parallel via Rayon.
+    ///
+    /// This means Apple Silicon users get Metal-accelerated normals with no extra
+    /// configuration — the same WGSL shaders run on Metal via wgpu.
     fn pointcloud_normals<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
         &self,
-        _points: &Tensor<f32, S>,
-        _k_neighbors: u32,
+        points: &Tensor<f32, S>,
+        k_neighbors: u32,
     ) -> Result<Tensor<f32, S>> {
-        Err(Error::NotSupported(
-            "MLX pointcloud_normals not implemented".into(),
-        ))
+        let src = points
+            .storage
+            .as_slice()
+            .ok_or_else(|| Error::InvalidInput("Points not on CPU — transfer to CPU first".into()))?;
+        let num_points = points.shape.height;
+        let k = (k_neighbors as usize).max(3).min(num_points.saturating_sub(1));
+
+        // Convert flat vec4 storage → nalgebra Vector3 slice.
+        let vecs: Vec<nalgebra::Vector3<f32>> = src
+            .chunks(4)
+            .take(num_points)
+            .map(|c| nalgebra::Vector3::new(c[0], c[1], c[2]))
+            .collect();
+
+        // Try Metal (via wgpu GpuContext); fall back to fast CPU path.
+        let normals = crate::gpu_kernels::pointcloud::compute_normals_morton_gpu_or_cpu(
+            &vecs,
+            k as u32,
+        );
+
+        // Write normals back to output storage (same type S).
+        let mut out = S::new(num_points * 4, 0.0).map_err(|e| Error::MemoryError(e))?;
+        if let Some(dst) = out.as_mut_slice() {
+            for (i, n) in normals.iter().enumerate() {
+                dst[i * 4]     = n.x;
+                dst[i * 4 + 1] = n.y;
+                dst[i * 4 + 2] = n.z;
+                dst[i * 4 + 3] = 0.0;
+            }
+        }
+        Ok(Tensor {
+            storage: out,
+            shape: points.shape,
+            dtype: points.dtype,
+            _phantom: std::marker::PhantomData,
+        })
     }
 
     fn tsdf_integrate<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(

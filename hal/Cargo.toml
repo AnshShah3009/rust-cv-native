@@ -18,6 +18,7 @@ futures.workspace = true
 bytemuck = { version = "1.25.0", features = ["derive"] }
 tokio = { workspace = true, features = ["sync"] }
 rstar = "0.12"
+hashbrown = "0.16"
 
 [features]
 default = []
