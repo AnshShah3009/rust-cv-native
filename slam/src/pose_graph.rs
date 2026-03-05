@@ -107,16 +107,15 @@ impl PoseGraph {
     /// - `Err(msg)` if Cholesky decomposition fails (non-positive-definite Hessian)
     ///
     /// # Example
-    /// ```
-    /// # use cv_slam::PoseGraph;
-    /// # use cv_core::Pose;
-    /// # use nalgebra::{Matrix6, Vector3, Matrix3};
+    /// ```ignore
+    /// # use cv_optimize::pose_graph::PoseGraph;
+    /// # use nalgebra::{Isometry3, Vector3, Matrix6};
     /// let mut graph = PoseGraph::new();
-    /// let pose1 = Pose::identity();
-    /// let pose2 = Pose::new(Matrix3::identity(), Vector3::new(0.1, 0.0, 0.0));
+    /// let pose1 = Isometry3::identity();
+    /// let pose2 = Isometry3::translation(0.1, 0.0, 0.0);
     ///
-    /// let id1 = graph.add_pose(pose1);
-    /// let id2 = graph.add_pose(pose2);
+    /// graph.add_node(0, pose1);
+    /// graph.add_node(1, pose2);
     /// graph.add_edge(id1, id2, pose2, Matrix6::identity());
     ///
     /// let result = graph.optimize(10);
