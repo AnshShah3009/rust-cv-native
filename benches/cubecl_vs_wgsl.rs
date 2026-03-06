@@ -92,7 +92,10 @@ fn random_normals_stride4(n: usize) -> Vec<f32> {
 // ---------------------------------------------------------------------------
 
 fn bench_normals_morton(c: &mut Criterion) {
-    let client = get_client();
+    let Some(client) = get_client() else {
+        eprintln!("GPU unavailable, skipping normals_morton benchmark");
+        return;
+    };
     let mut group = c.benchmark_group("normals_morton/cubecl");
     group.measurement_time(Duration::from_secs(8));
     group.sample_size(20);
@@ -110,7 +113,10 @@ fn bench_normals_morton(c: &mut Criterion) {
 }
 
 fn bench_normals_batch_pca(c: &mut Criterion) {
-    let client = get_client();
+    let Some(client) = get_client() else {
+        eprintln!("GPU unavailable, skipping normals_batch_pca benchmark");
+        return;
+    };
     let mut group = c.benchmark_group("normals_batch_pca/cubecl");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(30);
@@ -128,7 +134,10 @@ fn bench_normals_batch_pca(c: &mut Criterion) {
 }
 
 fn bench_icp_dense_step(c: &mut Criterion) {
-    let client = get_client();
+    let Some(client) = get_client() else {
+        eprintln!("GPU unavailable, skipping icp_dense_step benchmark");
+        return;
+    };
     let mut group = c.benchmark_group("icp_dense_step/cubecl");
     group.measurement_time(Duration::from_secs(8));
     group.sample_size(20);
@@ -165,7 +174,10 @@ fn bench_icp_dense_step(c: &mut Criterion) {
 }
 
 fn bench_convolve_5x5(c: &mut Criterion) {
-    let client = get_client();
+    let Some(client) = get_client() else {
+        eprintln!("GPU unavailable, skipping convolve_5x5 benchmark");
+        return;
+    };
     let mut group = c.benchmark_group("convolve_5x5/cubecl");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(30);
@@ -185,7 +197,10 @@ fn bench_convolve_5x5(c: &mut Criterion) {
 }
 
 fn bench_threshold(c: &mut Criterion) {
-    let client = get_client();
+    let Some(client) = get_client() else {
+        eprintln!("GPU unavailable, skipping threshold benchmark");
+        return;
+    };
     let mut group = c.benchmark_group("threshold/cubecl");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(30);
@@ -202,7 +217,10 @@ fn bench_threshold(c: &mut Criterion) {
 }
 
 fn bench_radix_sort(c: &mut Criterion) {
-    let client = get_client();
+    let Some(client) = get_client() else {
+        eprintln!("GPU unavailable, skipping radix_sort benchmark");
+        return;
+    };
     let mut group = c.benchmark_group("radix_sort/cubecl");
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(20);
