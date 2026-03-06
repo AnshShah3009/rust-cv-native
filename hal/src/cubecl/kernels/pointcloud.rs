@@ -80,11 +80,7 @@ pub fn transform_points(client: &WgpuClient, points: &[f32], matrix: &[f32; 16])
 /// Output layout per point (4 × f32):
 ///   `[nx, ny, nz, 0]`
 #[cube(launch)]
-fn batch_pca_kernel(
-    covs: &Array<f32>,
-    normals: &mut Array<f32>,
-    #[comptime] num_points: usize,
-) {
+fn batch_pca_kernel(covs: &Array<f32>, normals: &mut Array<f32>, #[comptime] num_points: usize) {
     let idx = ABSOLUTE_POS;
     if idx < num_points {
         let base = idx * 8;
@@ -331,7 +327,7 @@ fn morton_knn_cov_kernel(
 /// (unsorted) point order.
 pub fn compute_normals_morton(
     client: &WgpuClient,
-    points: &[f32],  // stride 4
+    points: &[f32], // stride 4
     k: usize,
 ) -> Vec<f32> {
     let n_pts = points.len() / 4;
@@ -454,7 +450,12 @@ mod tests {
         ];
         let result = transform_points(&client, &points, &identity);
         for i in 0..points.len() {
-            assert!((result[i] - points[i]).abs() < 1e-4, "mismatch at {i}: {} vs {}", result[i], points[i]);
+            assert!(
+                (result[i] - points[i]).abs() < 1e-4,
+                "mismatch at {i}: {} vs {}",
+                result[i],
+                points[i]
+            );
         }
     }
 

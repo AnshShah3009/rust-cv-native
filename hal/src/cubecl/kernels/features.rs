@@ -62,9 +62,15 @@ fn canny_gradients_kernel(
         let abs_gx = f32::abs(gx);
         let abs_gy = f32::abs(gy);
         let tan22 = 0.414_213_56_f32;
-        dir[pos] = select(abs_gy <= abs_gx * tan22, 0u32,
-            select(abs_gx <= abs_gy * tan22, 2u32,
-                select(gx * gy > 0.0f32, 1u32, 3u32)));
+        dir[pos] = select(
+            abs_gy <= abs_gx * tan22,
+            0u32,
+            select(
+                abs_gx <= abs_gy * tan22,
+                2u32,
+                select(gx * gy > 0.0f32, 1u32, 3u32),
+            ),
+        );
     }
 }
 
@@ -167,36 +173,51 @@ pub fn canny(
     // Pass 1
     unsafe {
         canny_gradients_kernel::launch::<WgpuRuntime>(
-            client, mk_count(), cube_dim,
+            client,
+            mk_count(),
+            cube_dim,
             ArrayArg::from_raw_parts::<u32>(&in_h, in_padded / 4, 1),
             ArrayArg::from_raw_parts::<f32>(&mag_h, n_pixels, 1),
             ArrayArg::from_raw_parts::<u32>(&dir_h, n_pixels, 1),
-            img_w, img_h, n_pixels,
+            img_w,
+            img_h,
+            n_pixels,
         )
-    }.unwrap();
+    }
+    .unwrap();
 
     // Pass 2
     unsafe {
         canny_nms_kernel::launch::<WgpuRuntime>(
-            client, mk_count(), cube_dim,
+            client,
+            mk_count(),
+            cube_dim,
             ArrayArg::from_raw_parts::<f32>(&mag_h, n_pixels, 1),
             ArrayArg::from_raw_parts::<u32>(&dir_h, n_pixels, 1),
             ArrayArg::from_raw_parts::<f32>(&nms_h, n_pixels, 1),
-            img_w, img_h, n_pixels,
+            img_w,
+            img_h,
+            n_pixels,
         )
-    }.unwrap();
+    }
+    .unwrap();
 
     // Pass 3
     let low_u = (low_threshold * 1000.0) as u32;
     let high_u = (high_threshold * 1000.0) as u32;
     unsafe {
         canny_threshold_kernel::launch::<WgpuRuntime>(
-            client, mk_count(), cube_dim,
+            client,
+            mk_count(),
+            cube_dim,
             ArrayArg::from_raw_parts::<f32>(&nms_h, n_pixels, 1),
             ArrayArg::from_raw_parts::<u32>(&edges_h, n_pixels, 1),
-            n_pixels, low_u, high_u,
+            n_pixels,
+            low_u,
+            high_u,
         )
-    }.unwrap();
+    }
+    .unwrap();
 
     let edge_bytes = client.read_one(edges_h);
     let edge_flags = u32::from_bytes(&edge_bytes);
@@ -204,7 +225,9 @@ pub fn canny(
     // CPU: mark strong edges; hysteresis for weak edges
     let mut result = vec![0u8; n_pixels];
     for i in 0..n_pixels {
-        if edge_flags[i] == 2 { result[i] = 255; }
+        if edge_flags[i] == 2 {
+            result[i] = 255;
+        }
     }
     let mut changed = true;
     let mut iterations = 0;
@@ -216,15 +239,29 @@ pub fn canny(
                 let px = i % img_w;
                 let py = i / img_w;
                 let near_strong = [
-                    (py > 0 && px > 0, py.saturating_sub(1) * img_w + px.saturating_sub(1)),
+                    (
+                        py > 0 && px > 0,
+                        py.saturating_sub(1) * img_w + px.saturating_sub(1),
+                    ),
                     (py > 0, py.saturating_sub(1) * img_w + px),
-                    (py > 0 && px + 1 < img_w, py.saturating_sub(1) * img_w + (px + 1).min(img_w - 1)),
+                    (
+                        py > 0 && px + 1 < img_w,
+                        py.saturating_sub(1) * img_w + (px + 1).min(img_w - 1),
+                    ),
                     (px > 0, py * img_w + px.saturating_sub(1)),
                     (px + 1 < img_w, py * img_w + (px + 1).min(img_w - 1)),
-                    (py + 1 < img_h && px > 0, (py + 1).min(img_h - 1) * img_w + px.saturating_sub(1)),
+                    (
+                        py + 1 < img_h && px > 0,
+                        (py + 1).min(img_h - 1) * img_w + px.saturating_sub(1),
+                    ),
                     (py + 1 < img_h, (py + 1).min(img_h - 1) * img_w + px),
-                    (py + 1 < img_h && px + 1 < img_w, (py + 1).min(img_h - 1) * img_w + (px + 1).min(img_w - 1)),
-                ].iter().any(|&(valid, idx)| valid && result[idx] == 255);
+                    (
+                        py + 1 < img_h && px + 1 < img_w,
+                        (py + 1).min(img_h - 1) * img_w + (px + 1).min(img_w - 1),
+                    ),
+                ]
+                .iter()
+                .any(|&(valid, idx)| valid && result[idx] == 255);
                 if near_strong {
                     result[i] = 255;
                     changed = true;

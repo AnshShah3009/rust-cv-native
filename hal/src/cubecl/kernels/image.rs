@@ -68,13 +68,7 @@ fn threshold_kernel(
 
 /// Apply a threshold to a u8 image byte slice.
 /// `mode`: 0=Binary, 1=BinaryInv, 2=Trunc, 3=ToZero, 4=ToZeroInv
-pub fn threshold(
-    client: &WgpuClient,
-    input: &[u8],
-    thresh: u8,
-    max_val: u8,
-    mode: u32,
-) -> Vec<u8> {
+pub fn threshold(client: &WgpuClient, input: &[u8], thresh: u8, max_val: u8, mode: u32) -> Vec<u8> {
     let len = input.len();
     let padded_len = len.div_ceil(4) * 4;
     let mut padded = input.to_vec();
@@ -125,11 +119,7 @@ pub fn threshold(
 /// Convert packed RGB bytes to grayscale (ITU-R 601 luminance).
 /// Output: one f32 per pixel (in range 0-255).
 #[cube(launch)]
-fn rgb_to_gray_kernel(
-    input: &Array<u32>,
-    output: &mut Array<f32>,
-    #[comptime] n_pixels: usize,
-) {
+fn rgb_to_gray_kernel(input: &Array<u32>, output: &mut Array<f32>, #[comptime] n_pixels: usize) {
     let pos = ABSOLUTE_POS;
     if pos < n_pixels {
         let base = pos * 3;
@@ -143,11 +133,7 @@ fn rgb_to_gray_kernel(
 /// Convert packed grayscale bytes to RGB.
 /// Output: three f32 per pixel [R, G, B] (in range 0-255).
 #[cube(launch)]
-fn gray_to_rgb_kernel(
-    input: &Array<u32>,
-    output: &mut Array<f32>,
-    #[comptime] n_pixels: usize,
-) {
+fn gray_to_rgb_kernel(input: &Array<u32>, output: &mut Array<f32>, #[comptime] n_pixels: usize) {
     let pos = ABSOLUTE_POS;
     if pos < n_pixels {
         let gray = f32::cast_from(read_u8_packed(input, pos));
@@ -312,7 +298,10 @@ pub fn resize_bilinear(
 
     let result = client.read_one(out_handle);
     let floats = f32::from_bytes(&result);
-    floats.iter().map(|&v| v.round().clamp(0.0, 255.0) as u8).collect()
+    floats
+        .iter()
+        .map(|&v| v.round().clamp(0.0, 255.0) as u8)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -403,7 +392,10 @@ pub fn sobel(
 
     let result = client.read_one(out_handle);
     let floats = f32::from_bytes(&result);
-    floats.iter().map(|&v| v.round().clamp(0.0, 255.0) as u8).collect()
+    floats
+        .iter()
+        .map(|&v| v.round().clamp(0.0, 255.0) as u8)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -521,7 +513,10 @@ pub fn warp_affine(
 
     let result = client.read_one(out_handle);
     let floats = f32::from_bytes(&result);
-    floats.iter().map(|&v| v.round().clamp(0.0, 255.0) as u8).collect()
+    floats
+        .iter()
+        .map(|&v| v.round().clamp(0.0, 255.0) as u8)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -549,7 +544,9 @@ fn template_match_ssd_kernel(
         for ty in 0usize..tmpl_h {
             for tx in 0usize..tmpl_w {
                 for ch in 0usize..channels {
-                    let img_b = read_u8_packed(image, ((oy + ty) * img_w + (ox + tx)) * channels + ch) as f32;
+                    let img_b =
+                        read_u8_packed(image, ((oy + ty) * img_w + (ox + tx)) * channels + ch)
+                            as f32;
                     let tpl_b = read_u8_packed(tmpl, (ty * tmpl_w + tx) * channels + ch) as f32;
                     let diff = img_b - tpl_b;
                     ssd += diff * diff;
@@ -639,8 +636,8 @@ fn bilateral_kernel(
     #[comptime] h: usize,
     #[comptime] radius: usize,
     #[comptime] n_pixels: usize,
-    #[comptime] sigma_space_inv_u: u32,  // sigma_space_sq_inv * 1_000_000, negative
-    #[comptime] sigma_color_inv_u: u32,  // sigma_color_sq_inv * 1_000_000, negative
+    #[comptime] sigma_space_inv_u: u32, // sigma_space_sq_inv * 1_000_000, negative
+    #[comptime] sigma_color_inv_u: u32, // sigma_color_sq_inv * 1_000_000, negative
 ) {
     let pos = ABSOLUTE_POS;
     if pos < n_pixels {
@@ -731,7 +728,10 @@ pub fn bilateral(
 
     let result = client.read_one(out_handle);
     let floats = f32::from_bytes(&result);
-    floats.iter().map(|&v| v.round().clamp(0.0, 255.0) as u8).collect()
+    floats
+        .iter()
+        .map(|&v| v.round().clamp(0.0, 255.0) as u8)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -825,5 +825,3 @@ pub fn hough_accumulate(
     let result = client.read_one(acc_handle);
     u32::from_bytes(&result).to_vec()
 }
-
-
