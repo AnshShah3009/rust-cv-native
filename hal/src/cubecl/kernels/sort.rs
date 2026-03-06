@@ -6,10 +6,6 @@
 //! validate the CubeCL client is functional.  A full GPU radix sort using
 //! `SharedMemory` and `Atomic<u32>` will be added in the Tier 2/3 pass.
 
-use cubecl::calculate_cube_count_elemwise;
-use cubecl::prelude::*;
-use cubecl_wgpu::WgpuRuntime;
-
 use crate::cubecl::WgpuClient;
 
 const RADIX_BITS: u32 = 8;
