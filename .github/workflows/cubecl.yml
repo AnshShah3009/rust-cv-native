@@ -1,8 +1,8 @@
-name: CubeCL Backend
+name: CubeCL Research
 
 on:
   push:
-    branches: [ feature/cubecl-backend ]
+    branches: [ research/cubecl ]
     paths:
       - '**/*.rs'
       - '**/Cargo.toml'
