@@ -1,0 +1,124 @@
+name: CubeCL Backend
+
+on:
+  push:
+    branches: [ feature/cubecl-backend ]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.github/workflows/cubecl.yml'
+  pull_request:
+    branches: [ master ]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '.github/workflows/cubecl.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Force wgpu to use Mesa software Vulkan (llvmpipe) — no GPU needed in CI
+  WGPU_BACKEND: vulkan
+  VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+
+jobs:
+  cubecl-linux:
+    name: CubeCL (Linux, WGPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install Mesa software Vulkan (llvmpipe)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            libvulkan1 \
+            mesa-vulkan-drivers \
+            vulkan-tools \
+            libgl1-mesa-dev \
+            libegl1 \
+            libxcb-xfixes0-dev
+          # Verify llvmpipe ICD exists
+          ls -la /usr/share/vulkan/icd.d/ || true
+          vulkaninfo --summary 2>&1 | grep -i "llvmpipe\|adapter\|driver" || true
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: cubecl-linux-v1
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # ── Build checks ────────────────────────────────────────────────────
+      - name: Build (default — no CubeCL)
+        run: cargo build --workspace
+
+      - name: Build (--features cubecl)
+        run: cargo build --workspace --features cubecl
+
+      # ── Clippy ──────────────────────────────────────────────────────────
+      - name: Clippy (default)
+        run: cargo clippy --workspace --lib -- -W clippy::all
+
+      - name: Clippy (--features cubecl)
+        run: cargo clippy --workspace --lib --features cubecl -- -W clippy::all
+
+      # ── Tests ───────────────────────────────────────────────────────────
+      - name: Tests (default workspace)
+        run: cargo test --workspace
+        env:
+          RUST_LOG: warn
+
+      - name: Tests (--features cubecl, cv-hal only)
+        # Run sequentially to avoid GPU buffer-reuse races between tests
+        run: cargo test --features cubecl -p cv-hal -- --test-threads=1
+        env:
+          RUST_LOG: warn
+
+      # ── Benchmark build check (no run) ──────────────────────────────────
+      - name: Build benchmarks (compile check only)
+        run: cargo build --features cubecl --bench cubecl_vs_wgsl
+
+  cubecl-macos:
+    name: CubeCL (macOS, Metal via WGPU)
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: cubecl-macos-v1
+
+      # macOS GitHub runners have Metal — CubeCL WGPU uses Metal backend
+      - name: Build (--features cubecl)
+        run: cargo build --workspace --features cubecl
+
+      - name: Clippy (--features cubecl)
+        run: cargo clippy --workspace --lib --features cubecl -- -W clippy::all
+
+      - name: Tests (--features cubecl, cv-hal only)
+        run: cargo test --features cubecl -p cv-hal -- --test-threads=1
+        env:
+          RUST_LOG: warn
