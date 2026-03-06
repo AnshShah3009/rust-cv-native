@@ -14,6 +14,9 @@ pub mod mlx;
 pub mod storage;
 pub mod tensor_ext;
 
+#[cfg(feature = "cubecl")]
+pub mod cubecl;
+
 pub use gpu::*;
 pub use gpu_kernels::*;
 pub use gpu_storage::GpuStorage;
