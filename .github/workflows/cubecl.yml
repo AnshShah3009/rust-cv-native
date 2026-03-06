@@ -77,9 +77,9 @@ jobs:
         run: cargo build --features cubecl --bench cubecl_vs_wgsl
 
   cubecl-linux-gpu:
-    name: CubeCL (Linux, WGPU + SwiftShader GPU)
+    name: CubeCL (Linux, WGPU + Mesa llvmpipe GPU)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
 
     steps:
       - name: Checkout code
@@ -89,66 +89,37 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          components: rustfmt, clippy
+          components: clippy
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           key: cubecl-linux-gpu-v1
 
-      - name: Install Vulkan SDK and dependencies
+      - name: Install Mesa llvmpipe (Vulkan software GPU)
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            vulkan-tools \
-            libvulkan-dev \
             libvulkan1 \
-            libgl1-mesa-dev \
-            libegl1 \
-            libxcb-xfixes0-dev \
-            wget \
-            unzip
-          echo "=== Vulkan libraries installed ==="
+            mesa-vulkan-drivers \
+            vulkan-tools
+          echo "=== Mesa llvmpipe installed ==="
+          echo "=== Available Vulkan ICDs ==="
+          ls -la /usr/share/vulkan/icd.d/ || echo "No ICD directory"
 
-      - name: Setup SwiftShader (Vulkan software GPU)
-        run: |
-          mkdir -p /opt/swiftshader
-          cd /tmp
-          SWIFTSHADER_URL="https://github.com/google/swiftshader/releases/download/v4.0/swiftshader-swiftshader-4.0-linux-x64.zip"
-          echo "Downloading SwiftShader from: $SWIFTSHADER_URL"
-          wget -q "$SWIFTSHADER_URL" -O swiftshader.zip || {
-            echo "SwiftShader download failed, job will exit"
-            exit 1
-          }
-          unzip -q swiftshader.zip -d /opt/swiftshader
-          chmod +x /opt/swiftshader/libvulkan.so* || true
-          ls -la /opt/swiftshader/ | head -10
-          echo "SwiftShader installed successfully"
-
-      - name: Verify SwiftShader setup
-        run: |
-          echo "=== SwiftShader ICD files ==="
-          ls -la /opt/swiftshader/*.json 2>/dev/null || echo "No JSON ICD files found, checking alternatives..."
-          echo "=== SwiftShader library files ==="
-          ls -la /opt/swiftshader/libvulkan.so* 2>/dev/null || echo "No libvulkan found"
-          echo "=== Environment ==="
-          echo "WGPU_BACKEND=${WGPU_BACKEND:-not set}"
-
-      - name: Build with SwiftShader
+      - name: Build with llvmpipe
         env:
-          LD_LIBRARY_PATH: /opt/swiftshader:${{ env.LD_LIBRARY_PATH }}
-          VK_LAYER_PATH: /opt/swiftshader
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
         run: |
-          echo "=== Building (--features cubecl) with SwiftShader ==="
+          echo "=== Building (--features cubecl) with Mesa llvmpipe ==="
           cargo build --workspace --features cubecl
 
-      - name: Tests with SwiftShader GPU
+      - name: Tests with llvmpipe GPU
         env:
-          LD_LIBRARY_PATH: /opt/swiftshader:${{ env.LD_LIBRARY_PATH }}
-          VK_LAYER_PATH: /opt/swiftshader
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
           RUST_LOG: warn
         run: |
-          echo "=== Running CubeCL GPU tests with SwiftShader ==="
+          echo "=== Running CubeCL GPU tests with Mesa llvmpipe ==="
           cargo test --features cubecl -p cv-hal -- --test-threads=1
           echo "=== Running integration tests ==="
           cargo test --features cubecl --test spatial_perception_tests -- --test-threads=1
