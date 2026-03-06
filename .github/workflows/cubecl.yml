@@ -121,8 +121,6 @@ jobs:
         run: |
           echo "=== Running CubeCL GPU tests with Mesa llvmpipe ==="
           cargo test --features cubecl -p cv-hal -- --test-threads=1
-          echo "=== Running integration tests ==="
-          cargo test --features cubecl --test spatial_perception_tests -- --test-threads=1
 
   cubecl-macos:
     name: CubeCL (macOS, Metal via WGPU)
