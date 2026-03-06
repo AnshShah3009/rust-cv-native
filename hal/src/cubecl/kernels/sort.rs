@@ -108,7 +108,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_radix_sort_basic() {
-        let client = get_client();
+        let Some(client) = get_client() else {
+            eprintln!("GPU unavailable, skipping test_radix_sort_basic");
+            return;
+        };
         let input = vec![5u32, 2, 8, 1, 9, 3, 7, 4, 6, 0];
         let result = radix_sort(&client, &input);
         let expected: Vec<u32> = (0..10).collect();
@@ -118,7 +121,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_radix_sort_by_key() {
-        let client = get_client();
+        let Some(client) = get_client() else {
+            eprintln!("GPU unavailable, skipping test_radix_sort_by_key");
+            return;
+        };
         let keys = vec![3u32, 1, 2];
         let vals = vec![30u32, 10, 20];
         let (sk, sv) = radix_sort_by_key(&client, &keys, &vals);

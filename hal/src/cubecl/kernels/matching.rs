@@ -310,7 +310,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_hamming_self_match() {
-        let client = get_client();
+        let Some(client) = get_client() else {
+            eprintln!("GPU unavailable, skipping test_hamming_self_match");
+            return;
+        };
         let descs: Vec<u32> = vec![
             0xDEAD_BEEF,
             0x1234_5678,
@@ -339,7 +342,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_nms_single_peak() {
-        let client = get_client();
+        let Some(client) = get_client() else {
+            eprintln!("GPU unavailable, skipping test_nms_single_peak");
+            return;
+        };
         let scores = vec![1.0f32, 1.0, 1.0, 1.0, 5.0, 1.0, 1.0, 1.0, 1.0];
         let result = nms(&client, &scores, 3, 3, 1);
         assert_eq!(result[4], 1, "centre should be kept");

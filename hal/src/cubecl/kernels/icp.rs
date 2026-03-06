@@ -312,7 +312,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_icp_correspondences_self_match() {
-        let client = get_client();
+        let Some(client) = get_client() else {
+            eprintln!("GPU unavailable, skipping test_icp_correspondences_self_match");
+            return;
+        };
         // 3 source points = 3 target points; identity transform; small threshold
         let pts: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         let identity: [f32; 16] = [
