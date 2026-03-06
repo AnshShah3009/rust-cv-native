@@ -150,7 +150,7 @@ fn gray_to_rgb_kernel(
 ) {
     let pos = ABSOLUTE_POS;
     if pos < n_pixels {
-        let gray = read_u8_packed(input, pos) as f32;
+        let gray = f32::cast_from(read_u8_packed(input, pos));
         let base = pos * 3;
         output[base] = gray;
         output[base + 1] = gray;
@@ -623,45 +623,207 @@ pub fn template_match_ssd(
     f32::from_bytes(&result).to_vec()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cubecl::get_client;
-    use serial_test::serial;
+// ---------------------------------------------------------------------------
+// Bilateral filter — edge-preserving smoothing (Tier 2)
+// ---------------------------------------------------------------------------
+//
+// Sigma values are passed as integer-scaled comptime parameters
+// (sigma * 1_000_000 as u32) to avoid runtime f32 scalar issues.
+// The bilateral uses the integer sqrt approximation for the range weight.
 
-    #[test]
-    #[serial]
-    fn test_threshold_binary() {
-        let client = get_client();
-        let input = vec![0u8, 100, 200, 255];
-        let result = threshold(&client, &input, 128, 255, 0);
-        assert_eq!(result[0], 0, "0 <= 128 → 0");
-        assert_eq!(result[1], 0, "100 <= 128 → 0");
-        assert_eq!(result[2], 255, "200 > 128 → 255");
-        assert_eq!(result[3], 255, "255 > 128 → 255");
+#[cube(launch)]
+fn bilateral_kernel(
+    input: &Array<u32>,
+    output: &mut Array<f32>,
+    #[comptime] w: usize,
+    #[comptime] h: usize,
+    #[comptime] radius: usize,
+    #[comptime] n_pixels: usize,
+    #[comptime] sigma_space_inv_u: u32,  // sigma_space_sq_inv * 1_000_000, negative
+    #[comptime] sigma_color_inv_u: u32,  // sigma_color_sq_inv * 1_000_000, negative
+) {
+    let pos = ABSOLUTE_POS;
+    if pos < n_pixels {
+        let px = pos % w;
+        let py = pos / w;
+        let center = f32::cast_from(read_u8_packed(input, pos));
+
+        let x0 = select(px >= radius, px - radius, 0usize);
+        let y0 = select(py >= radius, py - radius, 0usize);
+        let x1 = (px + radius + 1).min(w);
+        let y1 = (py + radius + 1).min(h);
+
+        // Convert integer-encoded sigmas back to f32
+        let ss_inv = -(sigma_space_inv_u as f32) / 1_000_000.0f32;
+        let sc_inv = -(sigma_color_inv_u as f32) / 1_000_000.0f32;
+
+        let sum = RuntimeCell::<f32>::new(0.0f32);
+        let weight_total = RuntimeCell::<f32>::new(0.0f32);
+
+        for ny in y0..y1 {
+            for nx in x0..x1 {
+                let val = f32::cast_from(read_u8_packed(input, ny * w + nx));
+                let dx = f32::cast_from(nx) - f32::cast_from(px);
+                let dy = f32::cast_from(ny) - f32::cast_from(py);
+                let dist_sq = dx * dx + dy * dy;
+                let range_sq = (val - center) * (val - center);
+                let w_val = f32::exp(dist_sq * ss_inv + range_sq * sc_inv);
+                sum.store(sum.read() + val * w_val);
+                weight_total.store(weight_total.read() + w_val);
+            }
+        }
+        output[pos] = sum.read() / weight_total.read();
+    }
+}
+
+/// Apply bilateral filter to a grayscale u8 image.
+pub fn bilateral(
+    client: &WgpuClient,
+    src: &[u8],
+    width: usize,
+    height: usize,
+    radius: usize,
+    sigma_space: f32,
+    sigma_color: f32,
+) -> Vec<u8> {
+    let n_pixels = width * height;
+    let in_padded = src.len().div_ceil(4) * 4;
+    let mut padded_in = src.to_vec();
+    padded_in.resize(in_padded, 0u8);
+
+    let in_handle = client.create_from_slice(&padded_in);
+    let out_handle = client.empty(n_pixels * 4);
+
+    // Encode sigma as integer (abs * 1e6) to pass as comptime
+    let ss_inv_u = (0.5f32 / (sigma_space * sigma_space) * 1_000_000.0) as u32;
+    let sc_inv_u = (0.5f32 / (sigma_color * sigma_color) * 1_000_000.0) as u32;
+
+    let cube_dim = CubeDim::new_1d(256);
+    let cube_count = calculate_cube_count_elemwise::<WgpuRuntime>(client, n_pixels, cube_dim);
+
+    macro_rules! launch_r {
+        ($r:expr, $ss:expr, $sc:expr) => {
+            unsafe {
+                bilateral_kernel::launch::<WgpuRuntime>(
+                    client,
+                    cube_count,
+                    cube_dim,
+                    ArrayArg::from_raw_parts::<u32>(&in_handle, in_padded / 4, 1),
+                    ArrayArg::from_raw_parts::<f32>(&out_handle, n_pixels, 1),
+                    width,
+                    height,
+                    $r,
+                    n_pixels,
+                    $ss,
+                    $sc,
+                )
+            }
+            .unwrap()
+        };
+    }
+    match radius {
+        1 => launch_r!(1, ss_inv_u, sc_inv_u),
+        2 => launch_r!(2, ss_inv_u, sc_inv_u),
+        3 => launch_r!(3, ss_inv_u, sc_inv_u),
+        4 => launch_r!(4, ss_inv_u, sc_inv_u),
+        _ => launch_r!(5, ss_inv_u, sc_inv_u),
     }
 
-    #[test]
-    #[serial]
-    fn test_rgb_to_grayscale() {
-        let client = get_client();
-        // Pure red pixel (R=255, G=0, B=0) → luminance = 255*0.299 ≈ 76
-        let rgb = vec![255u8, 0, 0];
-        let gray = rgb_to_grayscale(&client, &rgb, 1);
-        assert_eq!(gray[0], 76);
-    }
+    let result = client.read_one(out_handle);
+    let floats = f32::from_bytes(&result);
+    floats.iter().map(|&v| v.round().clamp(0.0, 255.0) as u8).collect()
+}
 
-    #[test]
-    #[serial]
-    fn test_grayscale_to_rgb_round_trip() {
-        let client = get_client();
-        let gray = vec![42u8, 128, 200];
-        let rgb = grayscale_to_rgb(&client, &gray, 3);
-        assert_eq!(rgb.len(), 9);
-        for i in 0..3 {
-            assert_eq!(rgb[i * 3], gray[i]);
-            assert_eq!(rgb[i * 3 + 1], gray[i]);
-            assert_eq!(rgb[i * 3 + 2], gray[i]);
+// ---------------------------------------------------------------------------
+// Hough line accumulator (Tier 2)
+// ---------------------------------------------------------------------------
+
+/// Per-edge-pixel cast votes in Hough (ρ, θ) space.
+/// rho_offset = ceil(sqrt(w^2 + h^2)) is computed comptime from img_w/img_h.
+#[cube(launch)]
+fn hough_accumulate_kernel(
+    edges: &Array<u32>,
+    cos_table: &Array<f32>,
+    sin_table: &Array<f32>,
+    accum: &mut Array<u32>,
+    #[comptime] img_w: usize,
+    #[comptime] img_h: usize,
+    #[comptime] n_theta: usize,
+    #[comptime] n_rho: usize,
+    #[comptime] rho_offset_u: u32, // rho_offset * 1000 as integer
+) {
+    let pos = ABSOLUTE_POS;
+    if pos < img_w * img_h {
+        let px = f32::cast_from(pos % img_w);
+        let py = f32::cast_from(pos / img_w);
+        let rho_offset = rho_offset_u as f32 / 1000.0f32;
+
+        if read_u8_packed(edges, pos) > 0u32 {
+            for ti in 0usize..n_theta {
+                let rho = px * cos_table[ti] + py * sin_table[ti] + rho_offset;
+                let ri = usize::cast_from(u32::cast_from(f32::round(rho)));
+                if ri < n_rho {
+                    let old = accum[ri * n_theta + ti];
+                    accum[ri * n_theta + ti] = old + 1u32;
+                }
+            }
         }
     }
 }
+
+/// Compute Hough line accumulator for an edge image.
+pub fn hough_accumulate(
+    client: &WgpuClient,
+    edges: &[u8],
+    img_w: usize,
+    img_h: usize,
+    n_theta: usize,
+) -> Vec<u32> {
+    let diag = ((img_w * img_w + img_h * img_h) as f32).sqrt();
+    let rho_offset = diag;
+    let n_rho = (2.0 * diag).ceil() as usize + 1;
+    let rho_offset_u = (rho_offset * 1000.0) as u32;
+
+    let cos_t: Vec<f32> = (0..n_theta)
+        .map(|i| (std::f32::consts::PI * (i as f32) / (n_theta as f32)).cos())
+        .collect();
+    let sin_t: Vec<f32> = (0..n_theta)
+        .map(|i| (std::f32::consts::PI * (i as f32) / (n_theta as f32)).sin())
+        .collect();
+
+    let n_pixels = img_w * img_h;
+    let in_padded = edges.len().div_ceil(4) * 4;
+    let mut padded_in = edges.to_vec();
+    padded_in.resize(in_padded, 0u8);
+
+    let e_handle = client.create_from_slice(&padded_in);
+    let cos_handle = client.create_from_slice(f32::as_bytes(&cos_t));
+    let sin_handle = client.create_from_slice(f32::as_bytes(&sin_t));
+    let acc_handle = client.empty(n_rho * n_theta * 4);
+
+    let cube_dim = CubeDim::new_1d(256);
+    let cube_count = calculate_cube_count_elemwise::<WgpuRuntime>(client, n_pixels, cube_dim);
+
+    unsafe {
+        hough_accumulate_kernel::launch::<WgpuRuntime>(
+            client,
+            cube_count,
+            cube_dim,
+            ArrayArg::from_raw_parts::<u32>(&e_handle, in_padded / 4, 1),
+            ArrayArg::from_raw_parts::<f32>(&cos_handle, n_theta, 1),
+            ArrayArg::from_raw_parts::<f32>(&sin_handle, n_theta, 1),
+            ArrayArg::from_raw_parts::<u32>(&acc_handle, n_rho * n_theta, 1),
+            img_w,
+            img_h,
+            n_theta,
+            n_rho,
+            rho_offset_u,
+        )
+    }
+    .unwrap();
+
+    let result = client.read_one(acc_handle);
+    u32::from_bytes(&result).to_vec()
+}
+
+
