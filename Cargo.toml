@@ -34,6 +34,8 @@ rand = { workspace = true }
 [features]
 default = []
 gpu = ["cv-stereo/gpu", "cv-features/gpu"]
+cubecl = ["cv-hal/cubecl"]
+cuda = ["cv-hal/cuda"]
 
 [[bench]]
 name = "cv_benchmarks"
@@ -49,6 +51,12 @@ path = "benches/async_bridge.rs"
 name = "normals"
 harness = false
 path = "benches/normals.rs"
+
+[[bench]]
+name = "cubecl_vs_wgsl"
+harness = false
+path = "benches/cubecl_vs_wgsl.rs"
+required-features = ["cubecl"]
 
 [workspace]
 resolver = "2"
