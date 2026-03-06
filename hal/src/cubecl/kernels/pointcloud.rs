@@ -439,7 +439,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_transform_points_identity() {
-        let client = get_client();
+        let Some(client) = get_client() else {
+            eprintln!("GPU unavailable, skipping test_transform_points_identity");
+            return;
+        };
         let points: Vec<f32> = vec![1.0, 2.0, 3.0, 1.0, 4.0, 5.0, 6.0, 1.0];
         // Column-major 4×4 identity
         let identity: [f32; 16] = [
@@ -462,7 +465,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_batch_pca_flat_plane() {
-        let client = get_client();
+        let Some(client) = get_client() else {
+            eprintln!("GPU unavailable, skipping test_batch_pca_flat_plane");
+            return;
+        };
         // Flat Z=0 plane: dominant variance X and Y, minimal Z.
         // Cov = diag(1, 1, 0.001) → normal ≈ (0, 0, 1)
         let covs: Vec<f32> = vec![
@@ -478,7 +484,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_normals_morton_flat_plane() {
-        let client = get_client();
+        let Some(client) = get_client() else {
+            eprintln!("GPU unavailable, skipping test_normals_morton_flat_plane");
+            return;
+        };
         // 20 points on Z=0 plane in a 4×5 grid → normals should be ≈ (0,0,±1)
         let mut pts: Vec<f32> = Vec::new();
         for row in 0..4 {

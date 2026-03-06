@@ -281,7 +281,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_canny_uniform_no_edges() {
-        let client = get_client();
+        let Some(client) = get_client() else {
+            eprintln!("GPU unavailable, skipping test_canny_uniform_no_edges");
+            return;
+        };
         let img = vec![128u8; 100]; // 10×10 uniform
         let edges = canny(&client, &img, 10, 10, 50.0, 100.0);
         assert_eq!(edges.len(), 100);

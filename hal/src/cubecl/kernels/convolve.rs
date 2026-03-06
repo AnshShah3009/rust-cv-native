@@ -308,7 +308,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_convolve_identity_3x3() {
-        let client = get_client();
+        let Some(client) = get_client() else {
+            eprintln!("GPU unavailable, skipping test_convolve_identity_3x3");
+            return;
+        };
         // Identity kernel: centre=1, rest=0 → output = input
         let img: Vec<f32> = (0..25).map(|i| i as f32).collect(); // 5×5
         let kernel = vec![0.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]; // 3×3 identity
@@ -322,7 +325,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_convolve_box_5x5() {
-        let client = get_client();
+        let Some(client) = get_client() else {
+            eprintln!("GPU unavailable, skipping test_convolve_box_5x5");
+            return;
+        };
         // Uniform 20×20 image, 5×5 box filter with replicate border.
         // Interior pixels (at least 2 from each edge) should give exactly 2.0.
         let img = vec![2.0f32; 400]; // 20×20, all 2.0

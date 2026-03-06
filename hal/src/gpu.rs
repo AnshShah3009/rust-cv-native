@@ -218,29 +218,32 @@ impl ComputeContext for GpuContext {
                     ThresholdType::ToZeroInv => 4,
                 };
 
-                let client = self.cubecl_client();
-                let result_cpu = crate::cubecl::kernels::image::threshold(
-                    &client, &cpu_data, thresh, max_value, mode,
-                );
+                // Try CubeCL path if GPU client available
+                if let Some(client) = self.cubecl_client() {
+                    let result_cpu = crate::cubecl::kernels::image::threshold(
+                        &client, &cpu_data, thresh, max_value, mode,
+                    );
 
-                // Upload result back to GPU wgpu buffer
-                let output_buffer =
-                    self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Threshold CubeCL Output"),
-                            contents: &result_cpu,
-                            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                        });
-                let result_gpu = Tensor {
-                    storage: GpuStorage::from_buffer(
-                        std::sync::Arc::new(output_buffer),
-                        result_cpu.len(),
-                    ),
-                    shape: input.shape,
-                    dtype: input.dtype,
-                    _phantom: PhantomData,
-                };
-                return self.downcast_storage(result_gpu);
+                    // Upload result back to GPU wgpu buffer
+                    let output_buffer =
+                        self.device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Threshold CubeCL Output"),
+                                contents: &result_cpu,
+                                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                            });
+                    let result_gpu = Tensor {
+                        storage: GpuStorage::from_buffer(
+                            std::sync::Arc::new(output_buffer),
+                            result_cpu.len(),
+                        ),
+                        shape: input.shape,
+                        dtype: input.dtype,
+                        _phantom: PhantomData,
+                    };
+                    return self.downcast_storage(result_gpu);
+                }
+                // Fall through to WGSL path if GPU client unavailable
             }
 
             // ── WGSL fallback path ──────────────────────────────────────────
@@ -1865,9 +1868,9 @@ impl GpuContext {
     /// CubeCL uses its own wgpu context (wgpu 26) separate from `GpuContext`
     /// (wgpu 28).  Data must round-trip through host memory during the
     /// transition.  After all dispatch functions are migrated this method
-    /// replaces the wgpu Device+Queue pair entirely.
+    /// Returns the CubeCL client, or None if no GPU adapter is available.
     #[cfg(feature = "cubecl")]
-    pub fn cubecl_client(&self) -> crate::cubecl::WgpuClient {
+    pub fn cubecl_client(&self) -> Option<crate::cubecl::WgpuClient> {
         crate::cubecl::get_client()
     }
 
