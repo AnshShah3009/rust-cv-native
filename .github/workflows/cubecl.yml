@@ -19,13 +19,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Force wgpu to use Mesa software Vulkan (llvmpipe) — no GPU needed in CI
   WGPU_BACKEND: vulkan
-  VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
 
 jobs:
   cubecl-linux:
-    name: CubeCL (Linux, WGPU)
+    name: CubeCL (Linux, WGPU + SwiftShader)
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -39,19 +37,64 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
-      - name: Install Mesa software Vulkan (llvmpipe)
+      - name: Install Vulkan SDK and Mesa
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
+            vulkan-tools \
+            libvulkan-dev \
             libvulkan1 \
             mesa-vulkan-drivers \
-            vulkan-tools \
             libgl1-mesa-dev \
             libegl1 \
-            libxcb-xfixes0-dev
-          # Verify llvmpipe ICD exists
-          ls -la /usr/share/vulkan/icd.d/ || true
-          vulkaninfo --summary 2>&1 | grep -i "llvmpipe\|adapter\|driver" || true
+            libxcb-xfixes0-dev \
+            wget
+          echo "=== Vulkan libraries installed ==="
+          dpkg -l | grep vulkan
+          dpkg -l | grep mesa
+
+      - name: Setup SwiftShader (Vulkan software renderer)
+        run: |
+          mkdir -p /opt/swiftshader
+          cd /tmp
+          # Download latest SwiftShader release
+          SWIFTSHADER_URL="https://github.com/google/swiftshader/releases/download/v4.0/swiftshader-swiftshader-4.0-linux-x64.zip"
+          wget -q "$SWIFTSHADER_URL" -O swiftshader.zip || {
+            echo "SwiftShader download failed, using llvmpipe fallback"
+            exit 0
+          }
+          unzip -q swiftshader.zip -d /opt/swiftshader
+          chmod +x /opt/swiftshader/libvulkan.so*
+          ls -la /opt/swiftshader/
+          echo "=== SwiftShader installed ==="
+
+      - name: Verify Vulkan setup
+        run: |
+          echo "=== Available ICD files ==="
+          ls -la /usr/share/vulkan/icd.d/ || echo "No ICD directory found"
+          ls -la /opt/swiftshader/*.json 2>/dev/null || echo "No SwiftShader ICD"
+
+          echo "=== Environment ==="
+          echo "WGPU_BACKEND=$WGPU_BACKEND"
+          echo "VK_ICD_FILENAMES=$VK_ICD_FILENAMES"
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+
+          echo "=== Vulkan info ==="
+          vulkaninfo --summary 2>&1 | head -30 || echo "vulkaninfo not available"
+
+      - name: Setup test environment
+        run: |
+          # Prefer SwiftShader if available, fallback to Mesa llvmpipe
+          if [ -f /opt/swiftshader/vk_swiftshader.json ]; then
+            export VK_ICD_FILENAMES=/opt/swiftshader/vk_swiftshader.json
+            export LD_LIBRARY_PATH=/opt/swiftshader:$LD_LIBRARY_PATH
+            echo "Using SwiftShader"
+          else
+            export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+            echo "Using Mesa llvmpipe"
+          fi
+          echo "VK_ICD_FILENAMES=$VK_ICD_FILENAMES" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
@@ -83,7 +126,19 @@ jobs:
 
       - name: Tests (--features cubecl, cv-hal only)
         # Run sequentially to avoid GPU buffer-reuse races between tests
-        run: cargo test --features cubecl -p cv-hal -- --test-threads=1
+        # SwiftShader provides software Vulkan rendering for GPU-less CI
+        run: |
+          echo "=== Running CubeCL tests with software Vulkan ==="
+          echo "VK_ICD_FILENAMES=$VK_ICD_FILENAMES"
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+          cargo test --features cubecl -p cv-hal -- --test-threads=1 || {
+            echo ""
+            echo "=== GPU adapter detection failed ==="
+            echo "This may indicate SwiftShader/llvmpipe is not properly detected."
+            echo "Attempting fallback to Mesa llvmpipe..."
+            export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+            cargo test --features cubecl -p cv-hal -- --test-threads=1
+          }
         env:
           RUST_LOG: warn
 
