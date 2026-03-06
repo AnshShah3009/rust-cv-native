@@ -19,6 +19,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: true
 
 jobs:
   cubecl-linux:
@@ -36,6 +38,9 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
+      - name: Setup sccache (compiler cache)
+        uses: mozilla-actions/sccache-action@v0.0.3
+
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
@@ -44,19 +49,20 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      # ── Build checks ────────────────────────────────────────────────────
-      - name: Build (default — no CubeCL)
-        run: cargo build --workspace
+      # ── Build & Lint (consolidated) ──────────────────────────────────────
+      - name: Build and Clippy
+        run: |
+          echo "=== Building (default, no CubeCL) ==="
+          cargo build --workspace
 
-      - name: Build (--features cubecl)
-        run: cargo build --workspace --features cubecl
+          echo "=== Building (--features cubecl) ==="
+          cargo build --workspace --features cubecl
 
-      # ── Clippy ──────────────────────────────────────────────────────────
-      - name: Clippy (default)
-        run: cargo clippy --workspace --lib -- -W clippy::all
+          echo "=== Clippy (default) ==="
+          cargo clippy --workspace --lib -- -W clippy::all
 
-      - name: Clippy (--features cubecl)
-        run: cargo clippy --workspace --lib --features cubecl -- -W clippy::all
+          echo "=== Clippy (--features cubecl) ==="
+          cargo clippy --workspace --lib --features cubecl -- -W clippy::all
 
       # ── Tests ───────────────────────────────────────────────────────────
       - name: Tests (default workspace)
@@ -90,17 +96,22 @@ jobs:
           toolchain: stable
           components: clippy
 
+      - name: Setup sccache (compiler cache)
+        uses: mozilla-actions/sccache-action@v0.0.3
+
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           key: cubecl-macos-v1
 
       # macOS GitHub runners have Metal — CubeCL WGPU uses Metal backend
-      - name: Build (--features cubecl)
-        run: cargo build --workspace --features cubecl
+      - name: Build and Clippy (--features cubecl)
+        run: |
+          echo "=== Building (--features cubecl) ==="
+          cargo build --workspace --features cubecl
 
-      - name: Clippy (--features cubecl)
-        run: cargo clippy --workspace --lib --features cubecl -- -W clippy::all
+          echo "=== Clippy (--features cubecl) ==="
+          cargo clippy --workspace --lib --features cubecl -- -W clippy::all
 
       - name: Tests (--features cubecl, cv-hal only)
         run: cargo test --features cubecl -p cv-hal -- --test-threads=1
