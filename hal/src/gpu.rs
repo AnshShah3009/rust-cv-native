@@ -195,16 +195,69 @@ impl ComputeContext for GpuContext {
         use std::marker::PhantomData;
 
         if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: input.shape,
-                dtype: input.dtype,
-                _phantom: PhantomData,
-            };
+            // ── CubeCL fast path (when feature is enabled) ─────────────────
+            #[cfg(feature = "cubecl")]
+            {
+                use wgpu::util::DeviceExt;
+                // Read GPU buffer → CPU via wgpu (host round-trip during transition)
+                let len = input_storage.len();
+                let cpu_data = pollster::block_on(
+                    crate::gpu_kernels::buffer_utils::read_buffer::<u8>(
+                        self.device.clone(),
+                        &self.queue,
+                        input_storage.buffer(),
+                        0,
+                        len,
+                    ),
+                )?;
 
-            let result_gpu =
-                crate::gpu_kernels::threshold::threshold(self, &input_gpu, thresh, max_value, typ)?;
-            self.downcast_storage(result_gpu)
+                let mode = match typ {
+                    ThresholdType::Binary => 0,
+                    ThresholdType::BinaryInv => 1,
+                    ThresholdType::Trunc => 2,
+                    ThresholdType::ToZero => 3,
+                    ThresholdType::ToZeroInv => 4,
+                };
+
+                let client = self.cubecl_client();
+                let result_cpu = crate::cubecl::kernels::image::threshold(
+                    &client, &cpu_data, thresh, max_value, mode,
+                );
+
+                // Upload result back to GPU wgpu buffer
+                let output_buffer = self.device.create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("Threshold CubeCL Output"),
+                        contents: &result_cpu,
+                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    },
+                );
+                let result_gpu = Tensor {
+                    storage: GpuStorage::from_buffer(
+                        std::sync::Arc::new(output_buffer),
+                        result_cpu.len(),
+                    ),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
+                return self.downcast_storage(result_gpu);
+            }
+
+            // ── WGSL fallback path ──────────────────────────────────────────
+            #[cfg_attr(feature = "cubecl", allow(unreachable_code))]
+            {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
+                let result_gpu = crate::gpu_kernels::threshold::threshold(
+                    self, &input_gpu, thresh, max_value, typ,
+                )?;
+                self.downcast_storage(result_gpu)
+            }
         } else {
             Err(crate::Error::InvalidInput(
                 "GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into(),
@@ -1802,6 +1855,21 @@ impl GpuContext {
     /// Get Arc to queue
     pub fn queue_arc(&self) -> Arc<Queue> {
         self.queue.clone()
+    }
+
+    // -----------------------------------------------------------------------
+    // CubeCL integration — available when `cubecl` feature is enabled
+    // -----------------------------------------------------------------------
+
+    /// Return the process-global CubeCL WGPU compute client.
+    ///
+    /// CubeCL uses its own wgpu context (wgpu 26) separate from `GpuContext`
+    /// (wgpu 28).  Data must round-trip through host memory during the
+    /// transition.  After all dispatch functions are migrated this method
+    /// replaces the wgpu Device+Queue pair entirely.
+    #[cfg(feature = "cubecl")]
+    pub fn cubecl_client(&self) -> crate::cubecl::WgpuClient {
+        crate::cubecl::get_client()
     }
 
     /// Submit a command encoder (convenience method)
