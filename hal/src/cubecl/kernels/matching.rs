@@ -117,13 +117,7 @@ fn read_img_u8(image: &Array<u32>, bx: usize, by: usize, img_w: usize) -> f32 {
 }
 
 #[cube]
-fn bilinear_u8(
-    image: &Array<u32>,
-    xf: f32,
-    yf: f32,
-    img_w: usize,
-    img_h: usize,
-) -> f32 {
+fn bilinear_u8(image: &Array<u32>, xf: f32, yf: f32, img_w: usize, img_h: usize) -> f32 {
     let x0 = f32::floor(xf) as usize;
     let y0 = f32::floor(yf) as usize;
     let x1 = (x0 + 1).min(img_w - 1);
@@ -318,8 +312,22 @@ mod tests {
     fn test_hamming_self_match() {
         let client = get_client();
         let descs: Vec<u32> = vec![
-            0xDEAD_BEEF, 0x1234_5678, 0, 0, 0, 0, 0, 0, // desc 0
-            0xCAFE_BABE, 0xABCD_EF01, 0, 0, 0, 0, 0, 0, // desc 1
+            0xDEAD_BEEF,
+            0x1234_5678,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0, // desc 0
+            0xCAFE_BABE,
+            0xABCD_EF01,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0, // desc 1
         ];
         let (matches, dists) = hamming_match(&client, &descs, &descs, 8);
         assert_eq!(dists[0], 0);
@@ -332,9 +340,7 @@ mod tests {
     #[serial]
     fn test_nms_single_peak() {
         let client = get_client();
-        let scores = vec![
-            1.0f32, 1.0, 1.0, 1.0, 5.0, 1.0, 1.0, 1.0, 1.0,
-        ];
+        let scores = vec![1.0f32, 1.0, 1.0, 1.0, 5.0, 1.0, 1.0, 1.0, 1.0];
         let result = nms(&client, &scores, 3, 3, 1);
         assert_eq!(result[4], 1, "centre should be kept");
         for i in [0, 1, 2, 3, 5, 6, 7, 8] {

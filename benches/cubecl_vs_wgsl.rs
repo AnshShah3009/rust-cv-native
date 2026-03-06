@@ -15,9 +15,7 @@
 //! The suite also includes the wgpu baseline (from existing `normals.rs`) so
 //! both measurements appear in the same Criterion HTML report.
 
-use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use cv_hal::cubecl::{
     get_client,
     kernels::{
@@ -73,9 +71,7 @@ fn random_covs(n: usize) -> Vec<f32> {
 
 fn random_depth_image(w: usize, h: usize) -> Vec<f32> {
     let mut rng = rand::thread_rng();
-    (0..w * h)
-        .map(|_| rng.gen_range(0.5_f32..5.0))
-        .collect()
+    (0..w * h).map(|_| rng.gen_range(0.5_f32..5.0)).collect()
 }
 
 fn random_normals_stride4(n: usize) -> Vec<f32> {
@@ -138,10 +134,7 @@ fn bench_icp_dense_step(c: &mut Criterion) {
     group.sample_size(20);
 
     let identity: [f32; 16] = [
-        1.0, 0.0, 0.0, 0.0,
-        0.0, 1.0, 0.0, 0.0,
-        0.0, 0.0, 1.0, 0.0,
-        0.0, 0.0, 0.0, 1.0,
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
     ];
     let intr: [f32; 4] = [525.0, 525.0, 320.0, 240.0]; // RealSense-like
 

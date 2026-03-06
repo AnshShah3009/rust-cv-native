@@ -27,15 +27,16 @@ use crate::cubecl::WgpuClient;
 
 #[cube]
 fn tsdf_at(voxels: &Array<f32>, ix: i32, iy: i32, iz: i32, vx: usize, vy: usize, vz: usize) -> f32 {
-    let out = ix < 0i32 || iy < 0i32 || iz < 0i32
+    let out = ix < 0i32
+        || iy < 0i32
+        || iz < 0i32
         || ix >= vx as i32
         || iy >= vy as i32
         || iz >= vz as i32;
     let safe_ix = i32::max(i32::min(ix, vx as i32 - 1i32), 0i32);
     let safe_iy = i32::max(i32::min(iy, vy as i32 - 1i32), 0i32);
     let safe_iz = i32::max(i32::min(iz, vz as i32 - 1i32), 0i32);
-    let vi =
-        usize::cast_from(safe_iz) * vy * vx
+    let vi = usize::cast_from(safe_iz) * vy * vx
         + usize::cast_from(safe_iy) * vx
         + usize::cast_from(safe_ix);
     select(out, 1.0f32, voxels[vi * 2])
@@ -49,8 +50,8 @@ fn tsdf_at(voxels: &Array<f32>, ix: i32, iy: i32, iz: i32, vx: usize, vy: usize,
 fn tsdf_integrate_kernel(
     voxels: &mut Array<f32>,
     depth: &Array<f32>,
-    pose: &Array<f32>,   // col-major 4×4 world→camera
-    intr: &Array<f32>,   // [fx, fy, cx, cy]
+    pose: &Array<f32>, // col-major 4×4 world→camera
+    intr: &Array<f32>, // [fx, fy, cx, cy]
     #[comptime] vx: usize,
     #[comptime] vy: usize,
     #[comptime] vz: usize,
@@ -78,13 +79,21 @@ fn tsdf_integrate_kernel(
         let cz = pose[2] * wx + pose[6] * wy + pose[10] * wz + pose[14];
 
         if cz > 0.0f32 {
-            let fx = intr[0]; let fy = intr[1];
-            let ccx = intr[2]; let ccy = intr[3];
+            let fx = intr[0];
+            let fy = intr[1];
+            let ccx = intr[2];
+            let ccy = intr[3];
 
             let u = f32::round(fx * cx / cz + ccx);
             let v = f32::round(fy * cy / cz + ccy);
-            let ui = usize::cast_from(u32::cast_from(u32::max(u32::cast_from(i32::cast_from(u)), 0u32)));
-            let vi_img = usize::cast_from(u32::cast_from(u32::max(u32::cast_from(i32::cast_from(v)), 0u32)));
+            let ui = usize::cast_from(u32::cast_from(u32::max(
+                u32::cast_from(i32::cast_from(u)),
+                0u32,
+            )));
+            let vi_img = usize::cast_from(u32::cast_from(u32::max(
+                u32::cast_from(i32::cast_from(v)),
+                0u32,
+            )));
 
             if ui < img_w && vi_img < img_h {
                 let d = depth[vi_img * img_w + ui];
@@ -112,9 +121,13 @@ pub fn tsdf_integrate(
     depth: &[f32],
     pose: &[f32; 16],
     intr: &[f32; 4],
-    vx: usize, vy: usize, vz: usize,
-    img_w: usize, img_h: usize,
-    voxel_size: f32, truncation: f32,
+    vx: usize,
+    vy: usize,
+    vz: usize,
+    img_w: usize,
+    img_h: usize,
+    voxel_size: f32,
+    truncation: f32,
 ) {
     let n_voxels = vx * vy * vz;
     let vox_h = client.create_from_slice(f32::as_bytes(voxels));
@@ -127,16 +140,23 @@ pub fn tsdf_integrate(
 
     unsafe {
         tsdf_integrate_kernel::launch::<WgpuRuntime>(
-            client, cube_count, cube_dim,
+            client,
+            cube_count,
+            cube_dim,
             ArrayArg::from_raw_parts::<f32>(&vox_h, voxels.len(), 1),
             ArrayArg::from_raw_parts::<f32>(&dep_h, depth.len(), 1),
             ArrayArg::from_raw_parts::<f32>(&pos_h, 16, 1),
             ArrayArg::from_raw_parts::<f32>(&int_h, 4, 1),
-            vx, vy, vz, img_w, img_h,
+            vx,
+            vy,
+            vz,
+            img_w,
+            img_h,
             (voxel_size * 1_000_000.0) as u32,
             (truncation * 1_000_000.0) as u32,
         )
-    }.unwrap();
+    }
+    .unwrap();
 
     let result = client.read_one(vox_h);
     let updated = f32::from_bytes(&result);
@@ -151,7 +171,7 @@ pub fn tsdf_integrate(
 #[cube(launch)]
 fn tsdf_raycast_kernel(
     voxels: &Array<f32>,
-    output: &mut Array<f32>,  // [depth, nx, ny, nz] per pixel
+    output: &mut Array<f32>,   // [depth, nx, ny, nz] per pixel
     cam_to_world: &Array<f32>, // 4×4 col-major camera→world
     intr_inv: &Array<f32>,     // [1/fx, 1/fy, cx, cy]
     #[comptime] img_w: usize,
@@ -206,11 +226,15 @@ fn tsdf_raycast_kernel(
             let qx = ox + wrx * t;
             let qy = oy + wry * t;
             let qz = oz + wrz * t;
-            let tsdf = tsdf_at(voxels,
+            let tsdf = tsdf_at(
+                voxels,
                 i32::cast_from(qx / voxel_size),
                 i32::cast_from(qy / voxel_size),
                 i32::cast_from(qz / voxel_size),
-                vx, vy, vz);
+                vx,
+                vy,
+                vz,
+            );
 
             if prev_tsdf.read() > 0.0f32 && tsdf <= 0.0f32 {
                 let alpha = prev_tsdf.read() / (prev_tsdf.read() - tsdf);
@@ -224,11 +248,11 @@ fn tsdf_raycast_kernel(
                 let iz_c = i32::cast_from(sz / voxel_size);
 
                 let dfdx = tsdf_at(voxels, ix_c + 1i32, iy_c, iz_c, vx, vy, vz)
-                         - tsdf_at(voxels, ix_c - 1i32, iy_c, iz_c, vx, vy, vz);
+                    - tsdf_at(voxels, ix_c - 1i32, iy_c, iz_c, vx, vy, vz);
                 let dfdy = tsdf_at(voxels, ix_c, iy_c + 1i32, iz_c, vx, vy, vz)
-                         - tsdf_at(voxels, ix_c, iy_c - 1i32, iz_c, vx, vy, vz);
+                    - tsdf_at(voxels, ix_c, iy_c - 1i32, iz_c, vx, vy, vz);
                 let dfdz = tsdf_at(voxels, ix_c, iy_c, iz_c + 1i32, vx, vy, vz)
-                         - tsdf_at(voxels, ix_c, iy_c, iz_c - 1i32, vx, vy, vz);
+                    - tsdf_at(voxels, ix_c, iy_c, iz_c - 1i32, vx, vy, vz);
                 let nlen = f32::sqrt(dfdx * dfdx + dfdy * dfdy + dfdz * dfdz);
 
                 if nlen > 1e-6f32 {
@@ -257,10 +281,15 @@ pub fn tsdf_raycast(
     voxels: &[f32],
     cam_to_world: &[f32; 16],
     intr_inv: &[f32; 4],
-    img_w: usize, img_h: usize,
-    vx: usize, vy: usize, vz: usize,
-    voxel_size: f32, _truncation: f32,
-    step_factor: f32, max_depth: f32,
+    img_w: usize,
+    img_h: usize,
+    vx: usize,
+    vy: usize,
+    vz: usize,
+    voxel_size: f32,
+    _truncation: f32,
+    step_factor: f32,
+    max_depth: f32,
 ) -> Vec<f32> {
     let n_pixels = img_w * img_h;
     let vox_h = client.create_from_slice(f32::as_bytes(voxels));
@@ -273,17 +302,24 @@ pub fn tsdf_raycast(
 
     unsafe {
         tsdf_raycast_kernel::launch::<WgpuRuntime>(
-            client, cube_count, cube_dim,
+            client,
+            cube_count,
+            cube_dim,
             ArrayArg::from_raw_parts::<f32>(&vox_h, voxels.len(), 1),
             ArrayArg::from_raw_parts::<f32>(&out_h, n_pixels * 4, 1),
             ArrayArg::from_raw_parts::<f32>(&c2w_h, 16, 1),
             ArrayArg::from_raw_parts::<f32>(&inv_h, 4, 1),
-            img_w, img_h, vx, vy, vz,
+            img_w,
+            img_h,
+            vx,
+            vy,
+            vz,
             (voxel_size * 1_000_000.0) as u32,
             (step_factor * 1000.0) as u32,
             (max_depth * 1000.0) as u32,
         )
-    }.unwrap();
+    }
+    .unwrap();
 
     let result = client.read_one(out_h);
     f32::from_bytes(&result).to_vec()

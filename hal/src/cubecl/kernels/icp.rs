@@ -145,10 +145,10 @@ pub fn icp_correspondences(
 fn dense_icp_jacobians_kernel(
     depth_prev: &Array<f32>,
     depth_curr: &Array<f32>,
-    normals: &Array<f32>,  // stride-4 (nx, ny, nz, 0)
+    normals: &Array<f32>,    // stride-4 (nx, ny, nz, 0)
     intrinsics: &Array<f32>, // [fx, fy, cx, cy]
-    transform: &Array<f32>, // col-major f32[16]
-    out: &mut Array<f32>,  // [n_pixels * 7] → [j0..j5, residual] per pixel
+    transform: &Array<f32>,  // col-major f32[16]
+    out: &mut Array<f32>,    // [n_pixels * 7] → [j0..j5, residual] per pixel
     #[comptime] w: usize,
     #[comptime] h: usize,
 ) {
@@ -314,16 +314,9 @@ mod tests {
     fn test_icp_correspondences_self_match() {
         let client = get_client();
         // 3 source points = 3 target points; identity transform; small threshold
-        let pts: Vec<f32> = vec![
-            1.0, 0.0, 0.0,
-            0.0, 1.0, 0.0,
-            0.0, 0.0, 1.0,
-        ];
+        let pts: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         let identity: [f32; 16] = [
-            1., 0., 0., 0.,
-            0., 1., 0., 0.,
-            0., 0., 1., 0.,
-            0., 0., 0., 1.,
+            1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.,
         ];
         let (corr, dists) = icp_correspondences(&client, &pts, &pts, &identity, 0.1);
         // Each source point should match itself

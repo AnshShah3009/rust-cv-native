@@ -107,8 +107,8 @@ fn convolve_tiled_kernel(
     output: &mut Array<f32>,
     #[comptime] img_w: usize,
     #[comptime] img_h: usize,
-    #[comptime] kw: usize,   // must be odd
-    #[comptime] kh: usize,   // must be odd
+    #[comptime] kw: usize,     // must be odd
+    #[comptime] kh: usize,     // must be odd
     #[comptime] tile_w: usize, // = TILE + kw - 1  (tile with halo)
     #[comptime] tile_h: usize, // = TILE + kh - 1
 ) {
@@ -140,7 +140,8 @@ fn convolve_tiled_kernel(
 
                 let sx_safe = (src_x.clamp(0, img_w as i32 - 1)) as usize;
                 let sy_safe = (src_y.clamp(0, img_h as i32 - 1)) as usize;
-                let out_of_bounds = src_x < 0 || src_x >= img_w as i32 || src_y < 0 || src_y >= img_h as i32;
+                let out_of_bounds =
+                    src_x < 0 || src_x >= img_w as i32 || src_y < 0 || src_y >= img_h as i32;
                 let val = select(out_of_bounds, 0.0f32, input[sy_safe * img_w + sx_safe]);
                 smem[sy * tile_w + sx] = val;
             }
@@ -232,7 +233,8 @@ pub fn convolve(
             _ => {
                 // Fallback for unlisted sizes
                 let cube_dim_fb = CubeDim::new_1d(256);
-                let cube_count_fb = calculate_cube_count_elemwise::<WgpuRuntime>(client, n_pixels, cube_dim_fb);
+                let cube_count_fb =
+                    calculate_cube_count_elemwise::<WgpuRuntime>(client, n_pixels, cube_dim_fb);
                 macro_rules! launch_fb {
                     ($m:expr) => {
                         unsafe {
@@ -297,7 +299,6 @@ pub fn convolve(
     f32::from_bytes(&result).to_vec()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,9 +311,7 @@ mod tests {
         let client = get_client();
         // Identity kernel: centre=1, rest=0 → output = input
         let img: Vec<f32> = (0..25).map(|i| i as f32).collect(); // 5×5
-        let kernel = vec![
-            0.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
-        ]; // 3×3 identity
+        let kernel = vec![0.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]; // 3×3 identity
         let result = convolve(&client, &img, 5, 5, &kernel, 3, 3, 1);
         assert_eq!(result.len(), 25);
         for (i, (&r, &e)) in result.iter().zip(img.iter()).enumerate() {
@@ -333,7 +332,10 @@ mod tests {
         for row in 2..18usize {
             for col in 2..18usize {
                 let v = result[row * 20 + col];
-                assert!((v - 2.0).abs() < 1e-2, "interior ({col},{row}): expected ~2.0, got {v}");
+                assert!(
+                    (v - 2.0).abs() < 1e-2,
+                    "interior ({col},{row}): expected ~2.0, got {v}"
+                );
             }
         }
     }

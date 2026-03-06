@@ -201,15 +201,14 @@ impl ComputeContext for GpuContext {
                 use wgpu::util::DeviceExt;
                 // Read GPU buffer → CPU via wgpu (host round-trip during transition)
                 let len = input_storage.len();
-                let cpu_data = pollster::block_on(
-                    crate::gpu_kernels::buffer_utils::read_buffer::<u8>(
+                let cpu_data =
+                    pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer::<u8>(
                         self.device.clone(),
                         &self.queue,
                         input_storage.buffer(),
                         0,
                         len,
-                    ),
-                )?;
+                    ))?;
 
                 let mode = match typ {
                     ThresholdType::Binary => 0,
@@ -225,13 +224,13 @@ impl ComputeContext for GpuContext {
                 );
 
                 // Upload result back to GPU wgpu buffer
-                let output_buffer = self.device.create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("Threshold CubeCL Output"),
-                        contents: &result_cpu,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                    },
-                );
+                let output_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Threshold CubeCL Output"),
+                            contents: &result_cpu,
+                            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                        });
                 let result_gpu = Tensor {
                     storage: GpuStorage::from_buffer(
                         std::sync::Arc::new(output_buffer),
