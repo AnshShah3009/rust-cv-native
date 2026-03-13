@@ -1,5 +1,6 @@
 pub mod bilateral;
 pub mod color;
+pub mod connected_components;
 pub mod contours;
 pub mod convolve;
 pub mod edges;
@@ -9,12 +10,15 @@ pub mod hough;
 pub mod local_threshold;
 pub mod morph;
 pub mod resize;
+pub mod segmentation;
 pub mod simd;
+pub mod stitching;
 pub mod template_matching;
 pub mod threshold;
 
 pub use bilateral::*;
 pub use color::*;
+pub use connected_components::*;
 pub use contours::*;
 pub use convolve::*;
 pub use edges::*;
