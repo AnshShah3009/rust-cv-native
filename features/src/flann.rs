@@ -251,6 +251,12 @@ pub struct FlannMatcher {
     ratio_threshold: Option<f32>,
 }
 
+impl Default for FlannMatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FlannMatcher {
     /// Create a new `FlannMatcher` with default FLANN index parameters (4 trees, branching factor 32).
     pub fn new() -> Self {

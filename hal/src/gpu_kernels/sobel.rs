@@ -15,6 +15,7 @@ struct SobelParams {
     border_mode: u32,
 }
 
+#[allow(clippy::type_complexity)]
 pub fn sobel(
     ctx: &GpuContext,
     input: &Tensor<f32, GpuStorage<f32>>,

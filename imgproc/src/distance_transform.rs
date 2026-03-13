@@ -285,6 +285,7 @@ fn distance_transform_l2<T: Float>(
 /// 1D squared Euclidean distance transform (Felzenszwalb-Huttenlocher).
 /// `f[q]` is the initial squared distance for position q.
 /// Returns the lower envelope of parabolas: `min_q (f[q] + (p-q)^2)` for each p.
+#[allow(clippy::needless_range_loop)]
 fn dt_1d(f: &[f32], _max_dim: usize) -> Vec<f32> {
     let n = f.len();
     if n == 0 {

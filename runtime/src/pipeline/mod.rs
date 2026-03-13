@@ -29,6 +29,7 @@ pub enum PipelineNode {
     CpuOp {
         inputs: Vec<BufferId>,
         outputs: Vec<BufferId>,
+        #[allow(clippy::type_complexity)]
         op: Arc<dyn Fn(&[&[u8]]) -> Vec<Vec<u8>> + Send + Sync>,
     },
     Barrier,

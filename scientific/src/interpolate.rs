@@ -204,6 +204,7 @@ pub fn interp2d_linear(
 ///
 /// Uses Akima's method for computing slopes, which avoids overshooting
 /// near outliers by using a weighted average of adjacent slopes.
+#[allow(clippy::needless_range_loop)]
 pub fn interp1d_akima(x: &[f64], y: &[f64], x_new: &[f64]) -> Result<Vec<f64>, String> {
     validate_inputs(x, y)?;
     let n = x.len();

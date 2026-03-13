@@ -616,6 +616,7 @@ impl PnpSolver {
     ///
     /// Ref: Moreno-Noguer, F., Lepetit, V., & Fua, P. (2007).
     /// Accurate non-iterative O(n) solution to the PnP problem. ICCV.
+    #[allow(clippy::needless_range_loop)]
     pub fn estimate_epnp(
         object_points: &[Vector3<f64>],
         image_points: &[[f64; 2]],

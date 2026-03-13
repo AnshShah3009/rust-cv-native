@@ -296,6 +296,7 @@ pub mod shaders {
     }
 
     impl Default for ShaderLibrary {
+        #[allow(clippy::type_complexity)]
         fn default() -> Self {
             Self::new()
         }
@@ -309,6 +310,7 @@ pub mod buffer_utils {
     use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, MapMode};
 
     /// A bucketed pool for reusing GPU buffers
+    #[allow(clippy::type_complexity)]
     pub struct GpuBufferPool {
         // Buckets: (device_addr, usage) -> (size_bucket -> Vec<Buffer>)
         buckets: Mutex<HashMap<(usize, BufferUsages), HashMap<u64, Vec<Buffer>>>>,
@@ -643,7 +645,7 @@ pub mod pointcloud_gpu {
         let device = gpu.device.clone();
         let queue = &gpu.queue;
         let num_points = points.len() as u32;
-        let k = k_neighbors.min(32).max(3);
+        let k = k_neighbors.clamp(3, 32);
 
         // Step 1: Compute Morton codes on CPU
         let (min_bound, max_bound) = points.iter().fold(
@@ -660,9 +662,9 @@ pub mod pointcloud_gpu {
             .iter()
             .enumerate()
             .map(|(i, p)| {
-                let x = ((p.x - min_bound.x) / grid_size).max(0.0).min(1023.0) as u32;
-                let y = ((p.y - min_bound.y) / grid_size).max(0.0).min(1023.0) as u32;
-                let z = ((p.z - min_bound.z) / grid_size).max(0.0).min(1023.0) as u32;
+                let x = ((p.x - min_bound.x) / grid_size).clamp(0.0, 1023.0) as u32;
+                let y = ((p.y - min_bound.y) / grid_size).clamp(0.0, 1023.0) as u32;
+                let z = ((p.z - min_bound.z) / grid_size).clamp(0.0, 1023.0) as u32;
                 (morton_encode(x, y, z), i)
             })
             .collect();
@@ -826,6 +828,7 @@ pub mod tsdf_gpu {
     use crate::gpu::GpuContext;
     use nalgebra::Vector3;
 
+    #[allow(clippy::type_complexity)]
     pub fn raycast_volume(
         _ctx: &GpuContext,
         _tsdf_volume: &[f32],
@@ -973,6 +976,7 @@ pub mod mesh_gpu {
     }
 
     /// Simplify mesh on GPU
+    #[allow(clippy::type_complexity)]
     pub fn simplify_mesh(
         _gpu: &crate::gpu::GpuContext,
         _vertices: &[Point3<f32>],
@@ -996,6 +1000,7 @@ pub mod raycasting_gpu {
     use nalgebra::{Point3, Vector3};
 
     /// Batch ray-mesh intersection on GPU
+    #[allow(clippy::type_complexity)]
     pub fn cast_rays(
         gpu: &crate::gpu::GpuContext,
         rays: &[(Point3<f32>, Vector3<f32>)], // (origin, direction)
@@ -1023,6 +1028,7 @@ pub mod odometry_gpu {
     use nalgebra::{Matrix4, Vector3};
 
     /// Compute RGBD odometry on GPU
+    #[allow(clippy::too_many_arguments)]
     pub fn compute_odometry(
         gpu: &crate::gpu::GpuContext,
         source_depth: &[f32],

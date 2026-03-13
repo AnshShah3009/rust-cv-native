@@ -220,6 +220,7 @@ impl BlockMatcher {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compute_matching_cost(
         &self,
         left_data: &[u8],
@@ -257,6 +258,7 @@ impl BlockMatcher {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compute_sad_simd(
         &self,
         left_data: &[u8],
@@ -319,6 +321,7 @@ impl BlockMatcher {
         total_sad.reduce_add() / count as f32
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compute_ssd_simd(
         &self,
         left_data: &[u8],

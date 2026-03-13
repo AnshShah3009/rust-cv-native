@@ -214,6 +214,7 @@ pub mod raycasting {
     use super::*;
 
     /// Batch ray casting against multiple meshes
+    #[allow(clippy::type_complexity)]
     pub fn batch_cast_rays(
         ray_batches: &[Vec<(Point3<f32>, Vector3<f32>)>],
         mesh_vertices: &[Vec<Point3<f32>>],
@@ -241,6 +242,7 @@ pub mod raycasting {
     }
 
     /// Cast many rays against single mesh
+    #[allow(clippy::type_complexity)]
     pub fn batch_cast_rays_single_mesh(
         rays: &[(Point3<f32>, Vector3<f32>)],
         mesh_vertices: &[Point3<f32>],

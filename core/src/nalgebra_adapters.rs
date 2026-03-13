@@ -4,7 +4,6 @@ use nalgebra::{Matrix3, Matrix4, Point3, Vector3};
 /// Allow nalgebra types to work with our Float trait
 /// For f32/f64: direct delegation via to_f32/from_f32
 /// For bf16/f16: convert via f32
-
 pub fn na_point3_to_array<T: Float>(p: &Point3<f32>) -> [T; 3] {
     [T::from_f32(p.x), T::from_f32(p.y), T::from_f32(p.z)]
 }

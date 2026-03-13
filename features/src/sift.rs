@@ -89,6 +89,7 @@ impl Sift {
     ///
     /// Between octaves, the image is downsampled 2x. Within each octave,
     /// sigma increases by factor `k = 2^(1/n_layers)`.
+    #[allow(clippy::type_complexity)]
     pub fn build_scale_space<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
         &self,
         ctx: &ComputeDevice,
@@ -153,6 +154,7 @@ impl Sift {
     ///
     /// For input with n_layers per octave, produces (n_layers-1) DoG layers per octave.
     /// All DoG tensors are converted to f32 CPU storage for subsequent processing.
+    #[allow(clippy::type_complexity)]
     pub fn compute_dog(
         &self,
         ctx: &ComputeDevice,
@@ -210,6 +212,8 @@ impl Sift {
     /// - Scale (size) derived from octave and layer
     /// - Octave and layer indices
     /// - Contrast-weighted response value
+    #[allow(clippy::type_complexity)]
+    #[allow(clippy::needless_range_loop)]
     pub fn detect_and_refine<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
         &self,
         ctx: &ComputeDevice,
@@ -312,6 +316,7 @@ impl Sift {
     ///
     /// Uses GPU when available (faster), falls back to CPU. MLX backend is not
     /// currently supported for descriptor computation.
+    #[allow(clippy::needless_range_loop)]
     pub fn detect_and_compute<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
         &self,
         ctx: &ComputeDevice,

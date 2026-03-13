@@ -34,6 +34,7 @@ pub fn match_template(
     match_template_ctx(image, templ, method, &runner)
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn match_template_ctx(
     image: &GrayImage,
     templ: &GrayImage,

@@ -236,6 +236,7 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn tsdf_raycast<
         T: Float + 'static,
         S: Storage<T> + cv_core::StorageFactory<T> + 'static,
@@ -583,6 +584,7 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn akaze_derivatives<
         T: Float + bytemuck::Pod + 'static,
         S: Storage<T> + cv_core::StorageFactory<T> + 'static,

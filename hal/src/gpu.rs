@@ -819,6 +819,7 @@ impl ComputeContext for GpuContext {
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn nms_rotated_boxes<
         T: cv_core::Float + 'static,
         S: Storage<T> + cv_core::StorageFactory<T> + 'static,
@@ -909,6 +910,7 @@ impl ComputeContext for GpuContext {
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn nms_polygons<T: cv_core::Float + 'static>(
         &self,
         polygons: &[cv_core::Polygon],

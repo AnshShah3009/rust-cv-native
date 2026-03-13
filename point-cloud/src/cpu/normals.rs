@@ -3,7 +3,7 @@
 //! Normal estimation operations include:
 //! - Normal estimation using PCA on k-nearest neighbors
 //! - Normal orientation consistency
-
+//!
 //! CPU normal estimation — re-exports from `cv-scientific`.
 //!
 //! For the public API prefer the top-level functions in `cv_point_cloud`

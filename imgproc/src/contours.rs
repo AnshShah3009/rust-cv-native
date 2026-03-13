@@ -623,11 +623,9 @@ pub fn moments(contour: &Contour) -> Moments {
 ///
 /// Input must be a single-channel tensor. Non-zero values are foreground.
 /// Returns a list of `ContourWithHierarchy` structs, each with an `is_hole` flag.
-pub fn find_contours<T: Clone + Copy + Default + PartialEq + std::fmt::Debug + 'static>(
-    binary: &CpuTensor<T>,
-) -> crate::Result<Vec<ContourWithHierarchy>>
+pub fn find_contours<T>(binary: &CpuTensor<T>) -> crate::Result<Vec<ContourWithHierarchy>>
 where
-    T: Into<f64> + Copy,
+    T: Clone + Copy + Default + PartialEq + std::fmt::Debug + Into<f64> + 'static,
 {
     if binary.shape.channels != 1 {
         return Err(cv_core::Error::InvalidInput(

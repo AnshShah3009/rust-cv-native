@@ -254,6 +254,7 @@ impl SgmMatcher {
         aggregated
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn aggregate_along_path(
         &self,
         cost_volume: &[u32],

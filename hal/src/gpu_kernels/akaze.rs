@@ -93,6 +93,7 @@ pub fn akaze_diffusion(
     })
 }
 
+#[allow(clippy::type_complexity)]
 pub fn akaze_derivatives(
     ctx: &GpuContext,
     input: &Tensor<f32, GpuStorage<f32>>,

@@ -38,6 +38,7 @@ impl Lbd {
     ///
     /// For each segment, samples gradient magnitudes orthogonally along the line and
     /// packs binary comparisons into a 256-bit (32-byte) descriptor.
+    #[allow(clippy::needless_range_loop)]
     pub fn compute(
         &self,
         image: &GrayImage,

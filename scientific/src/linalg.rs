@@ -28,6 +28,7 @@ use nalgebra::{DMatrix, DVector};
 /// Returns `(L, U, pivot_indices)` where `P * A = L * U`.
 /// `pivot_indices[i]` is the row that row `i` was swapped with during
 /// factorization.
+#[allow(clippy::type_complexity)]
 pub fn lu_decompose(a: &DMatrix<f64>) -> Result<(DMatrix<f64>, DMatrix<f64>, Vec<usize>), String> {
     let (m, n) = a.shape();
     if m == 0 || n == 0 {
@@ -126,6 +127,7 @@ pub fn qr_solve(a: &DMatrix<f64>, b: &DVector<f64>) -> Result<DVector<f64>, Stri
 /// Singular Value Decomposition.
 ///
 /// Returns `(U, sigma, Vt)` where `A = U * diag(sigma) * Vt`.
+#[allow(clippy::type_complexity)]
 pub fn svd(a: &DMatrix<f64>) -> Result<(DMatrix<f64>, DVector<f64>, DMatrix<f64>), String> {
     let (m, n) = a.shape();
     if m == 0 || n == 0 {
@@ -166,6 +168,7 @@ pub fn eigh(a: &DMatrix<f64>) -> Result<(DVector<f64>, DMatrix<f64>), String> {
 ///
 /// Returns `(eigenvalue_pairs, eigenvector_matrix)` where each eigenvalue pair
 /// is `(real_part, imaginary_part)`. Uses the real Schur decomposition.
+#[allow(clippy::type_complexity)]
 pub fn eig(a: &DMatrix<f64>) -> Result<(Vec<(f64, f64)>, DMatrix<f64>), String> {
     let (m, n) = a.shape();
     if m != n {

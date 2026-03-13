@@ -256,6 +256,7 @@ pub struct ProjectionFactor {
 impl ProjectionFactor {
     /// `key_pose`: camera pose (world-from-camera), `key_point`: 3-D landmark.
     /// `measured`: observed pixel (u, v).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         key_pose: Key,
         key_point: Key,

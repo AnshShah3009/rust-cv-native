@@ -789,6 +789,7 @@ pub mod tsdf {
     ///
     /// This is heavily used in real-time reconstruction and MUST be GPU-accelerated
     /// through a compute kernel in cv-hal.
+    #[allow(clippy::too_many_arguments)]
     pub fn integrate_depth(
         _d: &[f32],
         _w: u32,
@@ -831,6 +832,7 @@ pub mod raycasting {
     /// This is a performance-critical operation best implemented with:
     /// - Spatial hashing or BVH
     /// - SIMD vectorization or GPU acceleration
+    #[allow(clippy::type_complexity)]
     pub fn cast_rays(
         _ro: &[Point3<f32>],
         _rd: &[Vector3<f32>],

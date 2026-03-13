@@ -115,6 +115,7 @@ impl TSDFVolume {
     }
 
     /// Integrate a single RGBD frame with explicit context
+    #[allow(clippy::too_many_arguments)]
     pub fn integrate_ctx(
         &mut self,
         depth_image: &[f32],
@@ -438,6 +439,7 @@ const MC_EDGE_TABLE: [i32; 256] = [
 ];
 
 /// Marching cubes on a single cell
+#[allow(clippy::needless_range_loop)]
 fn marching_cubes_cell(
     _block_coords: &(i32, i32, i32),
     _local: (usize, usize, usize),

@@ -314,6 +314,7 @@ impl DifferentiableRasterizer {
         self.rasterizer.rasterize(cloud)
     }
 
+    #[allow(clippy::needless_range_loop)]
     pub fn compute_loss(&self, rendered: &RasterizationResult, target: &[Vector3<f32>]) -> f32 {
         let mut loss = 0.0;
         let mut count = 0;

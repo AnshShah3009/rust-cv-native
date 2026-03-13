@@ -43,6 +43,12 @@ pub struct PoseGraph {
     pub edges: Vec<PoseGraphEdge>,
 }
 
+impl Default for PoseGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PoseGraph {
     /// Create an empty pose graph.
     pub fn new() -> Self {

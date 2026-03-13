@@ -90,12 +90,13 @@ impl UnionFind {
 /// `connectivity` must be 4 or 8.
 ///
 /// Returns `(label_image, num_labels)` where `num_labels` includes background (label 0).
-pub fn connected_components<T: Clone + Copy + Default + PartialEq + std::fmt::Debug + 'static>(
+#[allow(clippy::needless_range_loop)]
+pub fn connected_components<T>(
     binary: &CpuTensor<T>,
     connectivity: u8,
 ) -> crate::Result<(CpuTensor<u32>, u32)>
 where
-    T: Into<f64> + Copy,
+    T: Clone + Copy + Default + PartialEq + std::fmt::Debug + Into<f64> + 'static,
 {
     if connectivity != 4 && connectivity != 8 {
         return Err(cv_core::Error::InvalidInput(
@@ -207,14 +208,12 @@ where
 ///
 /// Returns a `ConnectedComponentsResult` containing the label image,
 /// number of labels, and per-component statistics (area, bounding box, centroid).
-pub fn connected_components_with_stats_tensor<
-    T: Clone + Copy + Default + PartialEq + std::fmt::Debug + 'static,
->(
+pub fn connected_components_with_stats_tensor<T>(
     binary: &CpuTensor<T>,
     connectivity: u8,
 ) -> crate::Result<ConnectedComponentsResult>
 where
-    T: Into<f64> + Copy,
+    T: Clone + Copy + Default + PartialEq + std::fmt::Debug + Into<f64> + 'static,
 {
     let (label_tensor, num_labels) = connected_components(binary, connectivity)?;
     let label_data = label_tensor.as_slice()?;

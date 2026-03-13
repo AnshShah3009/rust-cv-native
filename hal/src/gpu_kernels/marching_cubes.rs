@@ -60,12 +60,13 @@ pub fn extract_mesh(
 
     // Combine tables into one i32 buffer
     let mut combined_tables = vec![0i32; 256 + 4096];
-    for i in 0..256 {
-        combined_tables[i] = tables::EDGE_TABLE[i] as i32;
+    for (dst, &src) in combined_tables[..256]
+        .iter_mut()
+        .zip(tables::EDGE_TABLE.iter())
+    {
+        *dst = src as i32;
     }
-    for i in 0..4096 {
-        combined_tables[256 + i] = tables::TRI_TABLE[i];
-    }
+    combined_tables[256..256 + 4096].copy_from_slice(&tables::TRI_TABLE[..4096]);
 
     let tables_buffer = ctx
         .device

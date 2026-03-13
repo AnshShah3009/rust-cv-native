@@ -264,6 +264,7 @@ struct RaycastParams {
     padding: u32,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn raycast(
     ctx: &GpuContext,
     voxel_volume: &Tensor<f32, GpuStorage<f32>>,

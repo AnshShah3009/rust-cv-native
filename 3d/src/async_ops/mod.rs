@@ -253,6 +253,7 @@ pub mod tsdf {
     use super::*;
 
     /// Async depth frame integration
+    #[allow(clippy::too_many_arguments)]
     pub async fn integrate_depth_async(
         depth_image: Vec<f32>,
         width: u32,

@@ -208,6 +208,7 @@ pub trait ComputeContext: Send + Sync {
         threshold: T,
     ) -> Result<Vec<cv_core::Detection>>;
 
+    #[allow(clippy::too_many_arguments)]
     fn tsdf_raycast<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
         tsdf_volume: &Tensor<T, S>,
@@ -400,6 +401,7 @@ pub trait ComputeContext: Send + Sync {
     ) -> Result<Tensor<T, S>>;
 
     /// AKAZE Derivatives and Hessian Determinant
+    #[allow(clippy::type_complexity)]
     fn akaze_derivatives<
         T: Float + bytemuck::Pod + 'static,
         S: Storage<T> + cv_core::StorageFactory<T> + 'static,

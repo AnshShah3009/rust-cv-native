@@ -44,6 +44,7 @@ fn hat_weight(z: f64) -> f64 {
 ///
 /// # Returns
 /// An HDR radiance map as a `CpuTensor<f64>` with the same spatial dimensions and channels.
+#[allow(clippy::needless_range_loop)]
 pub fn merge_debevec<T: Float + Default + 'static>(
     images: &[CpuTensor<T>],
     exposure_times: &[f64],
@@ -258,6 +259,7 @@ fn gauss_seidel_solve(a: &[f64], b: &[f64], n: usize, iterations: usize) -> Vec<
 ///
 /// # Returns
 /// A fused LDR image with the same shape and type.
+#[allow(clippy::needless_range_loop)]
 pub fn merge_mertens<T: Float + Default + 'static>(
     images: &[CpuTensor<T>],
 ) -> Result<CpuTensor<T>> {

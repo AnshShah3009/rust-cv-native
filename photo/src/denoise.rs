@@ -291,6 +291,7 @@ pub fn fast_nl_means_denoising_colored<T: Float + Default + 'static>(
 ///
 /// # Returns
 /// Smoothed image with the same shape.
+#[allow(clippy::needless_range_loop)]
 pub fn denoise_gaussian<T: Float + Default + 'static>(
     image: &CpuTensor<T>,
     sigma: T,

@@ -69,6 +69,7 @@ impl Default for NelderMeadConfig {
 /// * `f` - Objective function mapping a parameter slice to a scalar.
 /// * `x0` - Initial guess.
 /// * `config` - Solver configuration.
+#[allow(clippy::needless_range_loop)]
 pub fn minimize_nelder_mead(
     f: impl Fn(&[f64]) -> f64,
     x0: &[f64],
@@ -290,6 +291,7 @@ fn backtracking_line_search(
 /// * `grad` - Gradient function returning a vector the same length as `x0`.
 /// * `x0` - Initial guess.
 /// * `config` - Solver configuration.
+#[allow(clippy::needless_range_loop)]
 pub fn minimize_bfgs(
     f: impl Fn(&[f64]) -> f64,
     grad: impl Fn(&[f64]) -> Vec<f64>,
@@ -596,6 +598,7 @@ pub fn minimize_lbfgsb(
 /// * `y_data` - Dependent variable data (same length as `x_data`).
 /// * `p0` - Initial parameter guess.
 /// * `max_iters` - Maximum number of LM iterations.
+#[allow(clippy::needless_range_loop)]
 pub fn curve_fit(
     model: impl Fn(f64, &[f64]) -> f64,
     x_data: &[f64],
@@ -740,6 +743,7 @@ pub fn curve_fit(
 
 /// Solve A * x = b via Gaussian elimination with partial pivoting.
 /// Returns None if the system is singular.
+#[allow(clippy::needless_range_loop)]
 fn solve_linear(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     let n = b.len();
     // Augmented matrix
@@ -791,6 +795,7 @@ fn solve_linear(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
 }
 
 /// Invert a square matrix via Gauss-Jordan elimination.
+#[allow(clippy::needless_range_loop)]
 fn invert_matrix(a: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     let n = a.len();
     // Augment with identity
@@ -882,16 +887,15 @@ pub fn brentq(
             return Ok(b);
         }
 
-        let s;
-        if (fa - fc).abs() > 1e-30 && (fb - fc).abs() > 1e-30 {
+        let s = if (fa - fc).abs() > 1e-30 && (fb - fc).abs() > 1e-30 {
             // Inverse quadratic interpolation
-            s = a * fb * fc / ((fa - fb) * (fa - fc))
+            a * fb * fc / ((fa - fb) * (fa - fc))
                 + b * fa * fc / ((fb - fa) * (fb - fc))
-                + c * fa * fb / ((fc - fa) * (fc - fb));
+                + c * fa * fb / ((fc - fa) * (fc - fb))
         } else {
             // Secant method
-            s = b - fb * (b - a) / (fb - fa);
-        }
+            b - fb * (b - a) / (fb - fa)
+        };
 
         let cond1 = {
             let lo = (3.0 * a + b) / 4.0;
@@ -1012,6 +1016,7 @@ fn numerical_gradient(f: &impl Fn(&[f64]) -> f64, x: &[f64]) -> Vec<f64> {
 ///
 /// If `grad` is `None` and the method requires gradients, a numerical gradient
 /// via central differences is used automatically.
+#[allow(clippy::type_complexity)]
 pub fn minimize(
     f: impl Fn(&[f64]) -> f64,
     x0: &[f64],

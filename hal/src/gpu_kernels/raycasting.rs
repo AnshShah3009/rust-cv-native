@@ -35,6 +35,7 @@ impl From<Vector3<f32>> for GpuVec3 {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn cast_rays(
     ctx: &GpuContext,
     rays: &[(Point3<f32>, Vector3<f32>)],

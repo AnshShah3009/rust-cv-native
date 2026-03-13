@@ -71,6 +71,7 @@ impl ArucoDictionary {
     ///
     /// Returns a `marker_size x marker_size` grid of 0/1 values (row-major),
     /// or `None` if `id` is out of range.
+    #[allow(clippy::needless_range_loop)]
     pub fn get_marker(&self, id: usize) -> Option<Vec<Vec<u8>>> {
         let codes = dictionary_codes(*self);
         let code = codes.get(id).copied()?;

@@ -567,6 +567,7 @@ fn extrinsics_from_homography(k_inv: &Matrix3<f64>, h: &Matrix3<f64>) -> Result<
 }
 
 /// Compute RMS reprojection error
+#[allow(clippy::type_complexity)]
 fn compute_rms_reprojection(
     intrinsics: &CameraIntrinsics,
     extrinsics: &[Pose],
