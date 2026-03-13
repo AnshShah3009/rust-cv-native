@@ -1,8 +1,8 @@
 struct Params {
     width: u32,
     height: u32,
-    thresh: u32,
-    max_value: u32,
+    thresh: f32,
+    max_value: f32,
     typ: u32, // 0: Binary, 1: BinaryInv, 2: Trunc, 3: ToZero, 4: ToZeroInv
     len: u32,
 }
@@ -13,8 +13,8 @@ struct Params {
 
 fn apply_thresh(val: f32) -> f32 {
     var res: f32 = 0.0;
-    let thresh_f32 = bitcast<f32>(params.thresh);
-    let max_val_f32 = bitcast<f32>(params.max_value);
+    let thresh_f32 = params.thresh;
+    let max_val_f32 = params.max_value;
     
     if (params.typ == 0u) { // Binary
         if (val > thresh_f32) { res = max_val_f32; } else { res = 0.0; }
