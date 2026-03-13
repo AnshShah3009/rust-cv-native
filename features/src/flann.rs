@@ -238,6 +238,7 @@ impl KdTree {
 }
 
 /// Compute Hamming distance between two byte vectors
+#[inline]
 fn hamming_distance(a: &[u8], b: &[u8]) -> u32 {
     a.iter()
         .zip(b.iter())

@@ -35,8 +35,9 @@ pub fn disparity_to_pointcloud(
     left_image: &image::GrayImage,
     params: &StereoParams,
 ) -> crate::Result<PointCloud> {
-    let mut points = Vec::new();
-    let mut colors = Vec::new();
+    let estimated_capacity = (disparity.width * disparity.height / 4) as usize;
+    let mut points = Vec::with_capacity(estimated_capacity);
+    let mut colors = Vec::with_capacity(estimated_capacity);
 
     for y in 0..disparity.height {
         for x in 0..disparity.width {
@@ -121,8 +122,8 @@ pub fn filter_pointcloud_by_depth(
     min_depth: f64,
     max_depth: f64,
 ) -> crate::Result<PointCloud> {
-    let mut filtered_points = Vec::new();
-    let mut filtered_colors = Vec::new();
+    let mut filtered_points = Vec::with_capacity(pointcloud.points.len());
+    let mut filtered_colors = Vec::with_capacity(pointcloud.points.len());
 
     for (i, point) in pointcloud.points.iter().enumerate() {
         let depth = point.z;

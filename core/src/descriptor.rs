@@ -15,6 +15,7 @@ impl Descriptor {
         self.data.len()
     }
 
+    #[inline]
     pub fn hamming_distance(&self, other: &Descriptor) -> u32 {
         self.data
             .iter()

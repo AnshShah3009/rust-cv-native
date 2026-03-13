@@ -86,9 +86,9 @@ impl Orb {
 
         for level in 0..self.n_levels {
             let scaled = if level == 0 {
-                image.clone()
+                std::borrow::Cow::Borrowed(image)
             } else {
-                scale_image(image, scale)
+                std::borrow::Cow::Owned(scale_image(image, scale))
             };
 
             let kps = fast_detect(&scaled, self.fast_threshold, self.n_features * 2);
