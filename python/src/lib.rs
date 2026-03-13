@@ -1,15 +1,21 @@
 use cv_3d::mesh::reconstruction;
 use cv_core::point_cloud::PointCloud;
+use cv_core::tensor::{CpuTensor, TensorShape};
 use cv_core::{CameraIntrinsics, KeyPoint};
 use cv_dnn::DnnNet;
 use cv_features::{fast, gftt, harris};
+use cv_optimize::factor_graph::{
+    FactorGraph, GNConfig, Key, LMParams, NoiseModel, Values, Variable,
+};
+use cv_optimize::factors::{BetweenFactor, PriorFactor, RangeFactor};
 use cv_optimize::isam2::Isam2;
 use cv_runtime::orchestrator::{scheduler, WorkloadHint};
 use cv_slam::Slam as RustSlam;
 use cv_videoio::{open_video, VideoCapture};
-use nalgebra::{Point3, Vector3};
+use nalgebra::{DVector, Point3, Vector3};
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -162,7 +168,7 @@ impl PySlam {
         let (pose, tracked) = self
             .inner
             .process_image(&gray)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
         let mat = pose.matrix();
         let flat_mat: Vec<f32> = mat.iter().map(|&v| v as f32).collect();
@@ -303,13 +309,13 @@ impl PyIsam2 {
     pub fn update(&self) -> PyResult<()> {
         self.inner
             .update()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
     pub fn optimize(&self) -> PyResult<()> {
         self.inner
             .optimize()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
     pub fn get_pose(&self, id: usize) -> Option<(f64, f64, f64)> {
@@ -839,6 +845,439 @@ fn estimate_normals_from_depth_np<'py>(
     normals_to_ndarray(py, normals)
 }
 
+// ============== Factor Graph Bindings ==============
+
+#[pyclass]
+pub struct PyFactorGraph {
+    inner: FactorGraph,
+}
+
+#[pymethods]
+impl PyFactorGraph {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: FactorGraph::new(),
+        }
+    }
+
+    /// Add a prior factor anchoring a variable to a fixed value.
+    ///
+    /// Args:
+    ///     key: Variable key (u64).
+    ///     value: Prior value as a list of floats.
+    ///     sigma: Isotropic noise standard deviation.
+    fn add_prior(&mut self, key: u64, value: Vec<f64>, sigma: f64) {
+        let var = vec_to_variable(&value);
+        let dim = var.dim();
+        self.inner.add(PriorFactor::new(
+            Key(key),
+            var,
+            NoiseModel::Isotropic(sigma, dim),
+        ));
+    }
+
+    /// Add a between factor measuring relative transform between two variables.
+    ///
+    /// Args:
+    ///     key1, key2: Variable keys.
+    ///     measurement: Relative measurement as a list of floats.
+    ///     sigma: Isotropic noise standard deviation.
+    fn add_between(&mut self, key1: u64, key2: u64, measurement: Vec<f64>, sigma: f64) {
+        let var = vec_to_variable(&measurement);
+        let dim = var.dim();
+        self.inner.add(BetweenFactor::new(
+            Key(key1),
+            Key(key2),
+            var,
+            NoiseModel::Isotropic(sigma, dim),
+        ));
+    }
+
+    /// Add a range factor measuring Euclidean distance between two variables.
+    ///
+    /// Args:
+    ///     key1, key2: Variable keys.
+    ///     distance: Measured distance.
+    ///     sigma: Noise standard deviation.
+    fn add_range(&mut self, key1: u64, key2: u64, distance: f64, sigma: f64) {
+        self.inner.add(RangeFactor::new(
+            Key(key1),
+            Key(key2),
+            distance,
+            NoiseModel::Isotropic(sigma, 1),
+        ));
+    }
+
+    /// Optimize using Gauss-Newton.
+    ///
+    /// Args:
+    ///     initial: Dict mapping key (u64) to value (list of floats).
+    ///     max_iters: Maximum number of iterations.
+    ///
+    /// Returns:
+    ///     Dict mapping key to optimized value.
+    #[pyo3(signature = (initial, max_iters=100))]
+    fn optimize_gn(
+        &self,
+        initial: HashMap<u64, Vec<f64>>,
+        max_iters: usize,
+    ) -> PyResult<HashMap<u64, Vec<f64>>> {
+        let values = hashmap_to_values(&initial);
+        let config = GNConfig {
+            max_iters,
+            ..GNConfig::default()
+        };
+        let result = self
+            .inner
+            .optimize_gn(&values, &config)
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
+        Ok(values_to_hashmap(&result))
+    }
+
+    /// Optimize using Levenberg-Marquardt.
+    ///
+    /// Args:
+    ///     initial: Dict mapping key (u64) to value (list of floats).
+    ///     max_iters: Maximum number of iterations.
+    ///
+    /// Returns:
+    ///     Dict mapping key to optimized value.
+    #[pyo3(signature = (initial, max_iters=100))]
+    fn optimize_lm(
+        &self,
+        initial: HashMap<u64, Vec<f64>>,
+        max_iters: usize,
+    ) -> PyResult<HashMap<u64, Vec<f64>>> {
+        let values = hashmap_to_values(&initial);
+        let config = LMParams {
+            max_iters,
+            ..LMParams::default()
+        };
+        let result = self
+            .inner
+            .optimize_lm(&values, &config)
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
+        Ok(values_to_hashmap(&result))
+    }
+
+    /// Compute total squared whitened error.
+    fn total_error(&self, values: HashMap<u64, Vec<f64>>) -> f64 {
+        let vals = hashmap_to_values(&values);
+        self.inner.total_error(&vals)
+    }
+
+    /// Number of factors in the graph.
+    fn num_factors(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+/// Convert a flat Vec<f64> to the appropriate Variable type based on length.
+fn vec_to_variable(v: &[f64]) -> Variable {
+    match v.len() {
+        1 => Variable::Scalar(v[0]),
+        2 => Variable::Point2([v[0], v[1]]),
+        3 => Variable::Point3(nalgebra::Point3::new(v[0], v[1], v[2])),
+        _ => Variable::Vector(DVector::from_vec(v.to_vec())),
+    }
+}
+
+fn hashmap_to_values(map: &HashMap<u64, Vec<f64>>) -> Values {
+    let mut values = Values::new();
+    for (&key, val) in map {
+        values.insert(Key(key), vec_to_variable(val));
+    }
+    values
+}
+
+fn values_to_hashmap(values: &Values) -> HashMap<u64, Vec<f64>> {
+    let mut map = HashMap::new();
+    for (&key, var) in &values.values {
+        map.insert(key.0, var.to_vector().as_slice().to_vec());
+    }
+    map
+}
+
+// ============== Hidden Point Removal Bindings ==============
+
+/// Determine which points in a 3D point cloud are visible from a viewpoint.
+///
+/// Uses the Katz-Tal-Basri spherical flipping + convex hull algorithm.
+///
+/// Args:
+///     points: List of (x, y, z) tuples.
+///     viewpoint: (x, y, z) tuple for the camera/eye position.
+///     radius: Flipping radius. Pass 0.0 for auto-computation.
+///
+/// Returns:
+///     List of indices of visible points.
+#[pyfunction]
+#[pyo3(signature = (points, viewpoint, radius=0.0))]
+fn hidden_point_removal(
+    points: Vec<(f64, f64, f64)>,
+    viewpoint: (f64, f64, f64),
+    radius: f64,
+) -> PyResult<Vec<usize>> {
+    let pts: Vec<nalgebra::Point3<f64>> = points
+        .iter()
+        .map(|&(x, y, z)| nalgebra::Point3::new(x, y, z))
+        .collect();
+    let vp = nalgebra::Point3::new(viewpoint.0, viewpoint.1, viewpoint.2);
+
+    let result = cv_point_cloud::hidden_point_removal::hidden_point_removal(&pts, &vp, radius)
+        .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
+
+    Ok(result.visible_indices)
+}
+
+// ============== Image Inpainting Bindings ==============
+
+/// Inpaint masked regions using the Telea Fast Marching Method.
+///
+/// Args:
+///     image: Flat list of f32 pixel values (CHW layout: channels * height * width).
+///     channels: Number of image channels.
+///     height: Image height.
+///     width: Image width.
+///     mask: Flat list of u8 mask values (H * W). Non-zero = inpaint region.
+///     radius: Neighbourhood radius for weighted averaging.
+///
+/// Returns:
+///     Flat list of f32 pixel values with masked region filled.
+#[pyfunction]
+fn inpaint_telea(
+    image: Vec<f32>,
+    channels: usize,
+    height: usize,
+    width: usize,
+    mask: Vec<u8>,
+    radius: f32,
+) -> PyResult<Vec<f32>> {
+    let img_tensor = CpuTensor::<f32>::from_vec(image, TensorShape::new(channels, height, width))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let mask_tensor = CpuTensor::<u8>::from_vec(mask, TensorShape::new(1, height, width))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    let result = cv_photo::inpaint_telea(&img_tensor, &mask_tensor, radius)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+    result
+        .as_slice()
+        .map(|s| s.to_vec())
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+}
+
+/// Inpaint masked regions using Navier-Stokes PDE diffusion.
+///
+/// Args:
+///     image: Flat list of f32 pixel values (CHW layout).
+///     channels: Number of image channels.
+///     height: Image height.
+///     width: Image width.
+///     mask: Flat list of u8 mask values (H * W). Non-zero = inpaint region.
+///     radius: Smoothing extent parameter.
+///     iterations: Number of diffusion iterations.
+///
+/// Returns:
+///     Flat list of f32 pixel values with masked region filled.
+#[pyfunction]
+#[pyo3(signature = (image, channels, height, width, mask, radius=3.0, iterations=100))]
+fn inpaint_ns(
+    image: Vec<f32>,
+    channels: usize,
+    height: usize,
+    width: usize,
+    mask: Vec<u8>,
+    radius: f32,
+    iterations: u32,
+) -> PyResult<Vec<f32>> {
+    let img_tensor = CpuTensor::<f32>::from_vec(image, TensorShape::new(channels, height, width))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    let mask_tensor = CpuTensor::<u8>::from_vec(mask, TensorShape::new(1, height, width))
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+    let result = cv_photo::inpaint_ns(&img_tensor, &mask_tensor, radius, iterations)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
+    result
+        .as_slice()
+        .map(|s| s.to_vec())
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+}
+
+// ============== Scientific Function Bindings ==============
+
+/// Compute the 1D FFT of real-valued input.
+///
+/// Args:
+///     data: List of real-valued samples.
+///
+/// Returns:
+///     List of (real, imaginary) pairs representing the complex spectrum.
+#[pyfunction]
+fn fft(data: Vec<f64>) -> Vec<(f64, f64)> {
+    cv_scientific::fft::fft(&data)
+        .into_iter()
+        .map(|c| (c.re, c.im))
+        .collect()
+}
+
+/// Compute the 1D inverse FFT.
+///
+/// Args:
+///     data: List of (real, imaginary) pairs.
+///
+/// Returns:
+///     List of (real, imaginary) pairs (imaginary should be near zero for real signals).
+#[pyfunction]
+fn ifft(data: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    let complex: Vec<rustfft::num_complex::Complex<f64>> = data
+        .iter()
+        .map(|&(re, im)| rustfft::num_complex::Complex::new(re, im))
+        .collect();
+    cv_scientific::fft::ifft(&complex)
+        .into_iter()
+        .map(|c| (c.re, c.im))
+        .collect()
+}
+
+/// Minimize a scalar function using Nelder-Mead simplex method.
+///
+/// Args:
+///     py: Python interpreter handle.
+///     f: Callable taking a list of floats, returning a float.
+///     x0: Initial guess as a list of floats.
+///     max_iters: Maximum number of iterations (default 1000).
+///
+/// Returns:
+///     Tuple of (optimal_x, optimal_value).
+#[pyfunction]
+#[pyo3(signature = (f, x0, max_iters=1000))]
+fn minimize_nelder_mead(
+    _py: Python,
+    f: PyObject,
+    x0: Vec<f64>,
+    max_iters: usize,
+) -> PyResult<(Vec<f64>, f64)> {
+    let config = cv_scientific::optimize::NelderMeadConfig {
+        max_iters,
+        ..cv_scientific::optimize::NelderMeadConfig::default()
+    };
+    let result = cv_scientific::optimize::minimize_nelder_mead(
+        |x| {
+            Python::with_gil(|py| {
+                let args = (x.to_vec(),);
+                f.call1(py, args)
+                    .and_then(|r| r.extract::<f64>(py))
+                    .unwrap_or(f64::MAX)
+            })
+        },
+        &x0,
+        &config,
+    );
+    Ok((result.x, result.fun))
+}
+
+/// Simple linear regression: y = slope * x + intercept.
+///
+/// Args:
+///     x: Independent variable data.
+///     y: Dependent variable data.
+///
+/// Returns:
+///     Tuple of (slope, intercept, r_squared).
+#[pyfunction]
+fn linear_regression(x: Vec<f64>, y: Vec<f64>) -> PyResult<(f64, f64, f64)> {
+    let result = cv_scientific::stats::linregress(&x, &y)
+        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+    Ok((result.slope, result.intercept, result.r_squared))
+}
+
+// ============== 2D Geometry Bindings ==============
+
+/// Compute the convex hull of a set of 2D points.
+///
+/// Args:
+///     points: List of (x, y) tuples.
+///
+/// Returns:
+///     List of (x, y) tuples forming the convex hull vertices (closed polygon).
+#[pyfunction]
+fn convex_hull_2d(points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    use cv_scientific::geometry2d::{convex_hull, Point2D};
+    let pts: Vec<Point2D> = points.iter().map(|&(x, y)| Point2D::new(x, y)).collect();
+    let hull = convex_hull(&pts);
+    hull.exterior.iter().map(|p| (p.x, p.y)).collect()
+}
+
+/// Compute the Delaunay triangulation of a set of 2D points.
+///
+/// Args:
+///     points: List of (x, y) tuples.
+///
+/// Returns:
+///     List of (i, j, k) index triples, each representing a triangle.
+#[pyfunction]
+fn delaunay(points: Vec<(f64, f64)>) -> Vec<(usize, usize, usize)> {
+    use cv_scientific::geometry2d::{delaunay_triangulation, Point2D};
+    let pts: Vec<Point2D> = points.iter().map(|&(x, y)| Point2D::new(x, y)).collect();
+    delaunay_triangulation(&pts)
+        .into_iter()
+        .map(|[a, b, c]| (a, b, c))
+        .collect()
+}
+
+/// Compute the area of a polygon defined by its vertices.
+///
+/// Args:
+///     vertices: List of (x, y) tuples forming the polygon boundary.
+///               The polygon is automatically closed if the last point differs from the first.
+///
+/// Returns:
+///     Unsigned area of the polygon.
+#[pyfunction]
+fn polygon_area(vertices: Vec<(f64, f64)>) -> f64 {
+    use cv_scientific::geometry2d::{Point2D, Polygon};
+    let mut pts: Vec<Point2D> = vertices.iter().map(|&(x, y)| Point2D::new(x, y)).collect();
+    // Close the polygon if not already closed.
+    if pts.len() >= 2
+        && (pts.first().unwrap().x != pts.last().unwrap().x
+            || pts.first().unwrap().y != pts.last().unwrap().y)
+    {
+        pts.push(pts[0].clone());
+    }
+    let poly = Polygon::new(pts, vec![]);
+    poly.area()
+}
+
+/// Test whether a point lies inside a polygon.
+///
+/// Args:
+///     x: Point x-coordinate.
+///     y: Point y-coordinate.
+///     polygon: List of (x, y) tuples forming the polygon boundary.
+///
+/// Returns:
+///     True if the point is inside the polygon.
+#[pyfunction]
+fn point_in_polygon(x: f64, y: f64, polygon: Vec<(f64, f64)>) -> bool {
+    use cv_scientific::geometry2d::{point_in_polygon as pip, Point2D, Polygon};
+    let mut pts: Vec<Point2D> = polygon
+        .iter()
+        .map(|&(px, py)| Point2D::new(px, py))
+        .collect();
+    if pts.len() >= 2
+        && (pts.first().unwrap().x != pts.last().unwrap().x
+            || pts.first().unwrap().y != pts.last().unwrap().y)
+    {
+        pts.push(pts[0].clone());
+    }
+    let poly = Polygon::new(pts, vec![]);
+    let point = Point2D::new(x, y);
+    pip(&point, &poly)
+}
+
 #[pymodule]
 fn cv_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyWorkloadHint>()?;
@@ -868,5 +1307,22 @@ fn cv_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(estimate_normals_hybrid_np, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_normals_approx_cross_np, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_normals_from_depth_np, m)?)?;
+    // Factor graph
+    m.add_class::<PyFactorGraph>()?;
+    // Hidden point removal
+    m.add_function(wrap_pyfunction!(hidden_point_removal, m)?)?;
+    // Image inpainting
+    m.add_function(wrap_pyfunction!(inpaint_telea, m)?)?;
+    m.add_function(wrap_pyfunction!(inpaint_ns, m)?)?;
+    // Scientific functions
+    m.add_function(wrap_pyfunction!(fft, m)?)?;
+    m.add_function(wrap_pyfunction!(ifft, m)?)?;
+    m.add_function(wrap_pyfunction!(minimize_nelder_mead, m)?)?;
+    m.add_function(wrap_pyfunction!(linear_regression, m)?)?;
+    // 2D geometry
+    m.add_function(wrap_pyfunction!(convex_hull_2d, m)?)?;
+    m.add_function(wrap_pyfunction!(delaunay, m)?)?;
+    m.add_function(wrap_pyfunction!(polygon_area, m)?)?;
+    m.add_function(wrap_pyfunction!(point_in_polygon, m)?)?;
     Ok(())
 }

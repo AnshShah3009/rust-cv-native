@@ -1809,6 +1809,7 @@ dependencies = [
  "cv-dnn",
  "cv-features",
  "cv-optimize",
+ "cv-photo",
  "cv-point-cloud",
  "cv-runtime",
  "cv-scientific",
@@ -1818,6 +1819,7 @@ dependencies = [
  "nalgebra",
  "numpy",
  "pyo3",
+ "rustfft",
 ]
 
 [[package]]
