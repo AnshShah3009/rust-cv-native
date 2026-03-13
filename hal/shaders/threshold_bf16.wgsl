@@ -12,20 +12,20 @@ struct Params {
 @group(0) @binding(2) var<uniform> params: Params;
 
 fn apply_thresh(val: u32) -> u32 {
-    var res: u32 = 0.0;
-    let thresh_u32 = bitcast<u32>(params.thresh);
-    let max_val_u32 = bitcast<u32>(params.max_value);
-    
+    var res: u32 = 0u;
+    let thresh_u32 = params.thresh;
+    let max_val_u32 = params.max_value;
+
     if (params.typ == 0u) { // Binary
-        if (val > thresh_u32) { res = max_val_u32; } else { res = 0.0; }
+        if (val > thresh_u32) { res = max_val_u32; } else { res = 0u; }
     } else if (params.typ == 1u) { // BinaryInv
-        if (val > thresh_u32) { res = 0.0; } else { res = max_val_u32; }
+        if (val > thresh_u32) { res = 0u; } else { res = max_val_u32; }
     } else if (params.typ == 2u) { // Trunc
         res = min(val, thresh_u32);
     } else if (params.typ == 3u) { // ToZero
-        if (val > thresh_u32) { res = val; } else { res = 0.0; }
+        if (val > thresh_u32) { res = val; } else { res = 0u; }
     } else if (params.typ == 4u) { // ToZeroInv
-        if (val > thresh_u32) { res = 0.0; } else { res = val; }
+        if (val > thresh_u32) { res = 0u; } else { res = val; }
     }
     return res;
 }
