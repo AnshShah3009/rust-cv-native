@@ -8,17 +8,20 @@ name = "cv_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.21", features = ["extension-module", "abi3-py37"] }
-numpy = "0.21"
-cv-core = { path = "../core" }
-cv-features = { path = "../features" }
-cv-3d = { path = "../3d" }
-cv-point-cloud = { path = "../point-cloud" }
-cv-scientific = { path = "../scientific" }
-cv-runtime = { path = "../runtime" }
-cv-slam = { path = "../slam" }
-cv-videoio = { path = "../videoio" }
-cv-dnn = { path = "../dnn" }
-cv-optimize = { path = "../optimize" }
+pyo3 = { workspace = true, features = ["abi3-py37"] }
+numpy = { workspace = true }
+cv-core = { workspace = true }
+cv-features = { workspace = true }
+cv-3d = { workspace = true }
+cv-point-cloud = { workspace = true }
+cv-scientific = { workspace = true }
+cv-runtime = { workspace = true }
+cv-slam = { workspace = true }
+cv-videoio = { workspace = true }
+cv-dnn = { workspace = true }
+cv-optimize = { workspace = true }
 nalgebra = { workspace = true }
 image = { workspace = true }
+
+[features]
+default = []

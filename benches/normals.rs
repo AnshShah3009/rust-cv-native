@@ -19,7 +19,7 @@ use std::time::Duration;
 
 /// n points uniformly sampled from the surface of the unit sphere + small noise.
 fn sphere_cloud(n: usize) -> Vec<Point3<f32>> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..n)
         .map(|_| {
             let theta = rng.gen::<f32>() * std::f32::consts::TAU;

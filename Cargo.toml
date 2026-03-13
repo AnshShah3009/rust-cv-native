@@ -1,39 +1,42 @@
 [package]
 name = "rust-cv-native"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Native Rust computer vision library with multi-backend acceleration"
 
 [dependencies]
-cv-core = { path = "./core" }
-cv-hal = { path = "./hal" }
-cv-imgproc = { path = "./imgproc" }
-cv-features = { path = "./features" }
-cv-stereo = { path = "./stereo" }
-cv-video = { path = "./video" }
-cv-3d = { path = "./3d" }
-cv-calib3d = { path = "./calib3d" }
-cv-sfm = { path = "./sfm" }
-cv-slam = { path = "./slam" }
-cv-runtime = { path = "./runtime" }
-cv-optimize = { path = "./optimize" }
+cv-core = { workspace = true }
+cv-hal = { workspace = true }
+cv-imgproc = { workspace = true }
+cv-features = { workspace = true }
+cv-stereo = { workspace = true }
+cv-video = { workspace = true }
+cv-3d = { workspace = true }
+cv-calib3d = { workspace = true }
+cv-sfm = { workspace = true }
+cv-slam = { workspace = true }
+cv-runtime = { workspace = true }
+cv-optimize = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 image = { workspace = true }
-tokio = { version = "1", features = ["rt-multi-thread"] }
-cv-3d = { path = "./3d" }
-cv-scientific = { path = "./scientific" }
-cv-point-cloud = { path = "./point-cloud" }
-cv-core = { path = "./core" }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+cv-scientific = { workspace = true }
+cv-point-cloud = { workspace = true }
 nalgebra = { workspace = true }
 futures = { workspace = true }
 wgpu = { workspace = true }
 rand = { workspace = true }
+bytemuck = { workspace = true }
 
 [features]
-default = []
+default = ["full-precision"]
 gpu = ["cv-stereo/gpu", "cv-features/gpu"]
+full-precision = ["cv-core/full-precision"]
+half-precision = ["cv-core/half-precision"]
+all-precision = ["cv-core/all-precision"]
 
 [[bench]]
 name = "cv_benchmarks"
@@ -78,20 +81,76 @@ members = [
 ]
 
 [workspace.dependencies]
-rayon = "1.10"
-nalgebra = "0.33"
-image = "0.25"
+# Shared External Dependencies
+rayon = "1.11"
+approx = "0.5.1"
+half = "2.7.1"
+nalgebra = "0.33.2"
+image = "0.25.9"
 wgpu = "28.0.0"
-bytemuck = { version = "1.21.0", features = ["derive"] }
-wide = "0.7"
+bytemuck = { version = "1.25.0", features = ["derive"] }
+wide = "0.7.33"
 futures = "0.3.31"
-thiserror = "2.0"
+thiserror = "2.0.18"
 criterion = { version = "0.5", default-features = false, features = ["rayon", "cargo_bench_support", "async_tokio"] }
 core_affinity = "0.8"
-ndarray = "0.17"
-tokio = "1.43"
+ndarray = "0.17.2"
+tokio = "1.49.0"
 ffmpeg-next = "7.1"
-rand = "0.8"
+rand = "0.9.2"
+rand_distr = "0.5.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.138"
+pollster = "0.4.0"
+rstar = "0.12.2"
+num-traits = "0.2"
+itertools = "0.14.0"
+anyhow = "1.0.101"
+log = "0.4.29"
+tracing = "0.1.41"
+libc = "0.2.169"
+hashbrown = "0.16.1"
+tempfile = "3.16.0"
+num_cpus = "1.16.0"
+parking_lot = "0.12.3"
+dashmap = "6.1.0"
+memmap2 = "0.9.5"
+bincode = "1.3.3"
+v4l = "0.14.0"
+faer = "0.24.0"
+geo = "0.28.0"
+geo-buffer = "0.2.0"
+pyo3 = { version = "0.21.0", features = ["extension-module"] }
+numpy = "0.21.0"
+egui = "0.33.3"
+eframe = { version = "0.33.3", features = ["wgpu"] }
+glam = "0.29.3"
+tract-onnx = "0.21.7"
+
+# Internal Workspace Crates
+cv-core = { path = "./core" }
+cv-hal = { path = "./hal" }
+cv-imgproc = { path = "./imgproc" }
+cv-features = { path = "./features" }
+cv-stereo = { path = "./stereo" }
+cv-video = { path = "./video" }
+cv-3d = { path = "./3d" }
+cv-calib3d = { path = "./calib3d" }
+cv-sfm = { path = "./sfm" }
+cv-slam = { path = "./slam" }
+cv-runtime = { path = "./runtime" }
+cv-optimize = { path = "./optimize" }
+cv-scientific = { path = "./scientific" }
+cv-point-cloud = { path = "./point-cloud" }
+cv-videoio = { path = "./videoio" }
+cv-photo = { path = "./photo" }
+cv-io = { path = "./io" }
+cv-objdetect = { path = "./objdetect" }
+cv-dnn = { path = "./dnn" }
+cv-rendering = { path = "./rendering" }
+cv-registration = { path = "./registration" }
+cv-plot = { path = "./plot" }
+cv-viewer = { path = "./viewer" }
 
 [profile.release]
 opt-level = 3

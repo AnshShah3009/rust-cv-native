@@ -96,7 +96,7 @@ mod tests {
             RuntimeEvent::SubmissionStarted { operation, .. } => {
                 assert_eq!(operation, "bilateral_filter");
             }
-            _ => panic!("Wrong event type"),
+            _ => unreachable!("Wrong event type"),
         }
     }
 

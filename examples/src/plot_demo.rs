@@ -44,10 +44,10 @@ fn create_line_plot() {
 fn create_scatter_plot() {
     let mut rng = StdRng::seed_from_u64(42);
 
-    let x: Vec<f64> = (0..50).map(|_| rng.gen_range(-3.0..3.0)).collect();
+    let x: Vec<f64> = (0..50).map(|_| rng.random_range(-3.0..3.0)).collect();
     let y: Vec<f64> = x
         .iter()
-        .map(|&x| x * x + rng.gen_range(-0.5..0.5))
+        .map(|&x| x * x + rng.random_range(-0.5..0.5))
         .collect();
 
     let mut plot = Plot::new("Scatter Plot");
@@ -65,8 +65,8 @@ fn create_3d_plot() {
 
     let mut pc = PointCloud3D::new("Random Points");
 
-    let x: Vec<f64> = (0..n).map(|_| rng.gen_range(-2.0..2.0)).collect();
-    let y: Vec<f64> = (0..n).map(|_| rng.gen_range(-2.0..2.0)).collect();
+    let x: Vec<f64> = (0..n).map(|_| rng.random_range(-2.0..2.0)).collect();
+    let y: Vec<f64> = (0..n).map(|_| rng.random_range(-2.0..2.0)).collect();
     let z: Vec<f64> = (0..n)
         .map(|i| {
             let x = x[i];
