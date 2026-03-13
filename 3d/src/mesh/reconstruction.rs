@@ -349,16 +349,26 @@ fn find_ball_center(
         return None;
     }
 
-    let a_len_sq = a_len * a_len;
-    let b_len_sq = b_len * b_len;
-    let c_len_sq = c_len * c_len;
+    // Barycentric circumcenter coordinates (Wikipedia "Circumscribed circle").
+    // Standard convention: side a = |p2-p3|, b = |p1-p3|, c = |p1-p2|.
+    let a_std_sq = c_len * c_len; // |p2-p3|² = c_len²
+    let b_std_sq = b_len * b_len; // |p1-p3|² = b_len²
+    let c_std_sq = a_len * a_len; // |p1-p2|² = a_len²
 
-    let denom = 2.0 * normal_len * normal_len;
-    let alpha = b_len_sq * c_len_sq * (a_len_sq + b_len_sq - c_len_sq) / denom;
-    let beta = a_len_sq * c_len_sq * (a_len_sq - b_len_sq + c_len_sq) / denom;
-    let gamma = a_len_sq * b_len_sq * (-a_len_sq + b_len_sq + c_len_sq) / denom;
+    let alpha_u = a_std_sq * (-a_std_sq + b_std_sq + c_std_sq);
+    let beta_u = b_std_sq * (a_std_sq - b_std_sq + c_std_sq);
+    let gamma_u = c_std_sq * (a_std_sq + b_std_sq - c_std_sq);
+    let bary_sum = alpha_u + beta_u + gamma_u;
 
-    let circumcenter = p1 * alpha + p2.coords * beta + p3.coords * gamma;
+    if bary_sum.abs() < 1e-12 {
+        return None; // Degenerate
+    }
+
+    let alpha = alpha_u / bary_sum;
+    let beta = beta_u / bary_sum;
+    let gamma = gamma_u / bary_sum;
+
+    let circumcenter = Point3::from(p1.coords * alpha + p2.coords * beta + p3.coords * gamma);
 
     let height = (radius * radius - circumradius * circumradius).sqrt();
     let center1 = circumcenter + normal * height;

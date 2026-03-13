@@ -227,10 +227,12 @@ impl TSDFVolume {
                             let t = i as f32 / steps.max(1) as f32;
                             let voxel_pos = start + (end - start) * t;
 
-                            // Calculate TSDF value
+                            // Calculate TSDF value: signed distance along the ray.
+                            // Positive = voxel is behind the surface (farther from camera),
+                            // negative = voxel is in front of the surface (closer to camera).
                             let dist = (voxel_pos - point_world).norm();
-                            let sdf = if voxel_pos.coords.dot(&ray_dir)
-                                > point_world.coords.dot(&ray_dir)
+                            let sdf = if (voxel_pos - camera_origin).dot(&ray_dir)
+                                > (point_world - camera_origin).dot(&ray_dir)
                             {
                                 dist // Behind surface
                             } else {

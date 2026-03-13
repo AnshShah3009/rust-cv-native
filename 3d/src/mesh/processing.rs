@@ -56,12 +56,13 @@ pub fn laplacian_smooth(mesh: &mut TriangleMesh, iterations: usize, lambda: f32)
     mesh.compute_vertex_normals();
 }
 
-/// Taubin smoothing: Two-step Laplacian with shrinkage compensation
+/// Taubin smoothing: Two-step Laplacian with shrinkage compensation.
+/// Each iteration applies one forward (lambda) step then one backward (-mu) step.
 pub fn taubin_smooth(mesh: &mut TriangleMesh, iterations: usize, lambda: f32, mu: f32) {
-    // Forward Laplacian
-    laplacian_smooth(mesh, iterations, lambda);
-    // Backward Laplacian (negative step)
-    laplacian_smooth(mesh, iterations, -mu);
+    for _ in 0..iterations {
+        laplacian_smooth(mesh, 1, lambda); // Forward: smooth
+        laplacian_smooth(mesh, 1, -mu); // Backward: un-shrink
+    }
 }
 
 /// Edge collapse simplification: Reduce triangle count
@@ -232,13 +233,15 @@ pub fn loop_subdivision(mesh: &mut TriangleMesh) {
                     }
                 }
 
-                // Loop subdivision rule for edge vertex
+                // Loop subdivision rule for edge vertex:
+                // Interior: 3/8*(p0+p1) + 1/8*(o0+o1)
+                // Boundary: 1/2*(p0+p1)
                 let new_pos = if opposite_vertices.len() == 2 {
                     let p0 = mesh.vertices[v0];
                     let p1 = mesh.vertices[v1];
                     let o0 = mesh.vertices[opposite_vertices[0]];
                     let o1 = mesh.vertices[opposite_vertices[1]];
-                    (p0 + p1.coords + o0.coords + o1.coords) * 0.25
+                    Point3::from((p0.coords + p1.coords) * 0.375 + (o0.coords + o1.coords) * 0.125)
                 } else {
                     // Boundary edge
                     let p0 = mesh.vertices[v0];
@@ -257,23 +260,23 @@ pub fn loop_subdivision(mesh: &mut TriangleMesh) {
     let mut smoothed_vertices = new_vertices.clone();
 
     for i in 0..num_vertices {
-        let mut neighbors = Vec::new();
+        let mut neighbor_set = HashSet::new();
         for face in &mesh.faces {
             if face.contains(&i) {
                 for &v in face.iter() {
                     if v != i {
-                        neighbors.push(v);
+                        neighbor_set.insert(v);
                     }
                 }
             }
         }
 
-        if !neighbors.is_empty() {
-            let n = neighbors.len() as f32;
+        if !neighbor_set.is_empty() {
+            let n = neighbor_set.len() as f32;
             let beta = if n > 3.0 { 3.0 / (8.0 * n) } else { 3.0 / 16.0 };
 
             let mut new_pos = new_vertices[i].coords * (1.0 - n * beta);
-            for &neighbor in &neighbors {
+            for &neighbor in &neighbor_set {
                 new_pos += new_vertices[neighbor].coords * beta;
             }
             smoothed_vertices[i] = Point3::from(new_pos);
