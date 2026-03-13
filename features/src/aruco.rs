@@ -166,8 +166,8 @@ impl ArucoDetector {
                 "aruco detect requires single-channel (1, H, W) image".into(),
             ));
         }
-        let gray = image.as_slice()?.to_vec();
-        self.detect_gray(&gray, w, h)
+        let gray = image.as_slice()?;
+        self.detect_gray(gray, w, h)
     }
 
     /// Internal: run detection on raw grayscale u8 buffer.

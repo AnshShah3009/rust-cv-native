@@ -27,7 +27,6 @@ pub fn compute_cdf(hist: &[u32; 256]) -> [u32; 256] {
     cdf
 }
 
-#[allow(clippy::needless_range_loop)]
 pub fn histogram_equalization(image: &GrayImage) -> GrayImage {
     let hist = compute_histogram(image);
     let cdf = compute_cdf(&hist);
@@ -37,15 +36,14 @@ pub fn histogram_equalization(image: &GrayImage) -> GrayImage {
 
     let mut lut = [0u8; 256];
     if total > cdf_min {
-        for i in 0..256 {
-            let val = ((cdf[i].saturating_sub(cdf_min)) as f32 / (total - cdf_min) as f32 * 255.0)
+        for (i, lut_val) in lut.iter_mut().enumerate() {
+            *lut_val = ((cdf[i].saturating_sub(cdf_min)) as f32 / (total - cdf_min) as f32 * 255.0)
                 .round() as u8;
-            lut[i] = val;
         }
     } else {
         // If total == cdf_min (e.g. constant image), identity mapping
-        for i in 0..256 {
-            lut[i] = i as u8;
+        for (i, lut_val) in lut.iter_mut().enumerate() {
+            *lut_val = i as u8;
         }
     }
 

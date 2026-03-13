@@ -281,8 +281,8 @@ pub fn hough_lines_p(
     let width = src.width();
     let height = src.height();
 
-    let mut edge_points = Vec::new();
     let edge_data = edges.as_raw();
+    let mut edge_points = Vec::with_capacity(edge_data.len() / 10);
     for i in 0..edge_data.len() {
         if edge_data[i] > 0 {
             edge_points.push((i % width as usize, i / width as usize));

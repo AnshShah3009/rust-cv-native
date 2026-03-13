@@ -466,7 +466,7 @@ fn hysteresis(width: usize, height: usize, nms: &[f32], low: f32, high: f32) -> 
     const WEAK: u8 = 75;
 
     let mut state = vec![0u8; width * height];
-    let mut stack = Vec::new();
+    let mut stack = Vec::with_capacity(width * height / 20);
 
     for y in 1..height.saturating_sub(1) {
         for x in 1..width.saturating_sub(1) {

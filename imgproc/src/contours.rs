@@ -242,7 +242,7 @@ pub fn convex_hull(contour: &Contour) -> Contour {
     }
     pts.sort_unstable();
 
-    let mut lower = Vec::new();
+    let mut lower = Vec::with_capacity(pts.len());
     for &p in &pts {
         while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0 {
             lower.pop();
@@ -250,7 +250,7 @@ pub fn convex_hull(contour: &Contour) -> Contour {
         lower.push(p);
     }
 
-    let mut upper = Vec::new();
+    let mut upper = Vec::with_capacity(pts.len());
     for &p in pts.iter().rev() {
         while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0 {
             upper.pop();

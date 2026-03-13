@@ -75,8 +75,8 @@ pub fn distance_transform_with_labels<T: Float>(
     let n = height * width;
 
     // Build list of background pixel coordinates.
-    let mut bg_coords: Vec<(usize, usize)> = Vec::new();
-    let mut bg_indices: Vec<i32> = Vec::new();
+    let mut bg_coords: Vec<(usize, usize)> = Vec::with_capacity(width * height / 4);
+    let mut bg_indices: Vec<i32> = Vec::with_capacity(width * height / 4);
     for y in 0..height {
         for x in 0..width {
             if src[y * width + x].to_f32() == 0.0 {
