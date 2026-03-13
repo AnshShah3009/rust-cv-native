@@ -1,53 +1,50 @@
-use crate::context::ThresholdType;
 use crate::gpu::GpuContext;
-use crate::storage::GpuStorage;
+use crate::GpuTensor;
 use crate::Result;
-use cv_core::Tensor;
+use crate::context::ThresholdType;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
+#[derive(Copy, Clone)]
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct ThresholdParams {
-    thresh: u32,
-    max_value: u32,
-    typ: u32,
+struct ThresholdParams<T: bytemuck::Pod + bytemuck::Zeroable> {
+    width: u32,
+    height: u32,
+    thresh: T,
+    max_value: T,
+    thresh_type: u32,
     len: u32,
 }
 
-pub fn threshold(
+unsafe impl<T: bytemuck::Pod + bytemuck::Zeroable> bytemuck::Pod for ThresholdParams<T> {}
+unsafe impl<T: bytemuck::Pod + bytemuck::Zeroable> bytemuck::Zeroable for ThresholdParams<T> {}
+
+pub fn threshold<T: cv_core::float::Float + bytemuck::Pod + bytemuck::Zeroable>(
     ctx: &GpuContext,
-    input: &Tensor<u8, GpuStorage<u8>>,
-    thresh: u8,
-    max_value: u8,
-    typ: ThresholdType,
-) -> Result<Tensor<u8, GpuStorage<u8>>> {
+    input: &GpuTensor<T>,
+    thresh: T,
+    max_value: T,
+    thresh_type: ThresholdType,
+) -> Result<GpuTensor<T>> {
     let len = input.shape.len();
 
-    // Create output buffer
-    // Byte size should be multiple of 4 for u32 packing in shader
-    let byte_size = (len.div_ceil(4) * 4) as u64;
+    let byte_size = (len as usize * std::mem::size_of::<T>()) as u64;
+
     let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Threshold Output Buffer Unique"),
+        label: Some("Threshold Output Buffer"),
         size: byte_size,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
 
     // Prepare params
-    let mode_int = match typ {
-        ThresholdType::Binary => 0,
-        ThresholdType::BinaryInv => 1,
-        ThresholdType::Trunc => 2,
-        ThresholdType::ToZero => 3,
-        ThresholdType::ToZeroInv => 4,
-    };
-
     let params = ThresholdParams {
-        thresh: thresh as u32,
-        max_value: max_value as u32,
-        typ: mode_int,
+        width: input.shape.width as u32,
+        height: input.shape.height as u32,
+        thresh: thresh,
+        max_value: max_value,
+        thresh_type: thresh_type as u32,
         len: len as u32,
     };
 
@@ -60,7 +57,13 @@ pub fn threshold(
         });
 
     // Pipeline setup
-    let shader_source = include_str!("../../shaders/threshold.wgsl");
+    let shader_source = match cv_core::DataType::from_type::<T>() {
+        Ok(cv_core::DataType::F32) => include_str!("../../shaders/threshold_f32.wgsl"),
+        Ok(_) => return Err(crate::Error::NotSupported("Unsupported threshold precision type".into())),
+        _ => {
+            include_str!("../../shaders/threshold_f32.wgsl")
+        }
+    };
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
 
     // Bind group
@@ -98,14 +101,14 @@ pub fn threshold(
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
 
-        let wg_x = (len as u32).div_ceil(4).div_ceil(64);
+        let wg_x = (len as u32).div_ceil(64);
         pass.dispatch_workgroups(wg_x, 1, 1);
     }
 
     ctx.submit(encoder);
 
-    Ok(Tensor {
-        storage: GpuStorage::from_buffer(Arc::new(output_buffer), len),
+    Ok(crate::GpuTensor {
+        storage: crate::storage::WgpuGpuStorage::from_buffer(Arc::new(output_buffer), len),
         shape: input.shape,
         dtype: input.dtype,
         _phantom: PhantomData,

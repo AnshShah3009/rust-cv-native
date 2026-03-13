@@ -1,7 +1,6 @@
 use crate::gpu::GpuContext;
-use crate::storage::GpuStorage;
 use crate::Result;
-use cv_core::{HoughCircle, Tensor};
+use cv_core::{Float, HoughCircle};
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
@@ -15,16 +14,25 @@ struct CircleParams {
     edge_threshold: f32,
 }
 
-pub fn hough_circles(
+pub fn hough_circles<T: Float + bytemuck::Pod + bytemuck::Zeroable + 'static>(
     ctx: &GpuContext,
-    input: &Tensor<u8, GpuStorage<u8>>,
-    min_radius: f32,
-    max_radius: f32,
+    input: &crate::GpuTensor<T>,
+    min_radius: T,
+    max_radius: T,
     threshold: u32,
 ) -> Result<Vec<HoughCircle>> {
-    let (h, w) = input.shape.hw();
+    // Only f32 WGSL shader available
+    if cv_core::DataType::from_type::<T>().ok() != Some(cv_core::DataType::F32) {
+        return Err(crate::Error::NotSupported(
+            "Hough Circles GPU kernel only supports f32".into(),
+        ));
+    }
 
-    let num_radii = (max_radius - min_radius).ceil() as u32 + 1;
+    let (h, w) = input.shape.hw();
+    let min_radius_f32 = min_radius.to_f32();
+    let max_radius_f32 = max_radius.to_f32();
+
+    let num_radii = (max_radius_f32 - min_radius_f32).ceil() as u32 + 1;
     let acc_len = (num_radii * h as u32 * w as u32) as usize;
     let acc_byte_size = (acc_len * 4) as u64;
 
@@ -48,8 +56,8 @@ pub fn hough_circles(
     let params = CircleParams {
         width: w as u32,
         height: h as u32,
-        min_radius,
-        max_radius,
+        min_radius: min_radius_f32,
+        max_radius: max_radius_f32,
         num_radii,
         edge_threshold: 50.0, // Default edge threshold
     };
@@ -137,14 +145,13 @@ pub fn hough_circles(
     let img_size = (w * h) as u32;
 
     for i in 0..num_radii {
-        let r = min_radius + i as f32;
+        let r = min_radius_f32 + i as f32;
         let slice_offset = i * img_size;
 
         for y in 0..h as u32 {
             for x in 0..w as u32 {
                 let val = acc_data[(slice_offset + y * w as u32 + x) as usize];
                 if val >= threshold {
-                    // Simple local maxima check in 3x3x3 neighborhood (spatially and radii)
                     let mut is_local_max = true;
                     'outer: for dr in -1..=1 {
                         for dy in -1..=1 {

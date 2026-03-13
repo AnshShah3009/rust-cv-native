@@ -17,6 +17,8 @@ pub mod tensor_ext;
 pub use gpu::*;
 pub use gpu_kernels::*;
 pub use gpu_storage::GpuStorage;
+/// Convenience type alias for a GPU-backed tensor with typed storage.
+pub type GpuTensor<T> = cv_core::Tensor<T, crate::storage::WgpuGpuStorage<T>>;
 
 pub use backend::{
     BackendType, Capability, ComputeBackend, DeviceId, QueueId, QueueType, SubmissionIndex,

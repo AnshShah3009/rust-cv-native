@@ -3,7 +3,7 @@ use crate::context::{
     TemplateMatchMethod, ThresholdType, WarpType,
 };
 use crate::{BackendType, DeviceId, Error, Result};
-use cv_core::{storage::Storage, Tensor};
+use cv_core::{storage::Storage, Tensor, Float};
 
 /// Experimental MLX Context for Apple Silicon
 /// WARNING: Currently untested on actual hardware.
@@ -25,6 +25,7 @@ impl MlxContext {
         }
         #[cfg(not(feature = "mlx"))]
         {
+            let _ = DeviceId(2);
             None
         }
     }
@@ -47,12 +48,12 @@ impl ComputeContext for MlxContext {
         crate::SubmissionIndex(0)
     }
 
-    fn convolve_2d<S: Storage<f32> + 'static>(
+    fn convolve_2d<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<f32, S>,
-        _kernel: &Tensor<f32, S>,
-        _border_mode: BorderMode,
-    ) -> Result<Tensor<f32, S>> {
+        _input: &Tensor<T, S>,
+        _kernel: &Tensor<T, S>,
+        _border_mode: BorderMode<T>,
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported(
             "MLX convolve_2d not implemented".into(),
         ))
@@ -68,40 +69,40 @@ impl ComputeContext for MlxContext {
         Err(Error::NotSupported("MLX dispatch not implemented".into()))
     }
 
-    fn threshold<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn threshold<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
-        _thresh: u8,
-        _max_value: u8,
+        _input: &Tensor<T, S>,
+        _thresh: T,
+        _max_value: T,
         _typ: ThresholdType,
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported("MLX threshold not implemented".into()))
     }
 
-    fn sobel<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn sobel<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
+        _input: &Tensor<T, S>,
         _dx: i32,
         _dy: i32,
         _ksize: usize,
-    ) -> Result<(Tensor<u8, S>, Tensor<u8, S>)> {
+    ) -> Result<(Tensor<T, S>, Tensor<T, S>)> {
         Err(Error::NotSupported("MLX sobel not implemented".into()))
     }
 
-    fn canny<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn canny<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
-        _low_threshold: f32,
-        _high_threshold: f32,
-    ) -> Result<Tensor<u8, S>> {
+        _input: &Tensor<T, S>,
+        _low_threshold: T,
+        _high_threshold: T,
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported("MLX canny not implemented".into()))
     }
 
-    fn hough_lines<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn hough_lines<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
-        _rho: f32,
-        _theta: f32,
+        _input: &Tensor<T, S>,
+        _rho: T,
+        _theta: T,
         _threshold: u32,
     ) -> Result<Vec<cv_core::HoughLine>> {
         Err(Error::NotSupported(
@@ -109,11 +110,11 @@ impl ComputeContext for MlxContext {
         ))
     }
 
-    fn hough_circles<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn hough_circles<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
-        _min_radius: f32,
-        _max_radius: f32,
+        _input: &Tensor<T, S>,
+        _min_radius: T,
+        _max_radius: T,
         _threshold: u32,
     ) -> Result<Vec<cv_core::HoughCircle>> {
         Err(Error::NotSupported(
@@ -121,53 +122,65 @@ impl ComputeContext for MlxContext {
         ))
     }
 
-    fn match_template<S: Storage<u8> + 'static, OS: Storage<f32> + 'static>(
+    fn match_template<
+        T: Float + 'static,
+        S: Storage<T> + 'static,
+        OS: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        _image: &Tensor<u8, S>,
-        _template: &Tensor<u8, S>,
+        _image: &Tensor<T, S>,
+        _template: &Tensor<T, S>,
         _method: TemplateMatchMethod,
-    ) -> Result<Tensor<f32, OS>> {
+    ) -> Result<Tensor<T, OS>> {
         Err(Error::NotSupported(
             "MLX match_template not implemented".into(),
         ))
     }
 
-    fn detect_objects<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn detect_objects<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
-        _threshold: f32,
+        _input: &Tensor<T, S>,
+        _threshold: T,
     ) -> Result<Vec<cv_core::Detection>> {
         Err(Error::NotSupported(
             "MLX detect_objects not implemented".into(),
         ))
     }
 
-    fn stereo_match<S: Storage<u8> + 'static, OS: Storage<f32> + 'static>(
+    fn stereo_match<
+        T: Float + 'static,
+        S: Storage<T> + 'static,
+        OS: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        _left: &Tensor<u8, S>,
-        _right: &Tensor<u8, S>,
+        _left: &Tensor<T, S>,
+        _right: &Tensor<T, S>,
         _params: &StereoMatchParams,
-    ) -> Result<Tensor<f32, OS>> {
+    ) -> Result<Tensor<T, OS>> {
         Err(Error::NotSupported(
             "MLX stereo_match not implemented".into(),
         ))
     }
 
-    fn triangulate_points<S: Storage<f32> + 'static, OS: Storage<f32> + 'static>(
+    fn triangulate_points<
+        T: Float + 'static,
+        S: Storage<T> + 'static,
+        OS: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        _proj_left: &[[f32; 4]; 3],
-        _proj_right: &[[f32; 4]; 3],
-        _points_left: &Tensor<f32, S>,
-        _points_right: &Tensor<f32, S>,
-    ) -> Result<Tensor<f32, OS>> {
+        _proj_left: &[[T; 4]; 3],
+        _proj_right: &[[T; 4]; 3],
+        _points_left: &Tensor<T, S>,
+        _points_right: &Tensor<T, S>,
+    ) -> Result<Tensor<T, OS>> {
         Err(Error::NotSupported(
             "MLX triangulate_points not implemented".into(),
         ))
     }
 
-    fn find_chessboard_corners<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn find_chessboard_corners<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _image: &Tensor<u8, S>,
+        _image: &Tensor<T, S>,
         _pattern_size: (usize, usize),
     ) -> Result<Vec<cv_core::KeyPoint>> {
         Err(Error::NotSupported(
@@ -185,150 +198,155 @@ impl ComputeContext for MlxContext {
         Err(Error::NotSupported("MLX morphology not implemented".into()))
     }
 
-    fn warp<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn warp<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
-        _matrix: &[[f32; 3]; 3],
+        _input: &Tensor<T, S>,
+        _matrix: &[[T; 3]; 3],
         _new_shape: (usize, usize),
         _typ: WarpType,
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported("MLX warp not implemented".into()))
     }
 
-    fn nms<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn nms<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<f32, S>,
-        _threshold: f32,
+        _input: &Tensor<T, S>,
+        _threshold: T,
         _window_size: usize,
-    ) -> Result<Tensor<f32, S>> {
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported("MLX nms not implemented".into()))
     }
 
-    fn nms_boxes<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn nms_boxes<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<f32, S>,
-        _iou_threshold: f32,
+        _input: &Tensor<T, S>,
+        _iou_threshold: T,
     ) -> Result<Vec<usize>> {
         Err(Error::NotSupported("MLX nms_boxes not implemented".into()))
     }
 
-    fn nms_rotated_boxes<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn nms_rotated_boxes<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<f32, S>,
-        _iou_threshold: f32,
+        _input: &Tensor<T, S>,
+        _iou_threshold: T,
     ) -> Result<Vec<usize>> {
         Err(Error::NotSupported(
             "MLX nms_rotated_boxes not implemented".into(),
         ))
     }
 
-    fn nms_polygons(
+    fn nms_polygons<T: Float + 'static>(
         &self,
         _polygons: &[cv_core::Polygon],
-        _scores: &[f32],
-        _iou_threshold: f32,
+        _scores: &[T],
+        _iou_threshold: T,
     ) -> Result<Vec<usize>> {
         Err(Error::NotSupported(
             "MLX nms_polygons not implemented".into(),
         ))
     }
 
-    fn pointcloud_transform<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn pyramid_down<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _points: &Tensor<f32, S>,
-        _transform: &[[f32; 4]; 4],
-    ) -> Result<Tensor<f32, S>> {
+        _input: &Tensor<T, S>,
+    ) -> Result<Tensor<T, S>> {
+        Err(Error::NotSupported("MLX pyramid_down not implemented".into()))
+    }
+
+    fn pointcloud_transform<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
+        &self,
+        _points: &Tensor<T, S>,
+        _transform: &[[T; 4]; 4],
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported(
             "MLX pointcloud_transform not implemented".into(),
         ))
     }
 
     /// Compute point-cloud normals on Apple Silicon.
-    ///
-    /// Execution strategy:
-    /// 1. **Metal via wgpu** — if a `GpuContext` is available (which on Apple Silicon
-    ///    automatically uses the Metal backend), runs the Morton-sort GPU path.
-    /// 2. **CPU fallback** — voxel-hash kNN + analytic 3×3 eigensolver
-    ///    (Open3D / Geometric Tools algorithm), fully parallel via Rayon.
-    ///
-    /// This means Apple Silicon users get Metal-accelerated normals with no extra
-    /// configuration — the same WGSL shaders run on Metal via wgpu.
-    fn pointcloud_normals<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn pointcloud_normals<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        points: &Tensor<f32, S>,
+        points: &Tensor<T, S>,
         k_neighbors: u32,
-    ) -> Result<Tensor<f32, S>> {
-        let src = points.storage.as_slice().ok_or_else(|| {
-            Error::InvalidInput("Points not on CPU — transfer to CPU first".into())
-        })?;
-        let num_points = points.shape.height;
-        let k = (k_neighbors as usize)
-            .max(3)
-            .min(num_points.saturating_sub(1));
+    ) -> Result<Tensor<T, S>> {
+        use std::any::TypeId;
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            let src = points.storage.as_slice().ok_or_else(|| {
+                Error::InvalidInput("Points not on CPU — transfer to CPU first".into())
+            })?;
+            let src_f32: &[f32] = bytemuck::cast_slice(src);
+            let num_points = points.shape.height;
+            let k = (k_neighbors as usize)
+                .max(3)
+                .min(num_points.saturating_sub(1));
 
-        // Convert flat vec4 storage → nalgebra Vector3 slice.
-        let vecs: Vec<nalgebra::Vector3<f32>> = src
-            .chunks(4)
-            .take(num_points)
-            .map(|c| nalgebra::Vector3::new(c[0], c[1], c[2]))
-            .collect();
+            // Convert flat vec4 storage → nalgebra Vector3 slice.
+            let vecs: Vec<nalgebra::Vector3<f32>> = src_f32
+                .chunks(4)
+                .take(num_points)
+                .map(|c| nalgebra::Vector3::new(c[0], c[1], c[2]))
+                .collect();
 
-        // Try Metal (via wgpu GpuContext); fall back to fast CPU path.
-        let normals =
-            crate::gpu_kernels::pointcloud::compute_normals_morton_gpu_or_cpu(&vecs, k as u32);
+            // Try Metal (via wgpu GpuContext); fall back to fast CPU path.
+            let normals =
+                crate::gpu_kernels::pointcloud::compute_normals_morton_gpu_or_cpu(&vecs, k as u32);
 
-        // Write normals back to output storage (same type S).
-        let mut out = S::new(num_points * 4, 0.0).map_err(Error::MemoryError)?;
-        if let Some(dst) = out.as_mut_slice() {
-            for (i, n) in normals.iter().enumerate() {
-                dst[i * 4] = n.x;
-                dst[i * 4 + 1] = n.y;
-                dst[i * 4 + 2] = n.z;
-                dst[i * 4 + 3] = 0.0;
+            // Write normals back to output storage (same type S).
+            let mut out = S::new(num_points * 4, T::ZERO).map_err(Error::MemoryError)?;
+            if let Some(dst) = out.as_mut_slice() {
+                let dst_f32: &mut [f32] = bytemuck::cast_slice_mut(dst);
+                for (i, n) in normals.iter().enumerate() {
+                    dst_f32[i * 4] = n.x;
+                    dst_f32[i * 4 + 1] = n.y;
+                    dst_f32[i * 4 + 2] = n.z;
+                    dst_f32[i * 4 + 3] = 0.0;
+                }
             }
+            Ok(Tensor {
+                storage: out,
+                shape: points.shape,
+                dtype: points.dtype,
+                _phantom: std::marker::PhantomData,
+            })
+        } else {
+            Err(Error::NotSupported("MLX pointcloud_normals only supports f32".into()))
         }
-        Ok(Tensor {
-            storage: out,
-            shape: points.shape,
-            dtype: points.dtype,
-            _phantom: std::marker::PhantomData,
-        })
     }
 
-    fn tsdf_integrate<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn tsdf_integrate<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _depth_image: &Tensor<f32, S>,
-        _camera_pose: &[[f32; 4]; 4],
-        _intrinsics: &[f32; 4],
-        _voxel_volume: &mut Tensor<f32, S>,
-        _voxel_size: f32,
-        _truncation: f32,
+        _depth_image: &Tensor<T, S>,
+        _camera_pose: &[[T; 4]; 4],
+        _intrinsics: &[T; 4],
+        _voxel_volume: &mut Tensor<T, S>,
+        _voxel_size: T,
+        _truncation: T,
     ) -> Result<()> {
         Err(Error::NotSupported(
             "MLX tsdf_integrate not implemented".into(),
         ))
     }
 
-    fn tsdf_raycast<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn tsdf_raycast<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _tsdf_volume: &Tensor<f32, S>,
-        _camera_pose: &[[f32; 4]; 4],
-        _intrinsics: &[f32; 4],
+        _tsdf_volume: &Tensor<T, S>,
+        _camera_pose: &[[T; 4]; 4],
+        _intrinsics: &[T; 4],
         _image_size: (u32, u32),
-        _depth_range: (f32, f32),
-        _voxel_size: f32,
-        _truncation: f32,
-    ) -> Result<Tensor<f32, S>> {
+        _depth_range: (T, T),
+        _voxel_size: T,
+        _truncation: T,
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported(
             "MLX tsdf_raycast not implemented".into(),
         ))
     }
 
-    fn tsdf_extract_mesh<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn tsdf_extract_mesh<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _tsdf_volume: &Tensor<f32, S>,
-        _voxel_size: f32,
-        _iso_level: f32,
+        _tsdf_volume: &Tensor<T, S>,
+        _voxel_size: T,
+        _iso_level: T,
         _max_triangles: u32,
     ) -> Result<Vec<crate::gpu_kernels::marching_cubes::Vertex>> {
         Err(Error::NotSupported(
@@ -336,71 +354,71 @@ impl ComputeContext for MlxContext {
         ))
     }
 
-    fn optical_flow_lk<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn optical_flow_lk<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _prev_pyramid: &[Tensor<f32, S>],
-        _next_pyramid: &[Tensor<f32, S>],
-        _points: &[[f32; 2]],
+        _prev_pyramid: &[Tensor<T, S>],
+        _next_pyramid: &[Tensor<T, S>],
+        _points: &[[T; 2]],
         _window_size: usize,
         _max_iters: u32,
-    ) -> Result<Vec<[f32; 2]>> {
+    ) -> Result<Vec<[T; 2]>> {
         Err(Error::NotSupported(
             "MLX optical_flow_lk not implemented".into(),
         ))
     }
 
-    fn cvt_color<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn cvt_color<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
+        _input: &Tensor<T, S>,
         _code: ColorConversion,
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported("MLX cvt_color not implemented".into()))
     }
 
-    fn resize<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn resize<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
+        _input: &Tensor<T, S>,
         _new_shape: (usize, usize),
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported("MLX resize not implemented".into()))
     }
 
-    fn bilateral_filter<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn bilateral_filter<T: Float + bytemuck::Pod + bytemuck::Zeroable + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
+        _input: &Tensor<T, S>,
         _d: i32,
-        _sigma_color: f32,
-        _sigma_space: f32,
-    ) -> Result<Tensor<u8, S>> {
+        _sigma_color: T,
+        _sigma_space: T,
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported(
             "MLX bilateral_filter not implemented".into(),
         ))
     }
 
-    fn fast_detect<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn fast_detect<T: Float + bytemuck::Pod + bytemuck::Zeroable + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
-        _threshold: u8,
+        _input: &Tensor<T, S>,
+        _threshold: T,
         _non_max_suppression: bool,
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported(
             "MLX fast_detect not implemented".into(),
         ))
     }
 
-    fn gaussian_blur<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn gaussian_blur<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<u8, S>,
-        _sigma: f32,
+        _input: &Tensor<T, S>,
+        _sigma: T,
         _k_size: usize,
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported(
             "MLX gaussian_blur not implemented".into(),
         ))
     }
 
     fn subtract<
-        T: Clone + Copy + bytemuck::Pod + std::fmt::Debug,
+        T: Float + 'static + bytemuck::Pod + std::fmt::Debug,
         S: Storage<T> + cv_core::StorageFactory<T> + 'static,
     >(
         &self,
@@ -421,22 +439,22 @@ impl ComputeContext for MlxContext {
         ))
     }
 
-    fn sift_extrema<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn sift_extrema<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _dog_prev: &Tensor<f32, S>,
-        _dog_curr: &Tensor<f32, S>,
-        _dog_next: &Tensor<f32, S>,
-        _threshold: f32,
-        _edge_threshold: f32,
+        _dog_prev: &Tensor<T, S>,
+        _dog_curr: &Tensor<T, S>,
+        _dog_next: &Tensor<T, S>,
+        _threshold: T,
+        _edge_threshold: T,
     ) -> Result<Tensor<u8, cv_core::storage::CpuStorage<u8>>> {
         Err(Error::NotSupported(
             "MLX sift_extrema not implemented".into(),
         ))
     }
 
-    fn compute_sift_descriptors<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn compute_sift_descriptors<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _image: &Tensor<f32, S>,
+        _image: &Tensor<T, S>,
         _keypoints: &cv_core::KeyPoints,
     ) -> Result<cv_core::Descriptors> {
         Err(Error::NotSupported(
@@ -444,89 +462,89 @@ impl ComputeContext for MlxContext {
         ))
     }
 
-    fn icp_correspondences<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn icp_correspondences<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _src: &Tensor<f32, S>,
-        _tgt: &Tensor<f32, S>,
-        _max_dist: f32,
-    ) -> Result<Vec<(usize, usize, f32)>> {
+        _src: &Tensor<T, S>,
+        _tgt: &Tensor<T, S>,
+        _max_dist: T,
+    ) -> Result<Vec<(usize, usize, T)>> {
         Err(Error::NotSupported(
             "MLX icp_correspondences not implemented".into(),
         ))
     }
 
-    fn icp_accumulate<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn icp_accumulate<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _source: &Tensor<f32, S>,
-        _target: &Tensor<f32, S>,
-        _target_normals: &Tensor<f32, S>,
+        _source: &Tensor<T, S>,
+        _target: &Tensor<T, S>,
+        _target_normals: &Tensor<T, S>,
         _correspondences: &[(u32, u32)],
-        _transform: &nalgebra::Matrix4<f32>,
-    ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
+        _transform: &nalgebra::Matrix4<T>,
+    ) -> Result<(nalgebra::Matrix6<T>, nalgebra::Vector6<T>)> {
         Err(Error::NotSupported(
             "MLX icp_accumulate not implemented".into(),
         ))
     }
 
-    fn dense_icp_step<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn dense_icp_step<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _source_depth: &Tensor<f32, S>,
-        _target_data: &Tensor<f32, S>,
-        _intrinsics: &[f32; 4],
-        _initial_guess: &nalgebra::Matrix4<f32>,
-        _max_dist: f32,
-        _max_angle: f32,
-    ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
+        _source_depth: &Tensor<T, S>,
+        _target_data: &Tensor<T, S>,
+        _intrinsics: &[T; 4],
+        _initial_guess: &nalgebra::Matrix4<T>,
+        _max_dist: T,
+        _max_angle: T,
+    ) -> Result<(nalgebra::Matrix6<T>, nalgebra::Vector6<T>)> {
         Err(Error::NotSupported(
             "MLX dense_icp_step not implemented".into(),
         ))
     }
 
-    fn akaze_diffusion<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn akaze_diffusion<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<f32, S>,
-        _k: f32,
-        _tau: f32,
-    ) -> Result<Tensor<f32, S>> {
+        _input: &Tensor<T, S>,
+        _k: T,
+        _tau: T,
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported(
             "MLX akaze_diffusion not implemented".into(),
         ))
     }
 
-    fn akaze_derivatives<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn akaze_derivatives<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<f32, S>,
-    ) -> Result<(Tensor<f32, S>, Tensor<f32, S>, Tensor<f32, S>)> {
+        _input: &Tensor<T, S>,
+    ) -> Result<(Tensor<T, S>, Tensor<T, S>, Tensor<T, S>)> {
         Err(Error::NotSupported(
             "MLX akaze_derivatives not implemented".into(),
         ))
     }
 
-    fn akaze_contrast_k<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn akaze_contrast_k<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        _input: &Tensor<f32, S>,
-    ) -> Result<f32> {
+        _input: &Tensor<T, S>,
+    ) -> Result<T> {
         Err(Error::NotSupported(
             "MLX akaze_contrast_k not implemented".into(),
         ))
     }
 
-    fn spmv<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn spmv<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
         _row_ptr: &[u32],
         _col_indices: &[u32],
-        _values: &[f32],
-        _x: &Tensor<f32, S>,
-    ) -> Result<Tensor<f32, S>> {
+        _values: &[T],
+        _x: &Tensor<T, S>,
+    ) -> Result<Tensor<T, S>> {
         Err(Error::NotSupported("MLX spmv not implemented".into()))
     }
 
-    fn mog2_update<S1: Storage<f32> + 'static, S2: Storage<u32> + 'static>(
+    fn mog2_update<T: Float + 'static, S1: Storage<T> + 'static, S2: Storage<u32> + 'static>(
         &self,
-        _frame: &Tensor<f32, S1>,
-        _model: &mut Tensor<f32, S1>,
+        _frame: &Tensor<T, S1>,
+        _model: &mut Tensor<T, S1>,
         _mask: &mut Tensor<u32, S2>,
-        _params: &Mog2Params,
+        _params: &Mog2Params<T>,
     ) -> Result<()> {
         Err(Error::NotSupported(
             "MLX mog2_update not implemented".into(),

@@ -41,7 +41,7 @@ struct Keypoint {
     padding: i32,
 }
 
-@group(0) @binding(0) var<storage, read> score_map_2: array<u32>;
+@group(0) @binding(0) var<storage, read> score_map_2: array<u32>; // Packed u8
 @group(0) @binding(1) var<storage, read> indices: array<u32>;
 @group(0) @binding(2) var<storage, read_write> out_keypoints: array<Keypoint>;
 @group(0) @binding(3) var<uniform> params_2: Params;
@@ -54,17 +54,9 @@ fn collect_points(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let val4 = score_map_2[gid];
     var base_idx = indices[gid];
     
-    let base_x = (gid * 4u) % params_2.width;
-    let base_y = (gid * 4u) / params_2.width;
-    
     for (var i = 0u; i < 4u; i++) {
         let score = (val4 >> (i * 8u)) & 0xFFu;
         if (score > 0u) {
-            let px = base_x + i;
-            let py = base_y; // Simplification: assumes width is multiple of 4
-            
-            // Note: Actual (x,y) might wrap if width not multiple of 4.
-            // Correct calculation:
             let total_idx = gid * 4u + i;
             let real_x = total_idx % params_2.width;
             let real_y = total_idx / params_2.width;

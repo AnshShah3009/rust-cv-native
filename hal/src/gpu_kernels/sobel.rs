@@ -17,11 +17,11 @@ struct SobelParams {
 
 pub fn sobel(
     ctx: &GpuContext,
-    input: &Tensor<u8, GpuStorage<u8>>,
+    input: &Tensor<f32, GpuStorage<f32>>,
     dx: i32,
     dy: i32,
     ksize: usize,
-) -> Result<(Tensor<u8, GpuStorage<u8>>, Tensor<u8, GpuStorage<u8>>)> {
+) -> Result<(Tensor<f32, GpuStorage<f32>>, Tensor<f32, GpuStorage<f32>>)> {
     if dx != 1 || dy != 1 || ksize != 3 {
         return Err(crate::Error::NotSupported(
             "GPU Sobel only supports dx=1, dy=1, ksize=3 currently".into(),
@@ -30,7 +30,7 @@ pub fn sobel(
 
     let len = input.shape.len();
     let (h, w) = input.shape.hw();
-    let byte_size = (len.div_ceil(4) * 4) as u64;
+    let byte_size = (len * 4) as u64;
 
     // Output buffers
     let gx_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {

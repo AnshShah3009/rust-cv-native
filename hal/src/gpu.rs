@@ -25,7 +25,8 @@ pub struct GpuContext {
 impl GpuContext {
     /// Safely downcasts a GpuStorage result to the requested generic storage S.
     /// Uses TypeId checks to avoid allocations when S is GpuStorage.
-    fn downcast_storage<
+    #[allow(dead_code)]
+    pub(crate) fn downcast_storage<
         T: Clone + Copy + std::fmt::Debug + bytemuck::Pod + 'static,
         S: Storage<T> + 'static,
     >(
@@ -74,43 +75,65 @@ impl ComputeContext for GpuContext {
         SubmissionIndex(self.last_submission.load(Ordering::SeqCst))
     }
 
-    fn convolve_2d<S: Storage<f32> + 'static>(
+    fn convolve_2d<T: cv_core::Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<f32, S>,
-        kernel: &Tensor<f32, S>,
-        border_mode: BorderMode,
-    ) -> crate::Result<Tensor<f32, S>> {
+        input: &Tensor<T, S>,
+        kernel: &Tensor<T, S>,
+        border_mode: BorderMode<T>,
+    ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
         use std::marker::PhantomData;
+        use std::any::TypeId;
 
-        if let (Some(input_storage), Some(kernel_storage)) = (
-            input.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
-            kernel.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
-        ) {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: input.shape,
-                dtype: input.dtype,
-                _phantom: PhantomData,
-            };
-            let kernel_gpu = Tensor {
-                storage: kernel_storage.clone(),
-                shape: kernel.shape,
-                dtype: kernel.dtype,
-                _phantom: PhantomData,
-            };
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let (Some(input_storage), Some(kernel_storage)) = (
+                input.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
+                kernel.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
+            ) {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
+                let kernel_gpu = Tensor {
+                    storage: kernel_storage.clone(),
+                    shape: kernel.shape,
+                    dtype: kernel.dtype,
+                    _phantom: PhantomData,
+                };
 
-            let result_gpu = crate::gpu_kernels::convolve::convolve_2d(
-                self,
-                &input_gpu,
-                &kernel_gpu,
-                border_mode,
-            )?;
-            self.downcast_storage(result_gpu)
+                let border_f32: crate::context::BorderMode<f32> = match border_mode {
+                    crate::context::BorderMode::Constant(v) => crate::context::BorderMode::Constant(v.to_f32()),
+                    crate::context::BorderMode::Replicate => crate::context::BorderMode::Replicate,
+                    crate::context::BorderMode::Reflect => crate::context::BorderMode::Reflect,
+                    crate::context::BorderMode::Wrap => crate::context::BorderMode::Wrap,
+                };
+                let result_gpu = crate::gpu_kernels::convolve::convolve_2d(
+                    self,
+                    &input_gpu,
+                    &kernel_gpu,
+                    border_f32,
+                )?;
+                
+                let storage_any = result_gpu.storage.as_any();
+                if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                    Ok(Tensor {
+                        storage: storage_s.clone(),
+                        shape: result_gpu.shape,
+                        dtype: result_gpu.dtype,
+                        _phantom: PhantomData,
+                    })
+                } else {
+                    Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
+                }
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into(),
+                ))
+            }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU convolve_2d only supports f32".into()))
         }
     }
 
@@ -184,18 +207,18 @@ impl ComputeContext for GpuContext {
         Ok(())
     }
 
-    fn threshold<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn threshold<T: cv_core::Float + bytemuck::Pod + bytemuck::Zeroable + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<u8, S>,
-        thresh: u8,
-        max_value: u8,
+        input: &Tensor<T, S>,
+        thresh: T,
+        max_value: T,
         typ: ThresholdType,
-    ) -> crate::Result<Tensor<u8, S>> {
+    ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            let input_gpu = Tensor {
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<T>>() {
+            let input_gpu = crate::GpuTensor {
                 storage: input_storage.clone(),
                 shape: input.shape,
                 dtype: input.dtype,
@@ -204,7 +227,18 @@ impl ComputeContext for GpuContext {
 
             let result_gpu =
                 crate::gpu_kernels::threshold::threshold(self, &input_gpu, thresh, max_value, typ)?;
-            self.downcast_storage(result_gpu)
+            
+            let storage_any = result_gpu.storage.as_any();
+            if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                Ok(Tensor {
+                    storage: storage_s.clone(),
+                    shape: result_gpu.shape,
+                    dtype: result_gpu.dtype,
+                    _phantom: PhantomData,
+                })
+            } else {
+                Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
+            }
         } else {
             Err(crate::Error::InvalidInput(
                 "GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into(),
@@ -212,30 +246,83 @@ impl ComputeContext for GpuContext {
         }
     }
 
-    fn sobel<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn sobel<T: cv_core::Float + bytemuck::Pod + std::fmt::Debug + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<u8, S>,
+        input: &Tensor<T, S>,
         dx: i32,
         dy: i32,
         ksize: usize,
-    ) -> crate::Result<(Tensor<u8, S>, Tensor<u8, S>)> {
+    ) -> crate::Result<(Tensor<T, S>, Tensor<T, S>)> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            let input_gpu = Tensor {
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
+
+                let (gx_gpu, gy_gpu) =
+                    crate::gpu_kernels::sobel::sobel(self, &input_gpu, dx, dy, ksize)?;
+                let gx_s = gx_gpu.storage.as_any().downcast_ref::<S>()
+                    .ok_or_else(|| crate::Error::InvalidInput("Failed to downcast gx".into()))?.clone();
+                let gy_s = gy_gpu.storage.as_any().downcast_ref::<S>()
+                    .ok_or_else(|| crate::Error::InvalidInput("Failed to downcast gy".into()))?.clone();
+                Ok((
+                    Tensor { storage: gx_s, shape: gx_gpu.shape, dtype: gx_gpu.dtype, _phantom: PhantomData },
+                    Tensor { storage: gy_s, shape: gy_gpu.shape, dtype: gy_gpu.dtype, _phantom: PhantomData },
+                ))
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
+        } else {
+            Err(crate::Error::NotSupported("GPU sobel only supports f32".into()))
+        }
+    }
+
+    fn canny<
+        T: cv_core::Float + bytemuck::Pod + bytemuck::Zeroable + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
+        &self,
+        input: &Tensor<T, S>,
+        low_threshold: T,
+        high_threshold: T,
+    ) -> crate::Result<Tensor<T, S>> {
+        
+        use std::marker::PhantomData;
+
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<crate::storage::GpuStorage<f32>>() {
+            let input_gpu: crate::GpuTensor<f32> = cv_core::Tensor {
                 storage: input_storage.clone(),
                 shape: input.shape,
                 dtype: input.dtype,
                 _phantom: PhantomData,
             };
 
-            let (gx_gpu, gy_gpu) =
-                crate::gpu_kernels::sobel::sobel(self, &input_gpu, dx, dy, ksize)?;
-            Ok((
-                self.downcast_storage(gx_gpu)?,
-                self.downcast_storage(gy_gpu)?,
-            ))
+            let result_gpu = crate::gpu_kernels::canny::canny(
+                self,
+                &input_gpu,
+                low_threshold.to_f32(),
+                high_threshold.to_f32(),
+            )?;
+            let storage_any = result_gpu.storage.as_any();
+            if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                Ok(Tensor {
+                    storage: storage_s.clone(),
+                    shape: result_gpu.shape,
+                    dtype: result_gpu.dtype,
+                    _phantom: PhantomData,
+                })
+            } else {
+                Err(crate::Error::InvalidInput("Failed to downcast canny GPU result".into()))
+            }
         } else {
             Err(crate::Error::InvalidInput(
                 "GpuContext requires GpuStorage tensors".into(),
@@ -243,52 +330,35 @@ impl ComputeContext for GpuContext {
         }
     }
 
-    fn canny<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn hough_lines<
+        T: cv_core::Float + bytemuck::Pod + bytemuck::Zeroable + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        input: &Tensor<u8, S>,
-        low_threshold: f32,
-        high_threshold: f32,
-    ) -> crate::Result<Tensor<u8, S>> {
-        use crate::storage::GpuStorage;
-        use std::marker::PhantomData;
-
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: input.shape,
-                dtype: input.dtype,
-                _phantom: PhantomData,
-            };
-
-            let result_gpu =
-                crate::gpu_kernels::canny::canny(self, &input_gpu, low_threshold, high_threshold)?;
-            self.downcast_storage(result_gpu)
-        } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
-        }
-    }
-
-    fn hough_lines<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
-        &self,
-        input: &Tensor<u8, S>,
-        rho: f32,
-        theta: f32,
+        input: &Tensor<T, S>,
+        rho: T,
+        theta: T,
         threshold: u32,
     ) -> crate::Result<Vec<cv_core::HoughLine>> {
-        use crate::storage::GpuStorage;
+        
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            let input_gpu = Tensor {
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<crate::storage::GpuStorage<f32>>() {
+            let input_gpu: crate::GpuTensor<f32> = cv_core::Tensor {
                 storage: input_storage.clone(),
                 shape: input.shape,
                 dtype: input.dtype,
                 _phantom: PhantomData,
             };
 
-            crate::gpu_kernels::hough::hough_lines(self, &input_gpu, rho, theta, threshold)
+            let lines = crate::gpu_kernels::hough::hough_lines(
+                self,
+                &input_gpu,
+                rho.to_f32(),
+                theta.to_f32(),
+                threshold,
+            )?;
+            Ok(bytemuck::cast_vec(lines))
         } else {
             Err(crate::Error::InvalidInput(
                 "GpuContext requires GpuStorage tensors".into(),
@@ -296,27 +366,35 @@ impl ComputeContext for GpuContext {
         }
     }
 
-    fn hough_circles<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn hough_circles<
+        T: cv_core::Float + bytemuck::Pod + bytemuck::Zeroable + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        input: &Tensor<u8, S>,
-        min_radius: f32,
-        max_radius: f32,
+        input: &Tensor<T, S>,
+        min_radius: T,
+        max_radius: T,
         threshold: u32,
     ) -> crate::Result<Vec<cv_core::HoughCircle>> {
-        use crate::storage::GpuStorage;
+        
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            let input_gpu = Tensor {
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<crate::storage::GpuStorage<f32>>() {
+            let input_gpu: crate::GpuTensor<f32> = cv_core::Tensor {
                 storage: input_storage.clone(),
                 shape: input.shape,
                 dtype: input.dtype,
                 _phantom: PhantomData,
             };
 
-            crate::gpu_kernels::hough_circles::hough_circles(
-                self, &input_gpu, min_radius, max_radius, threshold,
-            )
+            let circles = crate::gpu_kernels::hough_circles::hough_circles(
+                self,
+                &input_gpu,
+                min_radius.to_f32(),
+                max_radius.to_f32(),
+                threshold,
+            )?;
+            Ok(bytemuck::cast_vec(circles))
         } else {
             Err(crate::Error::InvalidInput(
                 "GpuContext requires GpuStorage tensors".into(),
@@ -324,26 +402,30 @@ impl ComputeContext for GpuContext {
         }
     }
 
-    fn match_template<S: Storage<u8> + 'static, OS: Storage<f32> + 'static>(
+    fn match_template<
+        T: cv_core::Float + bytemuck::Pod + bytemuck::Zeroable + 'static,
+        S: Storage<T> + 'static,
+        OS: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        image: &Tensor<u8, S>,
-        template: &Tensor<u8, S>,
+        image: &Tensor<T, S>,
+        template: &Tensor<T, S>,
         method: TemplateMatchMethod,
-    ) -> crate::Result<Tensor<f32, OS>> {
-        use crate::storage::GpuStorage;
+    ) -> crate::Result<Tensor<T, OS>> {
+        
         use std::marker::PhantomData;
 
         if let (Some(img_storage), Some(templ_storage)) = (
-            image.storage.as_any().downcast_ref::<GpuStorage<u8>>(),
-            template.storage.as_any().downcast_ref::<GpuStorage<u8>>(),
+            image.storage.as_any().downcast_ref::<crate::storage::GpuStorage<f32>>(),
+            template.storage.as_any().downcast_ref::<crate::storage::GpuStorage<f32>>(),
         ) {
-            let img_gpu = Tensor {
+            let img_gpu: crate::GpuTensor<f32> = cv_core::Tensor {
                 storage: img_storage.clone(),
                 shape: image.shape,
                 dtype: image.dtype,
                 _phantom: PhantomData,
             };
-            let templ_gpu = Tensor {
+            let templ_gpu: crate::GpuTensor<f32> = cv_core::Tensor {
                 storage: templ_storage.clone(),
                 shape: template.shape,
                 dtype: template.dtype,
@@ -353,7 +435,17 @@ impl ComputeContext for GpuContext {
             let result_gpu = crate::gpu_kernels::template_matching::match_template(
                 self, &img_gpu, &templ_gpu, method,
             )?;
-            self.downcast_storage(result_gpu)
+            let storage_any = result_gpu.storage.as_any();
+            if let Some(storage_s) = storage_any.downcast_ref::<OS>() {
+                Ok(Tensor {
+                    storage: storage_s.clone(),
+                    shape: result_gpu.shape,
+                    dtype: result_gpu.dtype,
+                    _phantom: PhantomData,
+                })
+            } else {
+                Err(crate::Error::InvalidInput("Failed to downcast match_template GPU result".into()))
+            }
         } else {
             Err(crate::Error::InvalidInput(
                 "GpuContext requires GpuStorage tensors".into(),
@@ -361,36 +453,43 @@ impl ComputeContext for GpuContext {
         }
     }
 
-    fn detect_objects<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn detect_objects<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        _input: &Tensor<u8, S>,
-        _threshold: f32,
+        _input: &Tensor<T, S>,
+        _threshold: T,
     ) -> crate::Result<Vec<cv_core::Detection>> {
         Err(crate::Error::NotSupported(
             "GPU detect_objects not yet implemented".into(),
         ))
     }
 
-    fn stereo_match<S: Storage<u8> + 'static, OS: Storage<f32> + 'static>(
+    fn stereo_match<
+        T: cv_core::Float + bytemuck::Pod + bytemuck::Zeroable + 'static,
+        S: Storage<T> + 'static,
+        OS: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        left: &Tensor<u8, S>,
-        right: &Tensor<u8, S>,
+        left: &Tensor<T, S>,
+        right: &Tensor<T, S>,
         params: &StereoMatchParams,
-    ) -> crate::Result<Tensor<f32, OS>> {
-        use crate::storage::GpuStorage;
+    ) -> crate::Result<Tensor<T, OS>> {
+        
         use std::marker::PhantomData;
 
         if let (Some(l_storage), Some(r_storage)) = (
-            left.storage.as_any().downcast_ref::<GpuStorage<u8>>(),
-            right.storage.as_any().downcast_ref::<GpuStorage<u8>>(),
+            left.storage.as_any().downcast_ref::<crate::storage::GpuStorage<f32>>(),
+            right.storage.as_any().downcast_ref::<crate::storage::GpuStorage<f32>>(),
         ) {
-            let l_gpu = Tensor {
+            let l_gpu: crate::GpuTensor<f32> = cv_core::Tensor {
                 storage: l_storage.clone(),
                 shape: left.shape,
                 dtype: left.dtype,
                 _phantom: PhantomData,
             };
-            let r_gpu = Tensor {
+            let r_gpu: crate::GpuTensor<f32> = cv_core::Tensor {
                 storage: r_storage.clone(),
                 shape: right.shape,
                 dtype: right.dtype,
@@ -399,7 +498,18 @@ impl ComputeContext for GpuContext {
 
             let result_gpu =
                 crate::gpu_kernels::stereo::stereo_match(self, &l_gpu, &r_gpu, params)?;
-            self.downcast_storage(result_gpu)
+            
+            let storage_any = result_gpu.storage.as_any();
+            if let Some(storage_s) = storage_any.downcast_ref::<OS>() {
+                Ok(Tensor {
+                    storage: storage_s.clone(),
+                    shape: result_gpu.shape,
+                    dtype: result_gpu.dtype,
+                    _phantom: PhantomData,
+                })
+            } else {
+                Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
+            }
         } else {
             Err(crate::Error::InvalidInput(
                 "GpuContext requires GpuStorage tensors".into(),
@@ -407,21 +517,28 @@ impl ComputeContext for GpuContext {
         }
     }
 
-    fn triangulate_points<S: Storage<f32> + 'static, OS: Storage<f32> + 'static>(
+    fn triangulate_points<
+        T: cv_core::Float + bytemuck::Pod + 'static,
+        S: Storage<T> + 'static,
+        OS: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        _proj_left: &[[f32; 4]; 3],
-        _proj_right: &[[f32; 4]; 3],
-        _points_left: &Tensor<f32, S>,
-        _points_right: &Tensor<f32, S>,
-    ) -> crate::Result<Tensor<f32, OS>> {
+        _proj_left: &[[T; 4]; 3],
+        _proj_right: &[[T; 4]; 3],
+        _points_left: &Tensor<T, S>,
+        _points_right: &Tensor<T, S>,
+    ) -> crate::Result<Tensor<T, OS>> {
         Err(crate::Error::NotSupported(
             "GPU triangulate_points not yet implemented".into(),
         ))
     }
 
-    fn find_chessboard_corners<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn find_chessboard_corners<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        _image: &Tensor<u8, S>,
+        _image: &Tensor<T, S>,
         _pattern_size: (usize, usize),
     ) -> crate::Result<Vec<cv_core::KeyPoint>> {
         Err(crate::Error::NotSupported(
@@ -443,198 +560,262 @@ impl ComputeContext for GpuContext {
             input.storage.as_any().downcast_ref::<GpuStorage<u8>>(),
             kernel.storage.as_any().downcast_ref::<GpuStorage<u8>>(),
         ) {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: input.shape,
-                dtype: input.dtype,
-                _phantom: PhantomData,
-            };
-            let kernel_gpu = Tensor {
-                storage: kernel_storage.clone(),
-                shape: kernel.shape,
-                dtype: kernel.dtype,
-                _phantom: PhantomData,
-            };
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
+                let kernel_gpu = Tensor {
+                    storage: kernel_storage.clone(),
+                    shape: kernel.shape,
+                    dtype: kernel.dtype,
+                    _phantom: PhantomData,
+                };
 
-            let result_gpu = crate::gpu_kernels::morphology::morphology(
-                self,
-                &input_gpu,
-                typ,
-                &kernel_gpu,
-                iterations,
-            )?;
-            self.downcast_storage(result_gpu)
-        } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
-        }
+                let result_gpu = crate::gpu_kernels::morphology::morphology(
+                    self,
+                    &input_gpu,
+                    typ,
+                    &kernel_gpu,
+                    iterations,
+                )?;
+                // Safety: we know T is compatible here if we reached this point with GpuStorage<u8>
+                // but this is tricky with the generic T. 
+                // Given the HAL structure, we'll likely only call this with T=f32 or u8.
+                // If it's f32 and we have u8 storage, we have a problem.
+                // Let's assume for now morphology on GPU is f32-compatible or we use casts.
+                // Actually, the previous code used GpuStorage<u8>.
+                let storage_any = result_gpu.storage.as_any();
+                if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                    Ok(Tensor {
+                        storage: storage_s.clone(),
+                        shape: result_gpu.shape,
+                        dtype: result_gpu.dtype,
+                        _phantom: PhantomData,
+                    })
+                } else {
+                    Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
+                }
+            } else {
+                Err(crate::Error::InvalidInput("Morphology requires GpuStorage<u8>".into()))
+            }
     }
 
-    fn warp<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn warp<T: cv_core::Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<u8, S>,
-        matrix: &[[f32; 3]; 3],
+        input: &Tensor<T, S>,
+        matrix: &[[T; 3]; 3],
         new_shape: (usize, usize),
         typ: WarpType,
-    ) -> crate::Result<Tensor<u8, S>> {
+    ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: input.shape,
-                dtype: input.dtype,
-                _phantom: PhantomData,
-            };
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
 
-            let result_gpu =
-                crate::gpu_kernels::warp::warp(self, &input_gpu, matrix, new_shape, typ)?;
-            self.downcast_storage(result_gpu)
+                let matrix_f32: [[f32; 3]; 3] = [
+                    [matrix[0][0].to_f32(), matrix[0][1].to_f32(), matrix[0][2].to_f32()],
+                    [matrix[1][0].to_f32(), matrix[1][1].to_f32(), matrix[1][2].to_f32()],
+                    [matrix[2][0].to_f32(), matrix[2][1].to_f32(), matrix[2][2].to_f32()],
+                ];
+
+                let result_gpu =
+                    crate::gpu_kernels::warp::warp(self, &input_gpu, &matrix_f32, new_shape, typ)?;
+                let storage_any = result_gpu.storage.as_any();
+                if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                    Ok(Tensor {
+                        storage: storage_s.clone(),
+                        shape: result_gpu.shape,
+                        dtype: result_gpu.dtype,
+                        _phantom: PhantomData,
+                    })
+                } else {
+                    Err(crate::Error::InvalidInput("Failed to downcast warp GPU result".into()))
+                }
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU warp only supports f32".into()))
         }
     }
 
-    fn nms<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn nms<T: cv_core::Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<f32, S>,
-        threshold: f32,
+        input: &Tensor<T, S>,
+        threshold: T,
         window_size: usize,
-    ) -> crate::Result<Tensor<f32, S>> {
+    ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: input.shape,
-                dtype: input.dtype,
-                _phantom: PhantomData,
-            };
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
 
-            let result_gpu =
-                crate::gpu_kernels::nms::nms_pixel(self, &input_gpu, threshold, window_size)?;
-            self.downcast_storage(result_gpu)
+                let result_gpu = crate::gpu_kernels::nms::nms_pixel(
+                    self,
+                    &input_gpu,
+                    threshold.to_f32(),
+                    window_size,
+                )?;
+                let storage_any = result_gpu.storage.as_any();
+                if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                    Ok(Tensor { storage: storage_s.clone(), shape: result_gpu.shape, dtype: result_gpu.dtype, _phantom: PhantomData })
+                } else {
+                    Err(crate::Error::InvalidInput("Failed to downcast nms GPU result".into()))
+                }
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU nms only supports f32".into()))
         }
     }
 
-    fn nms_boxes<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn nms_boxes<T: cv_core::Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<f32, S>,
-        iou_threshold: f32,
+        input: &Tensor<T, S>,
+        iou_threshold: T,
     ) -> crate::Result<Vec<usize>> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: input.shape,
-                dtype: input.dtype,
-                _phantom: PhantomData,
-            };
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
 
-            crate::gpu_kernels::nms::nms_boxes(self, &input_gpu, iou_threshold)
+                crate::gpu_kernels::nms::nms_boxes(self, &input_gpu, iou_threshold.to_f32())
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU nms_boxes only supports f32".into()))
         }
     }
 
-    fn nms_rotated_boxes<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn nms_rotated_boxes<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        input: &Tensor<f32, S>,
-        iou_threshold: f32,
+        input: &Tensor<T, S>,
+        iou_threshold: T,
     ) -> crate::Result<Vec<usize>> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
 
         // Fallback: Download to CPU and compute
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
-            // Read data to CPU
-            let size = input.storage.len() * 4;
-            let raw_data = pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer(
-                self.device.clone(),
-                &self.queue,
-                input_storage.buffer(),
-                0,
-                size,
-            ))?;
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                // Read data to CPU
+                let size = input.storage.len() * 4;
+                let raw_data = pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer(
+                    self.device.clone(),
+                    &self.queue,
+                    input_storage.buffer(),
+                    0,
+                    size,
+                ))?;
 
-            let rows = input.shape.height;
-            let cols = input.shape.width;
-            if cols != 6 {
-                return Err(crate::Error::InvalidInput(
-                    "NMS Rotated Boxes expects (N, 6) tensor".into(),
-                ));
-            }
-
-            let mut boxes: Vec<(usize, f32)> = (0..rows)
-                .map(|i| {
-                    (i, raw_data[i * 6 + 5]) // (index, score)
-                })
-                .collect();
-
-            boxes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-            let mut kept = Vec::new();
-            let mut suppressed = vec![false; rows];
-
-            for i in 0..boxes.len() {
-                let (idx1, _) = boxes[i];
-                if suppressed[idx1] {
-                    continue;
+                let rows = input.shape.height;
+                let cols = input.shape.width;
+                if cols != 6 {
+                    return Err(crate::Error::InvalidInput(
+                        "NMS Rotated Boxes expects (N, 6) tensor".into(),
+                    ));
                 }
 
-                kept.push(idx1);
-                let r1 = cv_core::RotatedRect::new(
-                    raw_data[idx1 * 6],
-                    raw_data[idx1 * 6 + 1],
-                    raw_data[idx1 * 6 + 2],
-                    raw_data[idx1 * 6 + 3],
-                    raw_data[idx1 * 6 + 4],
-                );
+                let mut boxes: Vec<(usize, f32)> = (0..rows)
+                    .map(|i| {
+                        (i, raw_data[i * 6 + 5]) // (index, score)
+                    })
+                    .collect();
 
-                for j in (i + 1)..boxes.len() {
-                    let (idx2, _) = boxes[j];
-                    if suppressed[idx2] {
+                boxes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+                let mut kept = Vec::new();
+                let mut suppressed = vec![false; rows];
+
+                for i in 0..boxes.len() {
+                    let (idx1, _) = boxes[i];
+                    if suppressed[idx1] {
                         continue;
                     }
 
-                    let r2 = cv_core::RotatedRect::new(
-                        raw_data[idx2 * 6],
-                        raw_data[idx2 * 6 + 1],
-                        raw_data[idx2 * 6 + 2],
-                        raw_data[idx2 * 6 + 3],
-                        raw_data[idx2 * 6 + 4],
+                    kept.push(idx1);
+                    let r1 = cv_core::RotatedRect::new(
+                        raw_data[idx1 * 6],
+                        raw_data[idx1 * 6 + 1],
+                        raw_data[idx1 * 6 + 2],
+                        raw_data[idx1 * 6 + 3],
+                        raw_data[idx1 * 6 + 4],
                     );
 
-                    if cv_core::rotated_iou(&r1, &r2) > iou_threshold {
-                        suppressed[idx2] = true;
+                    for j in (i + 1)..boxes.len() {
+                        let (idx2, _) = boxes[j];
+                        if suppressed[idx2] {
+                            continue;
+                        }
+
+                        let r2 = cv_core::RotatedRect::new(
+                            raw_data[idx2 * 6],
+                            raw_data[idx2 * 6 + 1],
+                            raw_data[idx2 * 6 + 2],
+                            raw_data[idx2 * 6 + 3],
+                            raw_data[idx2 * 6 + 4],
+                        );
+
+                        if cv_core::rotated_iou(&r1, &r2) > iou_threshold.to_f32() {
+                            suppressed[idx2] = true;
+                        }
                     }
                 }
+                Ok(kept)
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
             }
-            Ok(kept)
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
+            Err(crate::Error::NotSupported(
+                "GPU nms_rotated_boxes fallback only supports f32".into(),
             ))
         }
     }
 
-    fn nms_polygons(
+    fn nms_polygons<T: cv_core::Float + 'static>(
         &self,
         polygons: &[cv_core::Polygon],
-        scores: &[f32],
-        iou_threshold: f32,
+        scores: &[T],
+        iou_threshold: T,
     ) -> crate::Result<Vec<usize>> {
         // CPU implementation since polygons are already on CPU
         let n = polygons.len();
@@ -647,7 +828,7 @@ impl ComputeContext for GpuContext {
             ));
         }
 
-        let mut items: Vec<(usize, f32)> = (0..n).map(|i| (i, scores[i])).collect();
+        let mut items: Vec<(usize, T)> = (0..n).map(|i| (i, scores[i])).collect();
         items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut kept = Vec::new();
@@ -669,7 +850,7 @@ impl ComputeContext for GpuContext {
                 }
 
                 let p2 = &polygons[idx2];
-                if cv_core::polygon_iou(p1, p2) > iou_threshold {
+                if cv_core::polygon_iou(p1, p2) > iou_threshold.to_f32() {
                     suppressed[idx2] = true;
                 }
             }
@@ -678,262 +859,423 @@ impl ComputeContext for GpuContext {
         Ok(kept)
     }
 
-    fn pointcloud_transform<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn pointcloud_normals<
+        T: cv_core::Float + bytemuck::Pod + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        points: &Tensor<f32, S>,
-        transform: &[[f32; 4]; 4],
-    ) -> crate::Result<Tensor<f32, S>> {
-        use crate::storage::GpuStorage;
-        use std::marker::PhantomData;
-
-        if let Some(input_storage) = points.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: points.shape,
-                dtype: points.dtype,
-                _phantom: PhantomData,
-            };
-
-            let result_gpu =
-                crate::gpu_kernels::pointcloud::transform_points(self, &input_gpu, transform)?;
-            self.downcast_storage(result_gpu)
-        } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
-        }
-    }
-
-    fn pointcloud_normals<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
-        &self,
-        points: &Tensor<f32, S>,
+        points: &Tensor<T, S>,
         k_neighbors: u32,
-    ) -> crate::Result<Tensor<f32, S>> {
+    ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = points.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: points.shape,
-                dtype: points.dtype,
-                _phantom: PhantomData,
-            };
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = points.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: points.shape,
+                    dtype: points.dtype,
+                    _phantom: PhantomData,
+                };
 
-            let result_gpu =
-                crate::gpu_kernels::pointcloud::compute_normals(self, &input_gpu, k_neighbors)?;
-            self.downcast_storage(result_gpu)
+                let result_gpu =
+                    crate::gpu_kernels::pointcloud::compute_normals(self, &input_gpu, k_neighbors)?;
+                
+                let storage_any = result_gpu.storage.as_any();
+                if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                    Ok(Tensor {
+                        storage: storage_s.clone(),
+                        shape: result_gpu.shape,
+                        dtype: result_gpu.dtype,
+                        _phantom: PhantomData,
+                    })
+                } else {
+                    Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
+                }
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU pointcloud_normals only supports f32".into()))
         }
     }
 
-    fn tsdf_integrate<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn tsdf_integrate<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        depth_image: &Tensor<f32, S>,
-        camera_pose: &[[f32; 4]; 4],
-        intrinsics: &[f32; 4],
-        voxel_volume: &mut Tensor<f32, S>,
-        voxel_size: f32,
-        truncation: f32,
+        depth_image: &Tensor<T, S>,
+        camera_pose: &[[T; 4]; 4],
+        intrinsics: &[T; 4],
+        voxel_volume: &mut Tensor<T, S>,
+        voxel_size: T,
+        truncation: T,
     ) -> crate::Result<()> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let (Some(depth_storage), Some(voxel_storage)) = (
-            depth_image
-                .storage
-                .as_any()
-                .downcast_ref::<GpuStorage<f32>>(),
-            voxel_volume
-                .storage
-                .as_any()
-                .downcast_ref::<GpuStorage<f32>>(),
-        ) {
-            let depth_gpu = Tensor {
-                storage: depth_storage.clone(),
-                shape: depth_image.shape,
-                dtype: depth_image.dtype,
-                _phantom: PhantomData,
-            };
-            // NOTE: We need to be careful with &mut GpuStorage if we want to modify it in place.
-            // For now, TSDF kernels typically take a mutable reference to the underlying buffer.
-            let mut voxel_gpu = Tensor {
-                storage: voxel_storage.clone(),
-                shape: voxel_volume.shape,
-                dtype: voxel_volume.dtype,
-                _phantom: PhantomData,
-            };
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let (Some(depth_storage), Some(voxel_storage)) = (
+                depth_image
+                    .storage
+                    .as_any()
+                    .downcast_ref::<GpuStorage<f32>>(),
+                voxel_volume
+                    .storage
+                    .as_any()
+                    .downcast_ref::<GpuStorage<f32>>(),
+            ) {
+                let depth_gpu = Tensor {
+                    storage: depth_storage.clone(),
+                    shape: depth_image.shape,
+                    dtype: depth_image.dtype,
+                    _phantom: PhantomData,
+                };
+                let mut voxel_gpu = Tensor {
+                    storage: voxel_storage.clone(),
+                    shape: voxel_volume.shape,
+                    dtype: voxel_volume.dtype,
+                    _phantom: PhantomData,
+                };
 
-            crate::gpu_kernels::tsdf::integrate(
-                self,
-                &depth_gpu,
-                camera_pose,
-                intrinsics,
-                &mut voxel_gpu,
-                voxel_size,
-                truncation,
-            )
+                let camera_pose_f32: [[f32; 4]; 4] = [
+                    [
+                        camera_pose[0][0].to_f32(),
+                        camera_pose[0][1].to_f32(),
+                        camera_pose[0][2].to_f32(),
+                        camera_pose[0][3].to_f32(),
+                    ],
+                    [
+                        camera_pose[1][0].to_f32(),
+                        camera_pose[1][1].to_f32(),
+                        camera_pose[1][2].to_f32(),
+                        camera_pose[1][3].to_f32(),
+                    ],
+                    [
+                        camera_pose[2][0].to_f32(),
+                        camera_pose[2][1].to_f32(),
+                        camera_pose[2][2].to_f32(),
+                        camera_pose[2][3].to_f32(),
+                    ],
+                    [
+                        camera_pose[3][0].to_f32(),
+                        camera_pose[3][1].to_f32(),
+                        camera_pose[3][2].to_f32(),
+                        camera_pose[3][3].to_f32(),
+                    ],
+                ];
+                let intrinsics_f32: [f32; 4] = [
+                    intrinsics[0].to_f32(),
+                    intrinsics[1].to_f32(),
+                    intrinsics[2].to_f32(),
+                    intrinsics[3].to_f32(),
+                ];
+
+                crate::gpu_kernels::tsdf::integrate(
+                    self,
+                    &depth_gpu,
+                    &camera_pose_f32,
+                    &intrinsics_f32,
+                    &mut voxel_gpu,
+                    voxel_size.to_f32(),
+                    truncation.to_f32(),
+                )
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU tsdf_integrate only supports f32".into()))
         }
     }
 
-    fn tsdf_raycast<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+
+
+
+
+    fn tsdf_raycast<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        tsdf_volume: &Tensor<f32, S>,
-        camera_pose: &[[f32; 4]; 4],
-        intrinsics: &[f32; 4],
+        tsdf_volume: &Tensor<T, S>,
+        camera_pose: &[[T; 4]; 4],
+        intrinsics: &[T; 4],
         image_size: (u32, u32),
-        depth_range: (f32, f32),
-        voxel_size: f32,
-        truncation: f32,
-    ) -> crate::Result<Tensor<f32, S>> {
+        depth_range: (T, T),
+        voxel_size: T,
+        truncation: T,
+    ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = tsdf_volume
-            .storage
-            .as_any()
-            .downcast_ref::<GpuStorage<f32>>()
-        {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: tsdf_volume.shape,
-                dtype: tsdf_volume.dtype,
-                _phantom: PhantomData,
-            };
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = tsdf_volume
+                .storage
+                .as_any()
+                .downcast_ref::<GpuStorage<f32>>()
+            {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: tsdf_volume.shape,
+                    dtype: tsdf_volume.dtype,
+                    _phantom: PhantomData,
+                };
 
-            let result_gpu = crate::gpu_kernels::tsdf::raycast(
-                self,
-                &input_gpu,
-                camera_pose,
-                intrinsics,
-                image_size,
-                depth_range,
-                voxel_size,
-                truncation,
-            )?;
-            self.downcast_storage(result_gpu)
+                let camera_pose_f32: [[f32; 4]; 4] = [
+                    [
+                        camera_pose[0][0].to_f32(),
+                        camera_pose[0][1].to_f32(),
+                        camera_pose[0][2].to_f32(),
+                        camera_pose[0][3].to_f32(),
+                    ],
+                    [
+                        camera_pose[1][0].to_f32(),
+                        camera_pose[1][1].to_f32(),
+                        camera_pose[1][2].to_f32(),
+                        camera_pose[1][3].to_f32(),
+                    ],
+                    [
+                        camera_pose[2][0].to_f32(),
+                        camera_pose[2][1].to_f32(),
+                        camera_pose[2][2].to_f32(),
+                        camera_pose[2][3].to_f32(),
+                    ],
+                    [
+                        camera_pose[3][0].to_f32(),
+                        camera_pose[3][1].to_f32(),
+                        camera_pose[3][2].to_f32(),
+                        camera_pose[3][3].to_f32(),
+                    ],
+                ];
+                let intrinsics_f32: [f32; 4] = [
+                    intrinsics[0].to_f32(),
+                    intrinsics[1].to_f32(),
+                    intrinsics[2].to_f32(),
+                    intrinsics[3].to_f32(),
+                ];
+                let depth_range_f32 = (depth_range.0.to_f32(), depth_range.1.to_f32());
+
+                let result_gpu = crate::gpu_kernels::tsdf::raycast(
+                    self,
+                    &input_gpu,
+                    &camera_pose_f32,
+                    &intrinsics_f32,
+                    image_size,
+                    depth_range_f32,
+                    voxel_size.to_f32(),
+                    truncation.to_f32(),
+                )?;
+                
+                let storage_any = result_gpu.storage.as_any();
+                if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                    Ok(Tensor {
+                        storage: storage_s.clone(),
+                        shape: result_gpu.shape,
+                        dtype: result_gpu.dtype,
+                        _phantom: PhantomData,
+                    })
+                } else {
+                    Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
+                }
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU tsdf_raycast only supports f32".into()))
         }
     }
 
-    fn tsdf_extract_mesh<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn tsdf_extract_mesh<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        voxel_volume: &Tensor<f32, S>,
-        voxel_size: f32,
-        iso_level: f32,
+        voxel_volume: &Tensor<T, S>,
+        voxel_size: T,
+        iso_level: T,
         max_triangles: u32,
     ) -> crate::Result<Vec<crate::gpu_kernels::marching_cubes::Vertex>> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = voxel_volume
-            .storage
-            .as_any()
-            .downcast_ref::<GpuStorage<f32>>()
-        {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: voxel_volume.shape,
-                dtype: voxel_volume.dtype,
-                _phantom: PhantomData,
-            };
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = voxel_volume
+                .storage
+                .as_any()
+                .downcast_ref::<GpuStorage<f32>>()
+            {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: voxel_volume.shape,
+                    dtype: voxel_volume.dtype,
+                    _phantom: PhantomData,
+                };
 
-            crate::gpu_kernels::marching_cubes::extract_mesh(
-                self,
-                &input_gpu,
-                voxel_size,
-                iso_level,
-                max_triangles,
-            )
+                crate::gpu_kernels::marching_cubes::extract_mesh(
+                    self,
+                    &input_gpu,
+                    voxel_size.to_f32(),
+                    iso_level.to_f32(),
+                    max_triangles,
+                )
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU tsdf_extract_mesh only supports f32".into()))
         }
     }
 
-    fn optical_flow_lk<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn optical_flow_lk<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        prev_pyramid: &[Tensor<f32, S>],
-        next_pyramid: &[Tensor<f32, S>],
-        points: &[[f32; 2]],
+        prev_pyramid: &[Tensor<T, S>],
+        next_pyramid: &[Tensor<T, S>],
+        points: &[[T; 2]],
         window_size: usize,
         max_iters: u32,
-    ) -> crate::Result<Vec<[f32; 2]>> {
+    ) -> crate::Result<Vec<[T; 2]>> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        // Verify all tensors in pyramids are GpuStorage
-        let mut prev_gpu = Vec::with_capacity(prev_pyramid.len());
-        for t in prev_pyramid {
-            if let Some(s) = t.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
-                prev_gpu.push(Tensor {
-                    storage: s.clone(),
-                    shape: t.shape,
-                    dtype: t.dtype,
-                    _phantom: PhantomData,
-                });
-            } else {
-                return Err(crate::Error::InvalidInput(
-                    "GpuContext requires GpuStorage tensors".into(),
-                ));
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            // Verify all tensors in pyramids are GpuStorage<f32>
+            let mut prev_gpu = Vec::with_capacity(prev_pyramid.len());
+            for t in prev_pyramid {
+                if let Some(s) = t.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                    prev_gpu.push(Tensor {
+                        storage: s.clone(),
+                        shape: t.shape,
+                        dtype: t.dtype,
+                        _phantom: PhantomData,
+                    });
+                } else {
+                    return Err(crate::Error::InvalidInput(
+                        "GpuContext requires GpuStorage tensors".into(),
+                    ));
+                }
             }
-        }
 
-        let mut next_gpu = Vec::with_capacity(next_pyramid.len());
-        for t in next_pyramid {
-            if let Some(s) = t.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
-                next_gpu.push(Tensor {
-                    storage: s.clone(),
-                    shape: t.shape,
-                    dtype: t.dtype,
-                    _phantom: PhantomData,
-                });
-            } else {
-                return Err(crate::Error::InvalidInput(
-                    "GpuContext requires GpuStorage tensors".into(),
-                ));
+            let mut next_gpu = Vec::with_capacity(next_pyramid.len());
+            for t in next_pyramid {
+                if let Some(s) = t.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                    next_gpu.push(Tensor {
+                        storage: s.clone(),
+                        shape: t.shape,
+                        dtype: t.dtype,
+                        _phantom: PhantomData,
+                    });
+                } else {
+                    return Err(crate::Error::InvalidInput(
+                        "GpuContext requires GpuStorage tensors".into(),
+                    ));
+                }
             }
-        }
 
-        crate::gpu_kernels::optical_flow::lucas_kanade(
-            self,
-            &prev_gpu,
-            &next_gpu,
-            points,
-            window_size,
-            max_iters,
-        )
+            // Safety: T == f32 verified above; points slice is &[T] = &[f32]
+            let points_f32: &[[f32; 2]] = unsafe {
+                std::slice::from_raw_parts(points.as_ptr() as *const [f32; 2], points.len() / 2)
+            };
+            let results = crate::gpu_kernels::optical_flow::lucas_kanade(
+                self,
+                &prev_gpu,
+                &next_gpu,
+                points_f32,
+                window_size,
+                max_iters,
+            )?;
+            
+            // Safety: we verified T == f32, so Vec<[f32;2]> and Vec<[T;2]> have identical layout.
+            let results_t: Vec<[T; 2]> = unsafe { std::mem::transmute(results) };
+            Ok(results_t)
+        } else {
+            Err(crate::Error::NotSupported("GPU optical_flow_lk only supports f32".into()))
+        }
     }
 
-    fn cvt_color<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn pyramid_down<T: cv_core::Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<u8, S>,
+        input: &Tensor<T, S>,
+    ) -> crate::Result<Tensor<T, S>> {
+        use crate::storage::GpuStorage;
+        use std::any::TypeId;
+        use std::marker::PhantomData;
+
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
+
+                let result_gpu = crate::gpu_kernels::pyramid::pyramid_down(self, &input_gpu)?;
+                let storage_any = result_gpu.storage.as_any();
+                if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                    Ok(Tensor { storage: storage_s.clone(), shape: result_gpu.shape, dtype: result_gpu.dtype, _phantom: PhantomData })
+                } else {
+                    Err(crate::Error::InvalidInput("Failed to downcast pyramid_down result".into()))
+                }
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
+        } else {
+            Err(crate::Error::NotSupported("GPU pyramid_down only supports f32".into()))
+        }
+    }
+
+    fn cvt_color<
+        T: cv_core::Float + bytemuck::Pod + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
+        &self,
+        input: &Tensor<T, S>,
         code: ColorConversion,
-    ) -> crate::Result<Tensor<u8, S>> {
+    ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            let input_gpu = Tensor {
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<T>>() {
+            let input_gpu = crate::GpuTensor::<T> {
                 storage: input_storage.clone(),
                 shape: input.shape,
                 dtype: input.dtype,
                 _phantom: PhantomData,
             };
 
-            let result_gpu = crate::gpu_kernels::color::cvt_color(self, &input_gpu, code)?;
-            self.downcast_storage(result_gpu)
+            let result_gpu = crate::gpu_kernels::color::color_convert(self, &input_gpu, code)?;
+            
+            let storage_any = result_gpu.storage.as_any();
+            if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                Ok(Tensor {
+                    storage: storage_s.clone(),
+                    shape: result_gpu.shape,
+                    dtype: result_gpu.dtype,
+                    _phantom: PhantomData,
+                })
+            } else {
+                Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
+            }
         } else {
             Err(crate::Error::InvalidInput(
                 "GpuContext requires GpuStorage tensors".into(),
@@ -941,24 +1283,43 @@ impl ComputeContext for GpuContext {
         }
     }
 
-    fn resize<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn resize<
+        T: cv_core::Float + bytemuck::Pod + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        input: &Tensor<u8, S>,
+        input: &Tensor<T, S>,
         new_shape: (usize, usize),
-    ) -> crate::Result<Tensor<u8, S>> {
+    ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            let input_gpu = Tensor {
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<T>>() {
+            let input_gpu = crate::GpuTensor::<T> {
                 storage: input_storage.clone(),
                 shape: input.shape,
                 dtype: input.dtype,
                 _phantom: PhantomData,
             };
 
-            let result_gpu = crate::gpu_kernels::resize::resize(self, &input_gpu, new_shape)?;
-            self.downcast_storage(result_gpu)
+            let result_gpu = crate::gpu_kernels::resize::resize(
+                self,
+                &input_gpu,
+                new_shape.0 as u32,
+                new_shape.1 as u32,
+            )?;
+            
+            let storage_any = result_gpu.storage.as_any();
+            if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                Ok(Tensor {
+                    storage: storage_s.clone(),
+                    shape: result_gpu.shape,
+                    dtype: result_gpu.dtype,
+                    _phantom: PhantomData,
+                })
+            } else {
+                Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
+            }
         } else {
             Err(crate::Error::InvalidInput(
                 "GpuContext requires GpuStorage tensors".into(),
@@ -966,18 +1327,21 @@ impl ComputeContext for GpuContext {
         }
     }
 
-    fn bilateral_filter<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn bilateral_filter<
+        T: cv_core::Float + bytemuck::Pod + bytemuck::Zeroable + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        input: &Tensor<u8, S>,
+        input: &Tensor<T, S>,
         d: i32,
-        sigma_color: f32,
-        sigma_space: f32,
-    ) -> crate::Result<Tensor<u8, S>> {
+        sigma_color: T,
+        sigma_space: T,
+    ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            let input_gpu = Tensor {
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<T>>() {
+            let input_gpu = crate::GpuTensor {
                 storage: input_storage.clone(),
                 shape: input.shape,
                 dtype: input.dtype,
@@ -991,7 +1355,18 @@ impl ComputeContext for GpuContext {
                 sigma_color,
                 sigma_space,
             )?;
-            self.downcast_storage(result_gpu)
+            
+            let storage_any = result_gpu.storage.as_any();
+            if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                Ok(Tensor {
+                    storage: storage_s.clone(),
+                    shape: result_gpu.shape,
+                    dtype: result_gpu.dtype,
+                    _phantom: PhantomData,
+                })
+            } else {
+                Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
+            }
         } else {
             Err(crate::Error::InvalidInput(
                 "GpuContext requires GpuStorage tensors".into(),
@@ -999,17 +1374,20 @@ impl ComputeContext for GpuContext {
         }
     }
 
-    fn fast_detect<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn fast_detect<
+        T: cv_core::Float + bytemuck::Pod + bytemuck::Zeroable + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        input: &Tensor<u8, S>,
-        threshold: u8,
+        input: &Tensor<T, S>,
+        threshold: T,
         non_max_suppression: bool,
-    ) -> crate::Result<Tensor<u8, S>> {
+    ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            let input_gpu = Tensor {
+        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<T>>() {
+            let input_gpu = crate::GpuTensor {
                 storage: input_storage.clone(),
                 shape: input.shape,
                 dtype: input.dtype,
@@ -1022,7 +1400,18 @@ impl ComputeContext for GpuContext {
                 threshold,
                 non_max_suppression,
             )?;
-            self.downcast_storage(result_gpu)
+            
+            let storage_any = result_gpu.storage.as_any();
+            if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                Ok(Tensor {
+                    storage: storage_s.clone(),
+                    shape: result_gpu.shape,
+                    dtype: result_gpu.dtype,
+                    _phantom: PhantomData,
+                })
+            } else {
+                Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
+            }
         } else {
             Err(crate::Error::InvalidInput(
                 "GpuContext requires GpuStorage tensors".into(),
@@ -1030,36 +1419,49 @@ impl ComputeContext for GpuContext {
         }
     }
 
-    fn gaussian_blur<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    fn gaussian_blur<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        input: &Tensor<u8, S>,
-        sigma: f32,
+        input: &Tensor<T, S>,
+        sigma: T,
         k_size: usize,
-    ) -> crate::Result<Tensor<u8, S>> {
+    ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
-        use crate::tensor_ext::TensorCast;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<u8>>() {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: input.shape,
-                dtype: input.dtype,
-                _phantom: PhantomData,
-            };
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
 
-            // We need f32 for blur accuracy
-            let input_f32 = input_gpu.to_f32_ctx(self)?;
-            let blurred_f32 =
-                crate::gpu_kernels::convolve::gaussian_blur(self, &input_f32, sigma, k_size)?;
-
-            // Convert back to u8
-            let blurred_u8 = blurred_f32.to_u8_ctx(self)?;
-            self.downcast_storage(blurred_u8)
+                let blurred_f32 =
+                    crate::gpu_kernels::convolve::gaussian_blur(self, &input_gpu, sigma.to_f32(), k_size)?;
+                
+                let storage_any = blurred_f32.storage.as_any();
+                if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                    Ok(Tensor {
+                        storage: storage_s.clone(),
+                        shape: blurred_f32.shape,
+                        dtype: blurred_f32.dtype,
+                        _phantom: PhantomData,
+                    })
+                } else {
+                    Err(crate::Error::InvalidInput("Failed to downcast GPU result".into()))
+                }
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors. Use .to_gpu() first.".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU gaussian_blur only supports f32".into()))
         }
     }
 
@@ -1154,521 +1556,643 @@ impl ComputeContext for GpuContext {
         }
     }
 
-    fn sift_extrema<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn sift_extrema<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        dog_prev: &Tensor<f32, S>,
-        dog_curr: &Tensor<f32, S>,
-        dog_next: &Tensor<f32, S>,
-        threshold: f32,
-        edge_threshold: f32,
+        dog_prev: &Tensor<T, S>,
+        dog_curr: &Tensor<T, S>,
+        dog_next: &Tensor<T, S>,
+        threshold: T,
+        edge_threshold: T,
     ) -> crate::Result<Tensor<u8, cv_core::storage::CpuStorage<u8>>> {
         use crate::storage::GpuStorage;
         use crate::tensor_ext::TensorToCpu;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let (Some(p_storage), Some(c_storage), Some(n_storage)) = (
-            dog_prev.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
-            dog_curr.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
-            dog_next.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
-        ) {
-            let p_gpu = Tensor {
-                storage: p_storage.clone(),
-                shape: dog_prev.shape,
-                dtype: dog_prev.dtype,
-                _phantom: PhantomData,
-            };
-            let c_gpu = Tensor {
-                storage: c_storage.clone(),
-                shape: dog_curr.shape,
-                dtype: dog_curr.dtype,
-                _phantom: PhantomData,
-            };
-            let n_gpu = Tensor {
-                storage: n_storage.clone(),
-                shape: dog_next.shape,
-                dtype: dog_next.dtype,
-                _phantom: PhantomData,
-            };
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let (Some(p_storage), Some(c_storage), Some(n_storage)) = (
+                dog_prev.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
+                dog_curr.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
+                dog_next.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
+            ) {
+                let p_gpu = Tensor {
+                    storage: p_storage.clone(),
+                    shape: dog_prev.shape,
+                    dtype: dog_prev.dtype,
+                    _phantom: PhantomData,
+                };
+                let c_gpu = Tensor {
+                    storage: c_storage.clone(),
+                    shape: dog_curr.shape,
+                    dtype: dog_curr.dtype,
+                    _phantom: PhantomData,
+                };
+                let n_gpu = Tensor {
+                    storage: n_storage.clone(),
+                    shape: dog_next.shape,
+                    dtype: dog_next.dtype,
+                    _phantom: PhantomData,
+                };
 
-            let result_gpu = crate::gpu_kernels::sift::sift_extrema(
-                self,
-                &p_gpu,
-                &c_gpu,
-                &n_gpu,
-                threshold,
-                edge_threshold,
-            )?;
-            result_gpu.to_cpu_ctx(self)
+                let result_gpu = crate::gpu_kernels::sift::sift_extrema(
+                    self,
+                    &p_gpu,
+                    &c_gpu,
+                    &n_gpu,
+                    threshold.to_f32(),
+                    edge_threshold.to_f32(),
+                )?;
+                result_gpu.to_cpu_ctx(self)
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU sift_extrema only supports f32".into()))
         }
     }
 
-    fn compute_sift_descriptors<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn compute_sift_descriptors<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        image: &Tensor<f32, S>,
+        image: &Tensor<T, S>,
         keypoints: &cv_core::KeyPoints,
     ) -> crate::Result<cv_core::Descriptors> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let Some(img_storage) = image.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
-            let img_gpu = Tensor {
-                storage: img_storage.clone(),
-                shape: image.shape,
-                dtype: image.dtype,
-                _phantom: PhantomData,
-            };
-
-            // 1. Upload keypoints to GPU
-            let kp_data: Vec<[f32; 4]> = keypoints
-                .keypoints
-                .iter()
-                .map(|kp| [kp.x as f32, kp.y as f32, kp.size as f32, kp.angle as f32])
-                .collect();
-
-            let kp_buffer = self
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("SIFT Keypoints Buffer"),
-                    contents: bytemuck::cast_slice(&kp_data),
-                    usage: wgpu::BufferUsages::STORAGE,
-                });
-
-            // 2. Output buffer for descriptors (num_kps * 128 * 4 bytes)
-            let out_byte_size = (kp_data.len() * 128 * 4) as u64;
-            let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("SIFT Descriptors Output"),
-                size: out_byte_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            });
-
-            let params = [
-                image.shape.width as u32,
-                image.shape.height as u32,
-                kp_data.len() as u32,
-                0u32,
-            ];
-            let params_buffer = self
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("SIFT Desc Params"),
-                    contents: bytemuck::cast_slice(&params),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-
-            let shader_source = include_str!("../shaders/sift_descriptor.wgsl");
-            let pipeline = self.create_compute_pipeline(shader_source, "main");
-
-            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("SIFT Desc Bind Group"),
-                layout: &pipeline.get_bind_group_layout(0),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: img_gpu.storage.buffer().as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: kp_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: output_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: params_buffer.as_entire_binding(),
-                    },
-                ],
-            });
-
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-            {
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: None,
-                    timestamp_writes: None,
-                });
-                pass.set_pipeline(&pipeline);
-                pass.set_bind_group(0, &bind_group, &[]);
-                let x = (kp_data.len() as u32).div_ceil(64);
-                pass.dispatch_workgroups(x, 1, 1);
-            }
-            self.submit(encoder);
-
-            // 3. Read back and convert to Descriptor objects
-            let raw_descs: Vec<f32> =
-                pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer(
-                    self.device.clone(),
-                    &self.queue,
-                    &output_buffer,
-                    0,
-                    out_byte_size as usize,
-                ))?;
-
-            let mut descs = Vec::with_capacity(keypoints.len());
-            for i in 0..keypoints.len() {
-                let start = i * 128;
-                let data: Vec<u8> = raw_descs[start..start + 128]
-                    .iter()
-                    .map(|&v| (v * 512.0).min(255.0) as u8)
-                    .collect();
-                descs.push(cv_core::Descriptor::new(data, keypoints.keypoints[i]));
-            }
-
-            Ok(cv_core::Descriptors { descriptors: descs })
-        } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
-        }
-    }
-
-    fn icp_correspondences<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
-        &self,
-        src: &Tensor<f32, S>,
-        tgt: &Tensor<f32, S>,
-        max_dist: f32,
-    ) -> crate::Result<Vec<(usize, usize, f32)>> {
-        use crate::storage::GpuStorage;
-        use std::marker::PhantomData;
-
-        if let (Some(src_storage), Some(tgt_storage)) = (
-            src.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
-            tgt.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
-        ) {
-            let src_gpu = Tensor {
-                storage: src_storage.clone(),
-                shape: src.shape,
-                dtype: src.dtype,
-                _phantom: PhantomData,
-            };
-            let tgt_gpu = Tensor {
-                storage: tgt_storage.clone(),
-                shape: tgt.shape,
-                dtype: tgt.dtype,
-                _phantom: PhantomData,
-            };
-
-            crate::gpu_kernels::icp::icp_correspondences(self, &src_gpu, &tgt_gpu, max_dist)
-        } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
-        }
-    }
-
-    fn icp_accumulate<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
-        &self,
-        source: &Tensor<f32, S>,
-        target: &Tensor<f32, S>,
-        target_normals: &Tensor<f32, S>,
-        correspondences: &[(u32, u32)],
-        transform: &nalgebra::Matrix4<f32>,
-    ) -> crate::Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
-        use crate::storage::GpuStorage;
-        use std::marker::PhantomData;
-
-        if let (Some(src_storage), Some(tgt_storage), Some(norm_storage)) = (
-            source.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
-            target.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
-            target_normals
-                .storage
-                .as_any()
-                .downcast_ref::<GpuStorage<f32>>(),
-        ) {
-            let src_gpu = Tensor {
-                storage: src_storage.clone(),
-                shape: source.shape,
-                dtype: source.dtype,
-                _phantom: PhantomData,
-            };
-            let tgt_gpu = Tensor {
-                storage: tgt_storage.clone(),
-                shape: target.shape,
-                dtype: target.dtype,
-                _phantom: PhantomData,
-            };
-            let n_gpu = Tensor {
-                storage: norm_storage.clone(),
-                shape: target_normals.shape,
-                dtype: target_normals.dtype,
-                _phantom: PhantomData,
-            };
-
-            crate::gpu_kernels::icp::icp_accumulate(
-                self,
-                &src_gpu,
-                &tgt_gpu,
-                &n_gpu,
-                correspondences,
-                transform,
-            )
-        } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
-        }
-    }
-
-    fn dense_icp_step<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
-        &self,
-        source_depth: &Tensor<f32, S>,
-        target_data: &Tensor<f32, S>,
-        intrinsics: &[f32; 4],
-        initial_guess: &nalgebra::Matrix4<f32>,
-        max_dist: f32,
-        max_angle: f32,
-    ) -> crate::Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
-        use crate::storage::GpuStorage;
-        use std::marker::PhantomData;
-
-        if let (Some(src_storage), Some(tgt_storage)) = (
-            source_depth
-                .storage
-                .as_any()
-                .downcast_ref::<GpuStorage<f32>>(),
-            target_data
-                .storage
-                .as_any()
-                .downcast_ref::<GpuStorage<f32>>(),
-        ) {
-            let src_gpu = Tensor {
-                storage: src_storage.clone(),
-                shape: source_depth.shape,
-                dtype: source_depth.dtype,
-                _phantom: PhantomData,
-            };
-            let tgt_gpu = Tensor {
-                storage: tgt_storage.clone(),
-                shape: target_data.shape,
-                dtype: target_data.dtype,
-                _phantom: PhantomData,
-            };
-
-            crate::gpu_kernels::icp::dense_step(
-                self,
-                &src_gpu,
-                &tgt_gpu,
-                intrinsics,
-                initial_guess,
-                max_dist,
-                max_angle,
-            )
-        } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
-        }
-    }
-
-    fn akaze_diffusion<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
-        &self,
-        input: &Tensor<f32, S>,
-        k: f32,
-        tau: f32,
-    ) -> crate::Result<Tensor<f32, S>> {
-        use crate::storage::GpuStorage;
-        use std::marker::PhantomData;
-
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: input.shape,
-                dtype: input.dtype,
-                _phantom: PhantomData,
-            };
-
-            let result_gpu = crate::gpu_kernels::akaze::akaze_diffusion(self, &input_gpu, k, tau)?;
-
-            let storage_any = result_gpu.storage.as_any();
-            if let Some(storage_s) = storage_any.downcast_ref::<S>() {
-                Ok(Tensor {
-                    storage: storage_s.clone(),
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(img_storage) = image.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let img_gpu = Tensor {
+                    storage: img_storage.clone(),
+                    shape: image.shape,
+                    dtype: image.dtype,
                     _phantom: PhantomData,
-                })
+                };
+
+                // 1. Upload keypoints to GPU
+                let kp_data: Vec<[f32; 4]> = keypoints
+                    .keypoints
+                    .iter()
+                    .map(|kp| [kp.x as f32, kp.y as f32, kp.size as f32, kp.angle as f32])
+                    .collect();
+
+                let kp_buffer = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("SIFT Keypoints Buffer"),
+                        contents: bytemuck::cast_slice(&kp_data),
+                        usage: wgpu::BufferUsages::STORAGE,
+                    });
+
+                // 2. Output buffer for descriptors (num_kps * 128 * 4 bytes)
+                let out_byte_size = (kp_data.len() * 128 * 4) as u64;
+                let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("SIFT Descriptors Output"),
+                    size: out_byte_size,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                });
+
+                let params = [
+                    image.shape.width as u32,
+                    image.shape.height as u32,
+                    kp_data.len() as u32,
+                    0u32,
+                ];
+                let params_buffer = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("SIFT Desc Params"),
+                        contents: bytemuck::cast_slice(&params),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
+
+                let shader_source = include_str!("../shaders/sift_descriptor.wgsl");
+                let pipeline = self.create_compute_pipeline(shader_source, "main");
+
+                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("SIFT Desc Bind Group"),
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: img_gpu.storage.buffer().as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: kp_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: output_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: params_buffer.as_entire_binding(),
+                        },
+                    ],
+                });
+
+                let mut encoder = self
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: None,
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(&pipeline);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    let x = (kp_data.len() as u32).div_ceil(64);
+                    pass.dispatch_workgroups(x, 1, 1);
+                }
+                self.submit(encoder);
+
+                // 3. Read back and convert to Descriptor objects
+                let raw_descs: Vec<f32> =
+                    pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer(
+                        self.device.clone(),
+                        &self.queue,
+                        &output_buffer,
+                        0,
+                        out_byte_size as usize,
+                    ))?;
+
+                let mut descs = Vec::with_capacity(keypoints.len());
+                for i in 0..keypoints.len() {
+                    let start = i * 128;
+                    let data: Vec<u8> = raw_descs[start..start + 128]
+                        .iter()
+                        .map(|&v| (v * 512.0).min(255.0) as u8)
+                        .collect();
+                    descs.push(cv_core::Descriptor::new(data, keypoints.keypoints[i].clone()));
+                }
+
+                Ok(cv_core::Descriptors { descriptors: descs })
             } else {
                 Err(crate::Error::InvalidInput(
-                    "Failed to downcast GPU result".into(),
+                    "GpuContext requires GpuStorage tensors".into(),
                 ))
             }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU compute_sift_descriptors only supports f32".into()))
         }
     }
 
-    fn akaze_derivatives<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn icp_correspondences<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        input: &Tensor<f32, S>,
-    ) -> crate::Result<(Tensor<f32, S>, Tensor<f32, S>, Tensor<f32, S>)> {
+        src: &Tensor<T, S>,
+        tgt: &Tensor<T, S>,
+        max_dist: T,
+    ) -> crate::Result<Vec<(usize, usize, T)>> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: input.shape,
-                dtype: input.dtype,
-                _phantom: PhantomData,
-            };
-
-            let (lx_gpu, ly_gpu, ldet_gpu) =
-                crate::gpu_kernels::akaze::akaze_derivatives(self, &input_gpu)?;
-
-            let lx_any = lx_gpu.storage.as_any();
-            let ly_any = ly_gpu.storage.as_any();
-            let ldet_any = ldet_gpu.storage.as_any();
-
-            if let (Some(lx_s), Some(ly_s), Some(ldet_s)) = (
-                lx_any.downcast_ref::<S>(),
-                ly_any.downcast_ref::<S>(),
-                ldet_any.downcast_ref::<S>(),
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let (Some(src_storage), Some(tgt_storage)) = (
+                src.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
+                tgt.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
             ) {
-                Ok((
-                    Tensor {
-                        storage: lx_s.clone(),
-                        shape: lx_gpu.shape,
-                        dtype: lx_gpu.dtype,
-                        _phantom: PhantomData,
-                    },
-                    Tensor {
-                        storage: ly_s.clone(),
-                        shape: ly_gpu.shape,
-                        dtype: ly_gpu.dtype,
-                        _phantom: PhantomData,
-                    },
-                    Tensor {
-                        storage: ldet_s.clone(),
-                        shape: ldet_gpu.shape,
-                        dtype: ldet_gpu.dtype,
-                        _phantom: PhantomData,
-                    },
-                ))
+                let src_gpu = Tensor {
+                    storage: src_storage.clone(),
+                    shape: src.shape,
+                    dtype: src.dtype,
+                    _phantom: PhantomData,
+                };
+                let tgt_gpu = Tensor {
+                    storage: tgt_storage.clone(),
+                    shape: tgt.shape,
+                    dtype: tgt.dtype,
+                    _phantom: PhantomData,
+                };
+
+                let res = crate::gpu_kernels::icp::icp_correspondences(self, &src_gpu, &tgt_gpu, max_dist.to_f32())?;
+
+                // Convert Vec<(usize, usize, f32)> to Vec<(usize, usize, T)>
+                Ok(res.into_iter().map(|(a, b, d)| (a, b, T::from_f32(d))).collect())
             } else {
                 Err(crate::Error::InvalidInput(
-                    "Failed to downcast GPU results".into(),
+                    "GpuContext requires GpuStorage tensors".into(),
                 ))
             }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU icp_correspondences only supports f32".into()))
         }
     }
 
-    fn akaze_contrast_k<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn icp_accumulate<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        input: &Tensor<f32, S>,
-    ) -> crate::Result<f32> {
+        source: &Tensor<T, S>,
+        target: &Tensor<T, S>,
+        target_normals: &Tensor<T, S>,
+        correspondences: &[(u32, u32)],
+        transform: &nalgebra::Matrix4<T>,
+    ) -> crate::Result<(nalgebra::Matrix6<T>, nalgebra::Vector6<T>)> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
-            let input_gpu = Tensor {
-                storage: input_storage.clone(),
-                shape: input.shape,
-                dtype: input.dtype,
-                _phantom: PhantomData,
-            };
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let (Some(src_storage), Some(tgt_storage), Some(norm_storage)) = (
+                source.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
+                target.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
+                target_normals
+                    .storage
+                    .as_any()
+                    .downcast_ref::<GpuStorage<f32>>(),
+            ) {
+                let src_gpu = Tensor {
+                    storage: src_storage.clone(),
+                    shape: source.shape,
+                    dtype: source.dtype,
+                    _phantom: PhantomData,
+                };
+                let tgt_gpu = Tensor {
+                    storage: tgt_storage.clone(),
+                    shape: target.shape,
+                    dtype: target.dtype,
+                    _phantom: PhantomData,
+                };
+                let n_gpu = Tensor {
+                    storage: norm_storage.clone(),
+                    shape: target_normals.shape,
+                    dtype: target_normals.dtype,
+                    _phantom: PhantomData,
+                };
 
-            crate::gpu_kernels::akaze::akaze_contrast_k(self, &input_gpu)
+                let transform_f32: nalgebra::Matrix4<f32> = transform.map(|v| v.to_f32());
+
+                let (m6, v6) = crate::gpu_kernels::icp::icp_accumulate(
+                    self,
+                    &src_gpu,
+                    &tgt_gpu,
+                    &n_gpu,
+                    correspondences,
+                    &transform_f32,
+                )?;
+
+                Ok((m6.map(|v| T::from_f32(v)), v6.map(|v| T::from_f32(v))))
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU icp_accumulate only supports f32".into()))
         }
     }
 
-    fn spmv<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    fn dense_icp_step<
+        T: cv_core::Float + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
+        &self,
+        source_depth: &Tensor<T, S>,
+        target_data: &Tensor<T, S>,
+        intrinsics: &[T; 4],
+        initial_guess: &nalgebra::Matrix4<T>,
+        max_dist: T,
+        max_angle: T,
+    ) -> crate::Result<(nalgebra::Matrix6<T>, nalgebra::Vector6<T>)> {
+        use crate::storage::GpuStorage;
+        use std::any::TypeId;
+        use std::marker::PhantomData;
+
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let (Some(src_storage), Some(tgt_storage)) = (
+                source_depth
+                    .storage
+                    .as_any()
+                    .downcast_ref::<GpuStorage<f32>>(),
+                target_data
+                    .storage
+                    .as_any()
+                    .downcast_ref::<GpuStorage<f32>>(),
+            ) {
+                let src_gpu = Tensor {
+                    storage: src_storage.clone(),
+                    shape: source_depth.shape,
+                    dtype: source_depth.dtype,
+                    _phantom: PhantomData,
+                };
+                let tgt_gpu = Tensor {
+                    storage: tgt_storage.clone(),
+                    shape: target_data.shape,
+                    dtype: target_data.dtype,
+                    _phantom: PhantomData,
+                };
+
+                let intrinsics_f32 = [
+                    intrinsics[0].to_f32(),
+                    intrinsics[1].to_f32(),
+                    intrinsics[2].to_f32(),
+                    intrinsics[3].to_f32(),
+                ];
+                let guess_f32 = initial_guess.map(|v| v.to_f32());
+
+                let (m6, v6) = crate::gpu_kernels::icp::dense_step(
+                    self,
+                    &src_gpu,
+                    &tgt_gpu,
+                    &intrinsics_f32,
+                    &guess_f32,
+                    max_dist.to_f32(),
+                    max_angle.to_f32(),
+                )?;
+
+                Ok((m6.map(|v| T::from_f32(v)), v6.map(|v| T::from_f32(v))))
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
+        } else {
+            Err(crate::Error::NotSupported("GPU dense_icp_step only supports f32".into()))
+        }
+    }
+
+    fn akaze_diffusion<
+        T: cv_core::Float + bytemuck::Pod + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
+        &self,
+        input: &Tensor<T, S>,
+        k: T,
+        tau: T,
+    ) -> crate::Result<Tensor<T, S>> {
+        use crate::storage::GpuStorage;
+        use std::any::TypeId;
+        use std::marker::PhantomData;
+
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
+
+                let result_gpu = crate::gpu_kernels::akaze::akaze_diffusion(self, &input_gpu, k.to_f32(), tau.to_f32())?;
+
+                let storage_any = result_gpu.storage.as_any();
+                if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                    Ok(Tensor {
+                        storage: storage_s.clone(),
+                        shape: result_gpu.shape,
+                        dtype: result_gpu.dtype,
+                        _phantom: PhantomData,
+                    })
+                } else {
+                    Err(crate::Error::InvalidInput(
+                        "Failed to downcast GPU result".into(),
+                    ))
+                }
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
+        } else {
+            Err(crate::Error::NotSupported("GPU akaze_diffusion only supports f32".into()))
+        }
+    }
+
+    fn akaze_derivatives<
+        T: cv_core::Float + bytemuck::Pod + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
+        &self,
+        input: &Tensor<T, S>,
+    ) -> crate::Result<(Tensor<T, S>, Tensor<T, S>, Tensor<T, S>)> {
+        use crate::storage::GpuStorage;
+        use std::any::TypeId;
+        use std::marker::PhantomData;
+
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
+
+                let (lx_gpu, ly_gpu, ldet_gpu) =
+                    crate::gpu_kernels::akaze::akaze_derivatives(self, &input_gpu)?;
+
+                let lx_any = lx_gpu.storage.as_any();
+                let ly_any = ly_gpu.storage.as_any();
+                let ldet_any = ldet_gpu.storage.as_any();
+
+                if let (Some(lx_s), Some(ly_s), Some(ldet_s)) = (
+                    lx_any.downcast_ref::<S>(),
+                    ly_any.downcast_ref::<S>(),
+                    ldet_any.downcast_ref::<S>(),
+                ) {
+                    Ok((
+                        Tensor {
+                            storage: lx_s.clone(),
+                            shape: lx_gpu.shape,
+                            dtype: lx_gpu.dtype,
+                            _phantom: PhantomData,
+                        },
+                        Tensor {
+                            storage: ly_s.clone(),
+                            shape: ly_gpu.shape,
+                            dtype: ly_gpu.dtype,
+                            _phantom: PhantomData,
+                        },
+                        Tensor {
+                            storage: ldet_s.clone(),
+                            shape: ldet_gpu.shape,
+                            dtype: ldet_gpu.dtype,
+                            _phantom: PhantomData,
+                        },
+                    ))
+                } else {
+                    Err(crate::Error::InvalidInput(
+                        "Failed to downcast GPU results".into(),
+                    ))
+                }
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
+        } else {
+            Err(crate::Error::NotSupported("GPU akaze_derivatives only supports f32".into()))
+        }
+    }
+
+    fn akaze_contrast_k<
+        T: cv_core::Float + bytemuck::Pod + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
+        &self,
+        input: &Tensor<T, S>,
+    ) -> crate::Result<T> {
+        use crate::storage::GpuStorage;
+        use std::any::TypeId;
+        use std::marker::PhantomData;
+
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(input_storage) = input.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let input_gpu = Tensor {
+                    storage: input_storage.clone(),
+                    shape: input.shape,
+                    dtype: input.dtype,
+                    _phantom: PhantomData,
+                };
+
+                let k = crate::gpu_kernels::akaze::akaze_contrast_k(self, &input_gpu)?;
+                Ok(T::from_f32(k))
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
+        } else {
+            Err(crate::Error::NotSupported("GPU akaze_contrast_k only supports f32".into()))
+        }
+    }
+
+    fn spmv<
+        T: cv_core::Float + bytemuck::Pod + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
         row_ptr: &[u32],
         col_indices: &[u32],
-        values: &[f32],
-        x: &Tensor<f32, S>,
-    ) -> crate::Result<Tensor<f32, S>> {
+        values: &[T],
+        x: &Tensor<T, S>,
+    ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
+        use std::any::TypeId;
         use std::marker::PhantomData;
 
-        if let Some(x_storage) = x.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
-            let x_gpu = Tensor {
-                storage: x_storage.clone(),
-                shape: x.shape,
-                dtype: x.dtype,
-                _phantom: PhantomData,
-            };
-
-            let result_gpu =
-                crate::gpu_kernels::sparse::spmv(self, row_ptr, col_indices, values, &x_gpu)?;
-
-            let storage_any = result_gpu.storage.as_any();
-            if let Some(storage_s) = storage_any.downcast_ref::<S>() {
-                Ok(Tensor {
-                    storage: storage_s.clone(),
-                    shape: result_gpu.shape,
-                    dtype: result_gpu.dtype,
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let Some(x_storage) = x.storage.as_any().downcast_ref::<GpuStorage<f32>>() {
+                let x_gpu = Tensor {
+                    storage: x_storage.clone(),
+                    shape: x.shape,
+                    dtype: x.dtype,
                     _phantom: PhantomData,
-                })
+                };
+
+                let values_f32: &[f32] = bytemuck::cast_slice(values);
+
+                let result_gpu =
+                    crate::gpu_kernels::sparse::spmv(self, row_ptr, col_indices, values_f32, &x_gpu)?;
+
+                let storage_any = result_gpu.storage.as_any();
+                if let Some(storage_s) = storage_any.downcast_ref::<S>() {
+                    Ok(Tensor {
+                        storage: storage_s.clone(),
+                        shape: result_gpu.shape,
+                        dtype: result_gpu.dtype,
+                        _phantom: PhantomData,
+                    })
+                } else {
+                    Err(crate::Error::InvalidInput(
+                        "Failed to downcast GPU result".into(),
+                    ))
+                }
             } else {
                 Err(crate::Error::InvalidInput(
-                    "Failed to downcast GPU result".into(),
+                    "GpuContext requires GpuStorage tensors".into(),
                 ))
             }
         } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
+            Err(crate::Error::NotSupported("GPU spmv only supports f32".into()))
+        }
+    }
+    fn mog2_update<
+        T: cv_core::Float + bytemuck::Pod + 'static,
+        S1: Storage<T> + 'static,
+        S2: Storage<u32> + 'static,
+    >(
+        &self,
+        frame: &Tensor<T, S1>,
+        model: &mut Tensor<T, S1>,
+        mask: &mut Tensor<u32, S2>,
+        params: &crate::context::Mog2Params<T>,
+    ) -> crate::Result<()> {
+        use crate::storage::GpuStorage;
+        use std::any::TypeId;
+        use std::marker::PhantomData;
+
+        if TypeId::of::<T>() == TypeId::of::<f32>() {
+            if let (Some(frame_storage), Some(model_storage), Some(mask_storage)) = (
+                frame.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
+                model.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
+                mask.storage.as_any().downcast_ref::<GpuStorage<u32>>(),
+            ) {
+                let frame_gpu = Tensor {
+                    storage: frame_storage.clone(),
+                    shape: frame.shape,
+                    dtype: frame.dtype,
+                    _phantom: PhantomData,
+                };
+                let mut model_gpu = Tensor {
+                    storage: model_storage.clone(),
+                    shape: model.shape,
+                    dtype: model.dtype,
+                    _phantom: PhantomData,
+                };
+                let mut mask_gpu = Tensor {
+                    storage: mask_storage.clone(),
+                    shape: mask.shape,
+                    dtype: mask.dtype,
+                    _phantom: PhantomData,
+                };
+
+                // Convert Mog2Params<T> to Mog2Params<f32> for the kernel
+                let params_f32 = crate::context::Mog2Params {
+                    width: params.width,
+                    height: params.height,
+                    n_mixtures: params.n_mixtures,
+                    alpha: params.alpha.to_f32(),
+                    var_threshold: params.var_threshold.to_f32(),
+                    background_ratio: params.background_ratio.to_f32(),
+                    var_init: params.var_init.to_f32(),
+                    var_min: params.var_min.to_f32(),
+                    var_max: params.var_max.to_f32(),
+                    _padding: params._padding,
+                };
+
+                crate::gpu_kernels::mog2_update(self, &frame_gpu, &mut model_gpu, &mut mask_gpu, &params_f32)
+            } else {
+                Err(crate::Error::InvalidInput(
+                    "GpuContext requires GpuStorage tensors".into(),
+                ))
+            }
+        } else {
+            Err(crate::Error::NotSupported("GPU mog2_update only supports f32".into()))
         }
     }
 
-    fn mog2_update<S1: Storage<f32> + 'static, S2: Storage<u32> + 'static>(
+    fn pointcloud_transform<T: cv_core::Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        frame: &Tensor<f32, S1>,
-        model: &mut Tensor<f32, S1>,
-        mask: &mut Tensor<u32, S2>,
-        params: &crate::context::Mog2Params,
-    ) -> crate::Result<()> {
-        use crate::storage::GpuStorage;
-        use std::marker::PhantomData;
-
-        if let (Some(frame_storage), Some(model_storage), Some(mask_storage)) = (
-            frame.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
-            model.storage.as_any().downcast_ref::<GpuStorage<f32>>(),
-            mask.storage.as_any().downcast_ref::<GpuStorage<u32>>(),
-        ) {
-            let frame_gpu = Tensor {
-                storage: frame_storage.clone(),
-                shape: frame.shape,
-                dtype: frame.dtype,
-                _phantom: PhantomData,
-            };
-            let mut model_gpu = Tensor {
-                storage: model_storage.clone(),
-                shape: model.shape,
-                dtype: model.dtype,
-                _phantom: PhantomData,
-            };
-            let mut mask_gpu = Tensor {
-                storage: mask_storage.clone(),
-                shape: mask.shape,
-                dtype: mask.dtype,
-                _phantom: PhantomData,
-            };
-
-            crate::gpu_kernels::mog2_update(self, &frame_gpu, &mut model_gpu, &mut mask_gpu, params)
-        } else {
-            Err(crate::Error::InvalidInput(
-                "GpuContext requires GpuStorage tensors".into(),
-            ))
-        }
+        _points: &Tensor<T, S>,
+        _transform: &[[T; 4]; 4],
+    ) -> crate::Result<Tensor<T, S>> {
+        Err(crate::Error::NotSupported("GPU pointcloud_transform not implemented".into()))
     }
 }
 
@@ -1856,7 +2380,7 @@ impl GpuContext {
 
     /// Return a buffer to the pool.
     pub fn return_buffer(&self, buffer: wgpu::Buffer, usage: wgpu::BufferUsages) {
-        crate::gpu_kernels::buffer_utils::global_pool().return_buffer(buffer, usage)
+        crate::gpu_kernels::buffer_utils::global_pool().return_buffer(&self.device, buffer, usage)
     }
 }
 
@@ -1884,9 +2408,9 @@ mod tests {
 
         let width = 64usize;
         let height = 64usize;
-        let mut data = vec![0u8; width * height];
+        let mut data = vec![0f32; width * height];
         for i in 0..data.len() {
-            data[i] = (i % 255) as u8;
+            data[i] = (i % 255) as f32;
         }
 
         let shape = cv_core::TensorShape::new(1, height, width);

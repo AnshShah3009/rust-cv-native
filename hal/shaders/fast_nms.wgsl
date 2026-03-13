@@ -3,8 +3,8 @@ struct Params {
     height: u32,
 }
 
-@group(0) @binding(0) var<storage, read> score_map: array<u32>;
-@group(0) @binding(1) var<storage, read_write> suppressed_map: array<u32>;
+@group(0) @binding(0) var<storage, read> score_map: array<u32>; // Packed u8
+@group(0) @binding(1) var<storage, read_write> suppressed_map: array<u32>; // Packed u8
 @group(0) @binding(2) var<uniform> params: Params;
 
 fn get_score(x: i32, y: i32) -> u32 {
@@ -36,7 +36,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         if (s > 0u) {
             var is_max = true;
-            // Check 3x3 neighborhood
             for (var dy = -1; dy <= 1; dy++) {
                 for (var dx = -1; dx <= 1; dx++) {
                     if (dx == 0 && dy == 0) { continue; }

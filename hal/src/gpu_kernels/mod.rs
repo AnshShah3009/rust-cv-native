@@ -66,11 +66,13 @@ pub mod marching_cubes;
 pub mod matching;
 pub mod morphology;
 pub mod nms;
+pub mod odometry;
 pub mod optical_flow;
 pub mod orientation;
 pub mod pointcloud;
 pub mod pyramid;
 pub mod radix_sort;
+pub mod raycasting;
 pub mod resize;
 pub mod sift;
 pub mod sobel;
@@ -118,7 +120,7 @@ pub fn mog2_update(
     frame: &cv_core::Tensor<f32, crate::storage::GpuStorage<f32>>,
     model: &mut cv_core::Tensor<f32, crate::storage::GpuStorage<f32>>,
     mask: &mut cv_core::Tensor<u32, crate::storage::GpuStorage<u32>>,
-    params: &crate::context::Mog2Params,
+    params: &crate::context::Mog2Params<f32>,
 ) -> crate::Result<()> {
     use wgpu::util::DeviceExt;
 
@@ -307,8 +309,8 @@ pub mod buffer_utils {
 
     /// A bucketed pool for reusing GPU buffers
     pub struct GpuBufferPool {
-        // Buckets: usage -> (size_bucket -> Vec<Buffer>)
-        buckets: Mutex<HashMap<BufferUsages, HashMap<u64, Vec<Buffer>>>>,
+        // Buckets: (device_addr, usage) -> (size_bucket -> Vec<Buffer>)
+        buckets: Mutex<HashMap<(usize, BufferUsages), HashMap<u64, Vec<Buffer>>>>,
     }
 
     impl Default for GpuBufferPool {
@@ -335,12 +337,14 @@ pub mod buffer_utils {
 
         pub fn get(&self, device: &Device, size: u64, usage: BufferUsages) -> Buffer {
             let bucket_size = Self::get_size_bucket(size);
+            let dev_key = (device as *const Device) as usize;
+            
             let mut buckets = match self.buckets.lock() {
                 Ok(b) => b,
                 Err(poisoned) => poisoned.into_inner(),
             };
 
-            let usage_map = buckets.entry(usage).or_insert_with(HashMap::new);
+            let usage_map = buckets.entry((dev_key, usage)).or_insert_with(HashMap::new);
             if let Some(pool) = usage_map.get_mut(&bucket_size) {
                 if let Some(buffer) = pool.pop() {
                     return buffer;
@@ -355,13 +359,15 @@ pub mod buffer_utils {
             })
         }
 
-        pub fn return_buffer(&self, buffer: Buffer, usage: BufferUsages) {
+        pub fn return_buffer(&self, device: &Device, buffer: Buffer, usage: BufferUsages) {
             let size = buffer.size();
+            let dev_key = (device as *const Device) as usize;
+            
             let mut buckets = match self.buckets.lock() {
                 Ok(b) => b,
                 Err(poisoned) => poisoned.into_inner(),
             };
-            let usage_map = buckets.entry(usage).or_insert_with(HashMap::new);
+            let usage_map = buckets.entry((dev_key, usage)).or_insert_with(HashMap::new);
             let pool = usage_map.entry(size).or_insert_with(Vec::new);
             if pool.len() < 8 {
                 pool.push(buffer);
@@ -444,14 +450,21 @@ pub mod buffer_utils {
         // Use async-friendly polling loop to progress mapping.
         // This avoids blocking the OS thread, allowing Tokio to schedule other tasks.
         let mut rx = rx;
-        while rx.try_recv().is_err() {
-            let _ = device.poll(wgpu::PollType::Poll);
-            std::thread::yield_now();
-        }
+        let res = loop {
+            match rx.try_recv() {
+                Ok(val) => break Ok(val),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    let _ = device.poll(wgpu::PollType::Poll);
+                    std::thread::yield_now();
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    break Err(crate::Error::DeviceError("Readback channel closed".to_string()));
+                }
+            }
+        };
 
-        rx.await
-            .map_err(|_| crate::Error::DeviceError("Readback channel closed".to_string()))?
-            .map_err(|e| crate::Error::DeviceError(format!("Buffer mapping failed: {}", e)))?;
+        res.map_err(|e| crate::Error::DeviceError(format!("Readback channel closed: {}", e)))?
+            .map_err(|e| crate::Error::DeviceError(format!("Buffer mapping failed: {:?}", e)))?;
 
         let data = slice.get_mapped_range();
         let result_full: Vec<T> = bytemuck::cast_slice(&data).to_vec();
@@ -460,6 +473,7 @@ pub mod buffer_utils {
 
         // Return to pool!
         pool.return_buffer(
+            &device,
             staging_buffer,
             BufferUsages::MAP_READ | BufferUsages::COPY_DST,
         );
@@ -980,13 +994,12 @@ pub mod raycasting_gpu {
 
     /// Batch ray-mesh intersection on GPU
     pub fn cast_rays(
-        _gpu: &crate::gpu::GpuContext,
-        _rays: &[(Point3<f32>, Vector3<f32>)], // (origin, direction)
-        _vertices: &[Point3<f32>],
-        _faces: &[[u32; 3]],
+        gpu: &crate::gpu::GpuContext,
+        rays: &[(Point3<f32>, Vector3<f32>)], // (origin, direction)
+        vertices: &[Point3<f32>],
+        faces: &[[u32; 3]],
     ) -> crate::Result<Vec<Option<(f32, Point3<f32>, Vector3<f32>)>>> {
-        // (distance, hit_point, normal)
-        Err(crate::Error::not_supported("GPU ray casting"))
+        crate::gpu_kernels::raycasting::cast_rays(gpu, rays, vertices, faces)
     }
 
     /// Compute distance field on GPU
@@ -1004,22 +1017,29 @@ pub mod raycasting_gpu {
 
 /// GPU-accelerated RGBD odometry
 pub mod odometry_gpu {
-    use nalgebra::Vector3;
+    use nalgebra::{Matrix4, Vector3};
 
     /// Compute RGBD odometry on GPU
     pub fn compute_odometry(
-        _gpu: &crate::gpu::GpuContext,
-        _source_depth: &[f32],
-        _target_depth: &[f32],
+        gpu: &crate::gpu::GpuContext,
+        source_depth: &[f32],
+        target_depth: &[f32],
         _source_color: Option<&[u32]>,
         _target_color: Option<&[u32]>,
-        _intrinsics: &[f32; 4],
-        _width: u32,
-        _height: u32,
-        _init_transform: &[f32; 16],
-    ) -> crate::Result<([f32; 16], f32, f32)> {
-        // (transform, fitness, rmse)
-        Err(crate::Error::not_supported("GPU RGBD odometry"))
+        intrinsics: &[f32; 4],
+        width: u32,
+        height: u32,
+        init_transform: &Matrix4<f32>,
+    ) -> crate::Result<(Matrix4<f32>, f32, f32)> {
+        crate::gpu_kernels::odometry::compute_odometry(
+            gpu,
+            source_depth,
+            target_depth,
+            intrinsics,
+            width,
+            height,
+            init_transform,
+        )
     }
 
     /// Compute vertex map from depth on GPU

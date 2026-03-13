@@ -1,8 +1,8 @@
 use crate::context::TemplateMatchMethod;
 use crate::gpu::GpuContext;
-use crate::storage::GpuStorage;
+use crate::storage::WgpuGpuStorage;
 use crate::Result;
-use cv_core::{Tensor, TensorShape};
+use cv_core::{Float, TensorShape};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -17,12 +17,19 @@ struct MatchParams {
     method: u32,
 }
 
-pub fn match_template(
+pub fn match_template<T: Float + bytemuck::Pod + bytemuck::Zeroable + 'static>(
     ctx: &GpuContext,
-    image: &Tensor<u8, GpuStorage<u8>>,
-    template: &Tensor<u8, GpuStorage<u8>>,
+    image: &crate::GpuTensor<T>,
+    template: &crate::GpuTensor<T>,
     method: TemplateMatchMethod,
-) -> Result<Tensor<f32, GpuStorage<f32>>> {
+) -> Result<crate::GpuTensor<T>> {
+    // Only f32 WGSL shader available
+    if cv_core::DataType::from_type::<T>().ok() != Some(cv_core::DataType::F32) {
+        return Err(crate::Error::NotSupported(
+            "Template Matching GPU kernel only supports f32".into(),
+        ));
+    }
+
     let (img_h, img_w) = image.shape.hw();
     let (templ_h, templ_w) = template.shape.hw();
 
@@ -30,7 +37,7 @@ pub fn match_template(
     let out_h = img_h - templ_h + 1;
     let out_len = out_w * out_h;
 
-    let byte_size = (out_len * 4) as u64;
+    let byte_size = (out_len * std::mem::size_of::<f32>()) as u64;
     let usages = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
     let output_buffer = ctx.get_buffer(byte_size, usages);
 
@@ -101,10 +108,10 @@ pub fn match_template(
     }
     ctx.submit(encoder);
 
-    Ok(Tensor {
-        storage: GpuStorage::from_buffer(Arc::new(output_buffer), out_len),
+    Ok(cv_core::Tensor {
+        storage: WgpuGpuStorage::from_buffer(Arc::new(output_buffer), out_len),
         shape: TensorShape::new(1, out_h, out_w),
-        dtype: cv_core::DataType::F32,
+        dtype: image.dtype,
         _phantom: PhantomData,
     })
 }
