@@ -5,7 +5,7 @@
 
 use cv_core::point_cloud::PointCloud;
 use cv_core::{Error, Result};
-use nalgebra::{Matrix4, Point3, Vector3};
+use nalgebra::{Matrix4, Point3};
 
 /// Simple nearest neighbor
 struct SimpleNN {
@@ -57,96 +57,6 @@ pub fn compute_fpfh_features(_cloud: &PointCloud, _radius: f32) -> Result<Vec<FP
     Err(Error::RuntimeError(
         "FPFH features are currently stubbed".to_string(),
     ))
-}
-
-/// Compute Simple Point Feature Histogram
-#[allow(dead_code)]
-fn compute_spfh(
-    _point: &Point3<f32>,
-    normal: Option<&Vector3<f32>>,
-    neighbors: &[(Point3<f32>, usize, f32)],
-    _points: &[Point3<f32>],
-) -> [f32; 33] {
-    let mut histogram = [0.0f32; 33];
-
-    if neighbors.len() < 2 {
-        return histogram;
-    }
-
-    let normal = normal.copied().unwrap_or_else(Vector3::z);
-
-    for (_neighbor_point, neighbor_idx, _dist) in neighbors {
-        if *neighbor_idx >= _points.len() {
-            continue;
-        }
-
-        let neighbor = &_points[*neighbor_idx];
-        let diff = neighbor - _point;
-        let dist = diff.norm();
-
-        if dist < 1e-6 {
-            continue;
-        }
-
-        // Compute Darboux frame features
-        let u = normal;
-        let v = diff.cross(&u).normalize();
-        let w = u.cross(&v);
-
-        // Compute angles
-        let diff_vec = neighbor.coords - _point.coords;
-        let alpha = v.dot(&diff_vec) / dist;
-        let phi = u.dot(&diff_vec) / dist;
-        let theta = (u.dot(&diff_vec) / dist).atan2(w.dot(&diff_vec));
-
-        // Bin the features (simplified - 11 bins per feature)
-        let alpha_bin = ((alpha + 1.0) * 5.5).clamp(0.0, 10.0) as usize;
-        let phi_bin = ((phi + 1.0) * 5.5).clamp(0.0, 10.0) as usize;
-        let theta_bin = ((theta + std::f32::consts::PI) * 11.0 / (2.0 * std::f32::consts::PI))
-            .clamp(0.0, 10.0) as usize;
-
-        histogram[alpha_bin] += 1.0;
-        histogram[11 + phi_bin] += 1.0;
-        histogram[22 + theta_bin] += 1.0;
-    }
-
-    // Normalize
-    let sum: f32 = histogram.iter().sum();
-    if sum > 0.0 {
-        for h in &mut histogram {
-            *h /= sum;
-        }
-    }
-
-    histogram
-}
-
-/// Weight SPFH with neighbors to get FPFH
-#[allow(dead_code)]
-fn weight_spfh(
-    _point_idx: usize,
-    spfh: &[f32; 33],
-    neighbors: &[(Point3<f32>, usize, f32)],
-    _points: &[Point3<f32>],
-    _radius: f32,
-) -> [f32; 33] {
-    let mut fpfh = *spfh;
-
-    // Weight by inverse distance (simplified)
-    for (_p, _idx, _dist) in neighbors {
-        // In full implementation, would query neighbor's SPFH and weight
-        // For now, just use the local SPFH
-    }
-
-    // Renormalize
-    let sum: f32 = fpfh.iter().sum();
-    if sum > 0.0 {
-        for h in &mut fpfh {
-            *h /= sum;
-        }
-    }
-
-    fpfh
 }
 
 use cv_core::{Ransac, RobustConfig, RobustModel};
@@ -392,26 +302,6 @@ fn evaluate_registration(
     };
 
     (fitness, rmse)
-}
-
-/// Random sample without replacement
-#[allow(dead_code)]
-fn random_sample(n: usize, max: usize) -> Vec<usize> {
-    use std::collections::HashSet;
-    let mut rng = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let mut indices = HashSet::new();
-    while indices.len() < n && indices.len() < max {
-        // Simple LCG random number generator
-        rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
-        let idx = (rng % max as u64) as usize;
-        indices.insert(idx);
-    }
-
-    indices.into_iter().collect()
 }
 
 /// ISS (Intrinsic Shape Signatures) feature detector

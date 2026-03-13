@@ -6,15 +6,14 @@ use cv_core::point_cloud::PointCloud;
 /// wasm-bindgen version conflicts (rerun pins 0.2.100, eframe needs 0.2.101).
 /// TODO: Re-add rerun support when version compatibility is resolved.
 pub struct PointCloudLogger {
-    #[allow(dead_code)]
-    entity_path: String,
+    _entity_path: String,
     point_clouds: Vec<(String, PointCloud)>,
 }
 
 impl PointCloudLogger {
     pub fn new(application_id: &str) -> Self {
         Self {
-            entity_path: application_id.to_string(),
+            _entity_path: application_id.to_string(),
             point_clouds: Vec::new(),
         }
     }

@@ -16,14 +16,10 @@ pub struct Orb {
     n_features: usize,
     scale_factor: f32,
     n_levels: usize,
-    #[allow(dead_code)]
-    edge_threshold: i32,
-    #[allow(dead_code)]
-    first_level: i32,
-    #[allow(dead_code)]
-    wta_k: i32,
-    #[allow(dead_code)]
-    score_type: ScoreType,
+    _edge_threshold: i32,
+    _first_level: i32,
+    _wta_k: i32,
+    _score_type: ScoreType,
     patch_size: i32,
     fast_threshold: u8,
 }
@@ -43,10 +39,10 @@ impl Default for Orb {
             n_features: 500,
             scale_factor: 1.2,
             n_levels: 8,
-            edge_threshold: 31,
-            first_level: 0,
-            wta_k: 2,
-            score_type: ScoreType::Harris,
+            _edge_threshold: 31,
+            _first_level: 0,
+            _wta_k: 2,
+            _score_type: ScoreType::Harris,
             patch_size: 31,
             fast_threshold: 20,
         }
@@ -712,22 +708,4 @@ fn convert_to_f32_cpu<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
 }
 
 #[cfg(test)]
-mod tests {
-    use image::{GrayImage, Luma};
-
-    #[allow(dead_code)]
-    fn create_test_image() -> GrayImage {
-        let size = 128u32;
-        let mut img = GrayImage::new(size, size);
-
-        let square_size = 16;
-        for y in 0..size {
-            for x in 0..size {
-                let is_white = ((x / square_size) + (y / square_size)) % 2 == 0;
-                img.put_pixel(x, y, if is_white { Luma([255]) } else { Luma([0]) });
-            }
-        }
-
-        img
-    }
-}
+mod tests {}

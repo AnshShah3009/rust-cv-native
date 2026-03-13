@@ -168,24 +168,22 @@ pub fn create_plane_point_cloud(
     }
 }
 
-#[allow(dead_code)]
 struct Octree {
-    depth: usize,
+    _depth: usize,
     root: OctreeNode,
 }
 
-#[allow(dead_code)]
 struct OctreeNode {
-    children: Option<Box<[OctreeNode; 8]>>,
+    _children: Option<Box<[OctreeNode; 8]>>,
     sample_indices: Vec<usize>,
-    center: Point3<f32>,
-    size: f32,
+    _center: Point3<f32>,
+    _size: f32,
 }
 
 impl Octree {
     fn new(depth: usize) -> Self {
         Self {
-            depth,
+            _depth: depth,
             root: OctreeNode::new(Point3::origin(), 1.0),
         }
     }
@@ -198,10 +196,10 @@ impl Octree {
 impl OctreeNode {
     fn new(center: Point3<f32>, size: f32) -> Self {
         Self {
-            children: None,
+            _children: None,
             sample_indices: Vec::new(),
-            center,
-            size,
+            _center: center,
+            _size: size,
         }
     }
 }

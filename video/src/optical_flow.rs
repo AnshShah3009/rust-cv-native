@@ -311,18 +311,23 @@ impl Farneback {
     }
 }
 
-/// Polynomial expansion coefficients (A, B, C, D, E, F) for:
-/// f(x,y) ~ Ax^2 + Bxy + Cy^2 + Dx + Ey + F
+/// Polynomial expansion coefficients for f(x,y) ~ Ax^2 + Bxy + Cy^2 + Dx + Ey + F.
+/// All 6 coefficients are computed; currently only A, B, C (0-2) are used by the solver.
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
-struct PolyCoeffs(f32, f32, f32, f32, f32, f32);
+struct PolyCoeffs(
+    f32,
+    f32,
+    f32,
+    #[allow(dead_code)] f32,
+    #[allow(dead_code)] f32,
+    #[allow(dead_code)] f32,
+);
 
 /// Polynomial expansion result
 struct PolynomialExpansion {
     coeffs: Vec<PolyCoeffs>,
     width: u32,
-    #[allow(dead_code)]
-    height: u32,
+    _height: u32,
 }
 
 impl PolynomialExpansion {
@@ -399,7 +404,7 @@ fn polynomial_expansion(img: &GrayImage, poly_n: usize, sigma: f32) -> Polynomia
     PolynomialExpansion {
         coeffs,
         width,
-        height,
+        _height: height,
     }
 }
 

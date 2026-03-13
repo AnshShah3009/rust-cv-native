@@ -32,8 +32,7 @@ pub struct GpuContext {
 impl GpuContext {
     /// Safely downcasts a GpuStorage result to the requested generic storage S.
     /// Uses TypeId checks to avoid allocations when S is GpuStorage.
-    #[allow(dead_code)]
-    pub(crate) fn downcast_storage<
+    pub(crate) fn _downcast_storage<
         T: Clone + Copy + std::fmt::Debug + bytemuck::Pod + 'static,
         S: Storage<T> + 'static,
     >(
@@ -119,6 +118,9 @@ impl ComputeContext for GpuContext {
                     }
                     crate::context::BorderMode::Replicate => crate::context::BorderMode::Replicate,
                     crate::context::BorderMode::Reflect => crate::context::BorderMode::Reflect,
+                    crate::context::BorderMode::Reflect101 => {
+                        crate::context::BorderMode::Reflect101
+                    }
                     crate::context::BorderMode::Wrap => crate::context::BorderMode::Wrap,
                 };
                 let result_gpu = crate::gpu_kernels::convolve::convolve_2d(

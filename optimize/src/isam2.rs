@@ -861,8 +861,7 @@ pub struct Isam2 {
     solver: RwLock<Isam2Solver>,
     pending_factors: RwLock<Vec<Box<dyn Factor>>>,
     pending_values: RwLock<Values>,
-    #[allow(dead_code)]
-    optimize_on_update: bool,
+    _optimize_on_update: bool,
 }
 
 impl Isam2 {
@@ -875,7 +874,7 @@ impl Isam2 {
             solver: RwLock::new(Isam2Solver::default()),
             pending_factors: RwLock::new(Vec::new()),
             pending_values: RwLock::new(Values::new()),
-            optimize_on_update,
+            _optimize_on_update: optimize_on_update,
         }
     }
 

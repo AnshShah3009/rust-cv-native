@@ -42,6 +42,25 @@ pub use storage::*;
 pub use tensor::*;
 pub use vector::*;
 
+/// Border extrapolation mode for convolution and filtering operations.
+///
+/// Determines how pixel values outside the image boundaries are computed.
+/// Default type parameter is `u8` for standard image processing; use
+/// `BorderMode<f32>` (or other float types) for GPU-accelerated paths.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BorderMode<T = u8> {
+    /// Pad with a fixed constant value.
+    Constant(T),
+    /// Replicate the edge pixel.
+    Replicate,
+    /// Reflect across the border (e.g. `dcb|abcd|cba`).
+    Reflect,
+    /// Reflect across the border without duplicating the edge pixel (e.g. `dcba|abcd|dcba`).
+    Reflect101,
+    /// Wrap around to the opposite edge.
+    Wrap,
+}
+
 /// Error types for core operations
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

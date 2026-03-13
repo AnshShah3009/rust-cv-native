@@ -1,7 +1,7 @@
 use crate::simd::convolve_row_1d;
+use cv_core::BorderMode as HalBorderMode;
 use cv_core::{Tensor, TensorShape};
 use cv_hal::compute::ComputeDevice;
-use cv_hal::context::BorderMode as HalBorderMode;
 use cv_hal::gpu::GpuContext;
 use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
 use cv_runtime::orchestrator::{scheduler, RuntimeRunner};
@@ -52,14 +52,7 @@ impl Kernel {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BorderMode {
-    Constant(u8),
-    Replicate,
-    Reflect,
-    Reflect101,
-    Wrap,
-}
+pub use cv_core::BorderMode;
 
 pub fn box_kernel(size: usize) -> Kernel {
     let value = 1.0 / (size * size) as f32;

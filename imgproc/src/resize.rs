@@ -78,30 +78,6 @@ fn resize_gpu(
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
 }
 
-#[allow(dead_code)]
-fn resize_nearest(src: &GrayImage, width: u32, height: u32) -> GrayImage {
-    let mut dst = GrayImage::new(width, height);
-    let src_width = src.width() as f32;
-    let src_height = src.height() as f32;
-    let dst_width = width as f32;
-    let dst_height = height as f32;
-
-    dst.as_mut()
-        .par_chunks_mut(width as usize)
-        .enumerate()
-        .for_each(|(y, row)| {
-            let y = y as u32;
-            for x in 0..width {
-                let sx = ((x as f32 * src_width / dst_width).floor() as u32).min(src.width() - 1);
-                let sy =
-                    ((y as f32 * src_height / dst_height).floor() as u32).min(src.height() - 1);
-                let val = src.get_pixel(sx, sy)[0];
-                row[x as usize] = val;
-            }
-        });
-    dst
-}
-
 fn resize_linear(src: &GrayImage, width: u32, height: u32) -> GrayImage {
     let mut dst = GrayImage::new(width, height);
     let src_width = src.width() as f32 - 1.0;

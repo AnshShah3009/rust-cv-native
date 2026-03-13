@@ -586,18 +586,7 @@ pub enum ThresholdType {
     ToZeroInv,
 }
 
-/// Border extrapolation mode for convolution and filtering.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BorderMode<T: Float> {
-    /// Pad with a fixed constant value.
-    Constant(T),
-    /// Replicate the edge pixel.
-    Replicate,
-    /// Reflect across the border (e.g. `dcb|abcd|cba`).
-    Reflect,
-    /// Wrap around to the opposite edge.
-    Wrap,
-}
+pub use cv_core::BorderMode;
 
 /// Template matching similarity metric.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

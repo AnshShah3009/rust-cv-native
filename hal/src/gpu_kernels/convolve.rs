@@ -47,6 +47,7 @@ pub fn convolve_2d<T: Float + bytemuck::Pod + bytemuck::Zeroable + 'static>(
         BorderMode::Constant(v) => (0, v.to_f32()),
         BorderMode::Replicate => (1, 0.0),
         BorderMode::Reflect => (2, 0.0),
+        BorderMode::Reflect101 => (2, 0.0), // Same as Reflect in GPU shader
         BorderMode::Wrap => (3, 0.0),
     };
 
