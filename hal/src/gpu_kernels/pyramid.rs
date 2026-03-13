@@ -78,10 +78,22 @@ pub fn pyramid_down<T: cv_core::Float + bytemuck::Pod + bytemuck::Zeroable + 'st
         };
         let blurred = crate::gpu_kernels::convolve::gaussian_blur(ctx, &input_f32_tensor, 1.0, 5)?;
         let scaled = crate::gpu_kernels::resize::resize(ctx, &blurred, new_w as u32, new_h as u32)?;
-        // Safety: f32 is a special case of T (we only reach here when T == f32)
-        let scaled_t =
-            unsafe { std::mem::transmute::<crate::GpuTensor<f32>, crate::GpuTensor<T>>(scaled) };
-        Ok(scaled_t)
+        // Reconstruct GpuTensor<T> safely. T == f32 verified by downcast above, so
+        // downcast_ref::<WgpuGpuStorage<T>>() succeeds (TypeId matches at runtime).
+        let storage_t = scaled
+            .storage
+            .as_any()
+            .downcast_ref::<crate::storage::WgpuGpuStorage<T>>()
+            .ok_or_else(|| {
+                crate::Error::InvalidInput("pyramid_down: type mismatch after blur+resize".into())
+            })?
+            .clone();
+        Ok(cv_core::Tensor {
+            storage: storage_t,
+            shape: scaled.shape,
+            dtype: scaled.dtype,
+            _phantom: PhantomData,
+        })
     } else {
         // For non-f32: skip gaussian blur, just resize
         crate::gpu_kernels::resize::resize(ctx, input, new_w as u32, new_h as u32)

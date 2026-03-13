@@ -1304,7 +1304,13 @@ impl ComputeContext for GpuContext {
                 }
             }
 
-            // Safety: T == f32 verified above; points slice is &[T] = &[f32]
+            // T == f32 verified above; points slice is &[T] = &[f32]
+            assert!(
+                points.len().is_multiple_of(2),
+                "optical_flow_lk: points length must be even"
+            );
+            // SAFETY: T == f32 verified by TypeId check. &[f32] reinterpreted as &[[f32;2]]
+            // is valid because [f32;2] has same alignment as f32 and length is verified even.
             let points_f32: &[[f32; 2]] = unsafe {
                 std::slice::from_raw_parts(points.as_ptr() as *const [f32; 2], points.len() / 2)
             };
@@ -1317,8 +1323,21 @@ impl ComputeContext for GpuContext {
                 max_iters,
             )?;
 
-            // Safety: we verified T == f32, so Vec<[f32;2]> and Vec<[T;2]> have identical layout.
-            let results_t: Vec<[T; 2]> = unsafe { std::mem::transmute(results) };
+            // Reconstruct Vec<[T;2]> from Vec<[f32;2]> without transmute.
+            assert_eq!(
+                std::mem::size_of::<[f32; 2]>(),
+                std::mem::size_of::<[T; 2]>()
+            );
+            assert_eq!(
+                std::mem::align_of::<[f32; 2]>(),
+                std::mem::align_of::<[T; 2]>()
+            );
+            let results_t: Vec<[T; 2]> = {
+                let mut r = std::mem::ManuallyDrop::new(results);
+                // SAFETY: T == f32 verified by TypeId. Size and alignment asserted above.
+                // ManuallyDrop prevents double-free.
+                unsafe { Vec::from_raw_parts(r.as_mut_ptr() as *mut [T; 2], r.len(), r.capacity()) }
+            };
             Ok(results_t)
         } else {
             Err(crate::Error::NotSupported(
@@ -2397,9 +2416,21 @@ impl ComputeContext for GpuContext {
                     _phantom: PhantomData::<f32>,
                 };
 
-                // Safe: we verified T is f32 via TypeId check above
-                let transform_f32: &[[f32; 4]; 4] =
-                    unsafe { &*(transform as *const [[T; 4]; 4] as *const [[f32; 4]; 4]) };
+                // Copy transform to f32 array through bytes to avoid aliasing violation.
+                assert_eq!(
+                    std::mem::size_of::<[[T; 4]; 4]>(),
+                    std::mem::size_of::<[[f32; 4]; 4]>()
+                );
+                let transform_f32: [[f32; 4]; 4] = unsafe {
+                    let mut out = std::mem::MaybeUninit::<[[f32; 4]; 4]>::uninit();
+                    std::ptr::copy_nonoverlapping(
+                        transform as *const [[T; 4]; 4] as *const u8,
+                        out.as_mut_ptr() as *mut u8,
+                        std::mem::size_of::<[[f32; 4]; 4]>(),
+                    );
+                    out.assume_init()
+                };
+                let transform_f32 = &transform_f32;
 
                 let result_gpu = crate::gpu_kernels::pointcloud_transform::pointcloud_transform(
                     self,

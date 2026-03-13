@@ -395,7 +395,7 @@ fn gradients_and_directions(src: &GrayImage) -> (Vec<f32>, Vec<u8>) {
             }
 
             // Scalar tail
-            for cx in x..width - 1 {
+            for cx in x.max(1)..width.saturating_sub(1) {
                 let p00 = r0[cx - 1] as f32;
                 let p02 = r0[cx + 1] as f32;
                 let p10 = r1[cx - 1] as f32;

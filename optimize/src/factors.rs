@@ -150,13 +150,13 @@ impl RangeFactor {
     }
 }
 
-fn position_of(var: &Variable) -> Vector3<f64> {
+fn position_of(var: &Variable) -> Option<Vector3<f64>> {
     match var {
-        Variable::Pose3(iso) => iso.translation.vector,
-        Variable::Point3(p) => p.coords,
-        Variable::Pose2(v) => Vector3::new(v.x, v.y, 0.0),
-        Variable::Point2(p) => Vector3::new(p[0], p[1], 0.0),
-        _ => panic!("RangeFactor: unsupported variable type"),
+        Variable::Pose3(iso) => Some(iso.translation.vector),
+        Variable::Point3(p) => Some(p.coords),
+        Variable::Pose2(v) => Some(Vector3::new(v.x, v.y, 0.0)),
+        Variable::Point2(p) => Some(Vector3::new(p[0], p[1], 0.0)),
+        _ => None,
     }
 }
 
@@ -172,8 +172,9 @@ impl Factor for RangeFactor {
     fn error(&self, values: &Values) -> DVector<f64> {
         let v1 = values.get(&self.keys[0]).expect("key1 not found");
         let v2 = values.get(&self.keys[1]).expect("key2 not found");
-        let p1 = position_of(v1);
-        let p2 = position_of(v2);
+        let (Some(p1), Some(p2)) = (position_of(v1), position_of(v2)) else {
+            return DVector::zeros(1);
+        };
         let predicted = (p2 - p1).norm();
         DVector::from_vec(vec![predicted - self.measured_range])
     }

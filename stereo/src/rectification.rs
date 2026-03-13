@@ -214,8 +214,13 @@ fn remap_image(src: &GrayImage, map_x: &[f32], map_y: &[f32]) -> GrayImage {
 
 /// Bilinear interpolation for pixel value
 fn bilinear_interpolate(img: &GrayImage, x: f32, y: f32) -> u8 {
-    let x0 = x.floor() as u32;
-    let y0 = y.floor() as u32;
+    let x0i = x.floor() as i32;
+    let y0i = y.floor() as i32;
+    if x0i < 0 || y0i < 0 || x0i >= img.width() as i32 - 1 || y0i >= img.height() as i32 - 1 {
+        return 0;
+    }
+    let x0 = x0i as u32;
+    let y0 = y0i as u32;
     let x1 = (x0 + 1).min(img.width() - 1);
     let y1 = (y0 + 1).min(img.height() - 1);
 

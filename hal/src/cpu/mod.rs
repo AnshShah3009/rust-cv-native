@@ -3036,7 +3036,10 @@ impl ComputeContext for CpuBackend {
 
         use std::any::TypeId;
         if TypeId::of::<T>() == TypeId::of::<f32>() {
-            // Safety: we verified T == f32 via TypeId above.
+            // Verify layout compatibility before reinterpret casts.
+            assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<f32>());
+            assert_eq!(std::mem::align_of::<T>(), std::mem::align_of::<f32>());
+            // SAFETY: T == f32 verified by TypeId check; size and alignment asserted above.
             let src_f32: &[f32] = unsafe {
                 std::slice::from_raw_parts(src_slice.as_ptr() as *const f32, src_slice.len())
             };

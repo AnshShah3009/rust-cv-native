@@ -246,7 +246,11 @@ impl BlockMatcher {
                     let ly = (y + dy) as usize;
                     for dx in -half_block..=half_block {
                         let lx = (x + dx) as usize;
-                        let rx = (x + dx - disparity) as usize;
+                        let rx_i32 = x + dx - disparity;
+                        if rx_i32 < 0 || rx_i32 >= width as i32 {
+                            continue;
+                        }
+                        let rx = rx_i32 as usize;
                         let left_val = left_data[ly * width + lx] as f32;
                         let right_val = right_data[ly * width + rx] as f32;
                         cost += left_val * right_val;

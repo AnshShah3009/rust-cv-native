@@ -105,11 +105,23 @@ pub fn fast_nl_means_denoising<T: Float + Default + 'static>(
                         let dy = dy_offset as isize - ty_start as isize;
                         let p_row = (py as isize + dy) as usize;
                         let s_row = (sy as isize + dy) as usize;
+                        debug_assert!(
+                            py as isize + dy >= 0 && (py as isize + dy) < height as isize
+                        );
+                        debug_assert!(
+                            sy as isize + dy >= 0 && (sy as isize + dy) < height as isize
+                        );
 
                         for dx_offset in 0..(tx_start + tx_end) {
                             let dx = dx_offset as isize - tx_start as isize;
                             let p_col = (px as isize + dx) as usize;
                             let s_col = (sx as isize + dx) as usize;
+                            debug_assert!(
+                                px as isize + dx >= 0 && (px as isize + dx) < width as isize
+                            );
+                            debug_assert!(
+                                sx as isize + dx >= 0 && (sx as isize + dx) < width as isize
+                            );
 
                             let diff = src[p_row * width + p_col] - src[s_row * width + s_col];
                             dist_sq += diff * diff;
