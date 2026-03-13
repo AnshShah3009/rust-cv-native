@@ -7,12 +7,16 @@ use std::sync::{Arc, Mutex};
 
 /// Supported compute backend contexts.
 pub enum BackendContext {
+    /// CPU backend (always available).
     Cpu(Arc<cv_hal::cpu::CpuBackend>),
+    /// GPU backend (WebGPU/Vulkan).
     Gpu(Arc<cv_hal::gpu::GpuContext>),
+    /// Apple MLX backend.
     Mlx(Arc<cv_hal::mlx::MlxContext>),
 }
 
 impl BackendContext {
+    /// Return the HAL device identifier for this backend.
     pub fn device_id(&self) -> DeviceId {
         match self {
             BackendContext::Cpu(c) => ComputeContext::device_id(c.as_ref()),
@@ -21,6 +25,7 @@ impl BackendContext {
         }
     }
 
+    /// Return the backend type (CPU, WebGPU, Vulkan, etc.).
     pub fn backend_type(&self) -> BackendType {
         match self {
             BackendContext::Cpu(c) => ComputeContext::backend_type(c.as_ref()),
@@ -47,6 +52,7 @@ pub struct DeviceRuntime {
 }
 
 impl DeviceRuntime {
+    /// Create a new device runtime wrapping the given backend context.
     pub fn new(context: BackendContext) -> Self {
         let id = context.device_id();
 
@@ -75,26 +81,32 @@ impl DeviceRuntime {
         }
     }
 
+    /// Return the device identifier.
     pub fn id(&self) -> DeviceId {
         self.id
     }
 
+    /// Return the backend type for this device.
     pub fn backend(&self) -> BackendType {
         self.backend
     }
 
+    /// Return a reference to the underlying backend context.
     pub fn context(&self) -> &BackendContext {
         &self.context
     }
 
+    /// Return the memory manager for this device.
     pub fn memory(&self) -> &Arc<MemoryManager> {
         &self.memory
     }
 
+    /// Return the executor pool mutex for this device.
     pub fn executors(&self) -> &Mutex<ExecutorPool> {
         &self.executors
     }
 
+    /// Advance and return the next GPU submission index.
     pub fn next_submission(&self) -> SubmissionIndex {
         if let Ok(mut last) = self.last_submitted.lock() {
             last.next()
@@ -103,6 +115,7 @@ impl DeviceRuntime {
         }
     }
 
+    /// Mark a submission as completed and trigger garbage collection.
     pub fn mark_completed(&self, index: SubmissionIndex) {
         if let Ok(mut last) = self.last_completed.lock() {
             if index > *last {
@@ -114,6 +127,7 @@ impl DeviceRuntime {
         self.memory.collect_garbage(index);
     }
 
+    /// Return the highest completed submission index for this device.
     pub fn last_completed(&self) -> SubmissionIndex {
         match self.last_completed.lock() {
             Ok(l) => *l,
@@ -141,6 +155,7 @@ pub struct DeviceRegistry {
 }
 
 impl DeviceRegistry {
+    /// Create a new registry with the CPU backend pre-registered.
     pub fn new() -> Result<Self> {
         let mut devices = HashMap::new();
 
@@ -176,20 +191,24 @@ impl DeviceRegistry {
         }
     }
 
+    /// Look up a device runtime by its ID.
     pub fn get_device(&self, id: DeviceId) -> Option<Arc<DeviceRuntime>> {
         self.devices.lock().ok()?.get(&id).cloned()
     }
 
+    /// Return the default CPU device runtime. Panics if the CPU device is missing.
     pub fn default_cpu(&self) -> Arc<DeviceRuntime> {
         self.get_device(self.default_cpu)
             .expect("CPU device must exist")
     }
 
+    /// Return the default GPU device runtime, if one was registered.
     pub fn default_gpu(&self) -> Option<Arc<DeviceRuntime>> {
         let id = *self.default_gpu.lock().ok()?;
         id.and_then(|id| self.get_device(id))
     }
 
+    /// Return all registered device runtimes.
     pub fn all_devices(&self) -> Vec<Arc<DeviceRuntime>> {
         self.devices
             .lock()
@@ -203,6 +222,7 @@ use std::sync::OnceLock;
 
 static GLOBAL_REGISTRY: OnceLock<Result<Arc<DeviceRegistry>>> = OnceLock::new();
 
+/// Return the global [`DeviceRegistry`] singleton, auto-detecting GPU and MLX backends.
 pub fn registry() -> Result<Arc<DeviceRegistry>> {
     GLOBAL_REGISTRY
         .get_or_init(|| {

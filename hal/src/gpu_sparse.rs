@@ -1,7 +1,7 @@
 use crate::{Error, Result};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
-use wgpu::{Buffer, BufferUsages, Device, Queue};
+use wgpu::{Buffer, BufferUsages, Device};
 
 /// GPU-resident sparse matrix in CSR (Compressed Sparse Row) format.
 ///
@@ -9,29 +9,29 @@ use wgpu::{Buffer, BufferUsages, Device, Queue};
 /// - row_ptr: offsets into col_indices/values for each row
 /// - col_indices: column index for each non-zero
 /// - values: value for each non-zero
-#[allow(dead_code)]
 pub struct GpuSparseMatrix {
+    /// Number of rows in the matrix.
     pub rows: usize,
+    /// Number of columns in the matrix.
     pub cols: usize,
-    pub nnz: usize, // number of non-zeros
+    /// Number of non-zero entries.
+    pub nnz: usize,
 
-    // GPU buffers
-    pub row_ptr_buffer: Buffer,     // size: (rows + 1) * 4 bytes
-    pub col_indices_buffer: Buffer, // size: nnz * 4 bytes
-    pub values_buffer: Buffer,      // size: nnz * 4 bytes (f32)
-
-    device: Arc<Device>,
-    queue: Arc<Queue>,
+    /// GPU buffer holding CSR row pointers ((rows + 1) x u32).
+    pub row_ptr_buffer: Buffer,
+    /// GPU buffer holding column indices for each non-zero (nnz x u32).
+    pub col_indices_buffer: Buffer,
+    /// GPU buffer holding non-zero values (nnz x f32).
+    pub values_buffer: Buffer,
 }
 
 impl GpuSparseMatrix {
     /// Upload a sparse matrix from triplet format to GPU in CSR format.
     pub fn from_triplets(
-        device: Arc<Device>,
-        queue: Arc<Queue>,
+        device: &Arc<Device>,
         rows: usize,
         cols: usize,
-        triplets: &[(usize, usize, f64)], // (row, col, value)
+        triplets: &[(usize, usize, f64)],
     ) -> Result<Self> {
         // Convert triplets to CSR format
         let (row_ptr, col_indices, values) = Self::triplets_to_csr(rows, cols, triplets)?;
@@ -65,8 +65,6 @@ impl GpuSparseMatrix {
             row_ptr_buffer,
             col_indices_buffer,
             values_buffer,
-            device,
-            queue,
         })
     }
 

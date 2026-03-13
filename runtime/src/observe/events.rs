@@ -48,20 +48,27 @@ pub enum RuntimeEvent {
     },
 }
 
-/// Type of memory event
+/// Type of memory event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryEventKind {
+    /// A buffer was allocated.
     Allocated,
+    /// A buffer was released.
     Released,
+    /// A buffer was synced between host and device.
     Synced,
 }
 
-/// Device health state
+/// Device health state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceHealth {
+    /// Device is operating normally.
     Healthy,
+    /// Device is experiencing intermittent issues.
     Degraded,
+    /// Device has failed and should not be used.
     Failed,
+    /// Device has recovered from a previous failure.
     Recovered,
 }
 

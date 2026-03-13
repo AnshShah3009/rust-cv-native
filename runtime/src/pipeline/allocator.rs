@@ -8,12 +8,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use wgpu::{Buffer, BufferUsages, Device};
 
+/// A single GPU buffer allocation with optional CPU-side data shadow.
 pub struct BufferAlloc {
+    /// The underlying GPU buffer.
     pub buffer: Buffer,
+    /// Logical size in bytes.
     pub size: usize,
+    /// CPU-side copy of the buffer contents, if available.
     pub data: Option<Vec<u8>>,
 }
 
+/// Pool of short-lived GPU buffers used during pipeline execution.
+///
+/// Buffers are bucketed by size and recycled to reduce allocation overhead.
 pub struct TransientBufferPool {
     device_id: DeviceId,
     buffers: DashMap<BufferId, Arc<RwLock<BufferAlloc>>>,
@@ -22,6 +29,7 @@ pub struct TransientBufferPool {
 }
 
 impl TransientBufferPool {
+    /// Create an empty pool for the given device.
     pub fn new(device_id: DeviceId) -> Self {
         Self {
             device_id,
@@ -40,6 +48,7 @@ impl TransientBufferPool {
         }
     }
 
+    /// Allocate (or reuse) a GPU buffer for the given ID and size.
     pub fn allocate(&self, id: BufferId, size: usize) -> Result<Arc<RwLock<BufferAlloc>>> {
         let reg = registry()?;
         let device_runtime = reg.get_device(self.device_id).ok_or_else(|| {
@@ -69,6 +78,7 @@ impl TransientBufferPool {
         Ok(alloc)
     }
 
+    /// Allocate a buffer if it does not exist, then store `data` into it.
     pub fn allocate_or_update(&self, id: BufferId, size: usize, data: &[u8]) -> Result<()> {
         if !self.buffers.contains_key(&id) {
             self.allocate(id, size)?;
@@ -104,22 +114,26 @@ impl TransientBufferPool {
         }))
     }
 
+    /// Return a clone of the GPU buffer handle for the given ID.
     pub fn get_buffer(&self, id: BufferId) -> Option<Buffer> {
         self.buffers
             .get(&id)
             .map(|entry| entry.read().buffer.clone())
     }
 
+    /// Return a copy of the CPU-side data for the given buffer, if available.
     pub fn get_buffer_data(&self, id: BufferId) -> Option<Vec<u8>> {
         self.buffers
             .get(&id)
             .and_then(|entry| entry.read().data.clone())
     }
 
+    /// Return the full allocation entry for the given buffer.
     pub fn get_buffer_alloc(&self, id: BufferId) -> Option<Arc<RwLock<BufferAlloc>>> {
         self.buffers.get(&id).map(|entry| entry.clone())
     }
 
+    /// Release a buffer back to the free list for reuse.
     pub fn release(&self, id: BufferId) {
         if let Some((_, alloc)) = self.buffers.remove(&id) {
             let alloc_guard = alloc.read();
@@ -143,6 +157,7 @@ impl TransientBufferPool {
         }
     }
 
+    /// Release all buffers back to the free list.
     pub fn release_all(&self) {
         let ids: Vec<BufferId> = self.buffers.iter().map(|entry| *entry.key()).collect();
         for id in ids {
@@ -150,14 +165,17 @@ impl TransientBufferPool {
         }
     }
 
+    /// Return the total bytes currently allocated.
     pub fn total_allocated(&self) -> usize {
         *self.total_allocated.read()
     }
 
+    /// Return the number of active (non-released) buffers.
     pub fn buffer_count(&self) -> usize {
         self.buffers.len()
     }
 
+    /// Shrink each free list to half its current size, releasing excess GPU buffers.
     pub fn trim(&self) {
         let mut free_lists = self.free_lists.write();
         for (_, pool) in free_lists.iter_mut() {

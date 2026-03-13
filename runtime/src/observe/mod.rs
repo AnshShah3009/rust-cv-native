@@ -1,3 +1,5 @@
+//! Observability subsystem: events, metrics, and submission tracking.
+
 pub mod events;
 pub mod layer;
 pub mod metrics;

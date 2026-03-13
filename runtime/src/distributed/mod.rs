@@ -1,3 +1,5 @@
+//! Cross-process load coordination for multi-process GPU sharing.
+
 mod file;
 mod shared_memory;
 
@@ -7,27 +9,37 @@ pub use shared_memory::ShmCoordinator;
 use cv_hal::DeviceId;
 use std::collections::HashMap;
 
+/// Trait for publishing and reading per-device load across cooperating processes.
 pub trait LoadCoordinator: Send + Sync {
+    /// Publish this process's per-device load.
     fn update_load(&self, device_load: &HashMap<DeviceId, usize>) -> std::io::Result<()>;
 
+    /// Read the aggregate load from all cooperating processes.
     fn get_global_load(&self) -> std::io::Result<HashMap<DeviceId, usize>>;
 
+    /// Release resources owned by this coordinator (e.g. lock files, shared memory slots).
     fn cleanup(&self);
 
+    /// Register this process with the coordinator (no-op by default).
     fn register(&self) -> std::io::Result<()> {
         Ok(())
     }
 
+    /// Send a heartbeat to indicate this process is still alive (no-op by default).
     fn heartbeat(&self) -> std::io::Result<()> {
         Ok(())
     }
 }
 
+/// Selects the inter-process coordination mechanism.
 pub enum CoordinatorType {
+    /// File-system based coordination (one `.load` file per process).
     File { path: std::path::PathBuf },
+    /// POSIX shared-memory based coordination.
     SharedMemory { name: String, size: usize },
 }
 
+/// Create a coordinator of the requested type.
 pub fn create_coordinator(
     coord_type: CoordinatorType,
 ) -> std::io::Result<Box<dyn LoadCoordinator>> {

@@ -16,11 +16,18 @@ fn generate_handle_id() -> u64 {
     NEXT_HANDLE_ID.fetch_add(1, Ordering::SeqCst)
 }
 
+/// A sub-range within a [`UnifiedBuffer`], expressed in bytes.
 pub struct BufferSlice {
+    /// Byte offset from the start of the buffer.
     pub offset: u64,
+    /// Size of the slice in bytes.
     pub size: u64,
 }
 
+/// A host+device buffer with automatic coherence tracking.
+///
+/// Data lives primarily on the host and can be synced to/from a GPU device.
+/// Version counters detect staleness so redundant transfers are skipped.
 pub struct UnifiedBuffer<T> {
     /// Unique handle for this buffer (for Storage trait integration)
     handle: BufferHandle,
@@ -40,6 +47,7 @@ pub struct UnifiedBuffer<T> {
 }
 
 impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> UnifiedBuffer<T> {
+    /// Create a zero-initialized buffer of `len` elements.
     pub fn new(len: usize) -> Self {
         Self {
             handle: BufferHandle(generate_handle_id()),
@@ -55,6 +63,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         }
     }
 
+    /// Create a buffer pre-filled with the given data.
     pub fn with_data(data: Vec<T>) -> Self {
         let len = data.len();
         Self {
@@ -97,22 +106,27 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         Self::with_data(storage.to_vec())
     }
 
+    /// Return the number of elements.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Return `true` if the buffer has zero elements.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    /// Acquire a shared read lock on the host data.
     pub fn host_view(&self) -> parking_lot::RwLockReadGuard<'_, Vec<T>> {
         self.host_data.read()
     }
 
+    /// Acquire an exclusive write lock on the host data.
     pub fn host_view_mut(&self) -> parking_lot::RwLockWriteGuard<'_, Vec<T>> {
         self.host_data.write()
     }
 
+    /// Return `true` if the host copy is at least as recent as the device copy.
     pub fn host_data_valid(&self) -> bool {
         if let Some((_, dv)) = self.device_version {
             self.host_version >= dv
@@ -121,10 +135,12 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         }
     }
 
+    /// Return `true` if any device-side copy has been created.
     pub fn device_data_valid(&self) -> bool {
         self.device_version.is_some()
     }
 
+    /// Check whether the host data is current relative to the device data.
     pub fn ensure_host_current(&self) -> Result<bool> {
         if let Some((_, dv)) = self.device_version {
             Ok(dv <= self.host_version)
@@ -133,10 +149,12 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         }
     }
 
+    /// Bump the host version to signal that host data has been modified.
     pub fn mark_host_dirty(&mut self) {
         self.host_version += 1;
     }
 
+    /// Register a sub-range (element offset + count) and return its slice ID.
     pub fn create_slice(&mut self, offset: usize, size: usize) -> Result<usize> {
         if offset + size > self.len {
             return Err(crate::Error::MemoryError(format!(
@@ -156,10 +174,12 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         Ok(slice_id)
     }
 
+    /// Look up a previously created slice by its ID.
     pub fn get_slice(&self, slice_id: usize) -> Option<&BufferSlice> {
         self.slices.get(slice_id)
     }
 
+    /// Upload host data to the GPU. Skips the transfer if the device copy is already current.
     pub fn sync_to_device(&mut self, target_id: DeviceId) -> Result<()> {
         if let Some((did, dv)) = self.device_version {
             if did == target_id && dv >= self.host_version {
@@ -237,6 +257,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         Ok(())
     }
 
+    /// Upload a single slice of host data to the GPU.
     pub fn sync_slice_to_device(&mut self, target_id: DeviceId, slice_id: usize) -> Result<()> {
         let (slice_offset, slice_size) = {
             let slice = self.slices.get(slice_id).ok_or_else(|| {
@@ -285,6 +306,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         Ok(())
     }
 
+    /// Download device data back to the host (async). Skips if host is already current.
     pub async fn sync_to_host(&mut self) -> Result<()> {
         let (did, dv) = self
             .device_version
@@ -334,6 +356,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         Ok(())
     }
 
+    /// Blocking variant of [`sync_to_host`](Self::sync_to_host).
     pub fn sync_to_host_blocking(&mut self) -> Result<()> {
         let (did, dv) = self
             .device_version
@@ -382,6 +405,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         Ok(())
     }
 
+    /// Return a copy of the host data. Fails if the host copy is stale.
     pub async fn map_async(&self) -> Result<Vec<T>> {
         if !self.host_data_valid() {
             return Err(crate::Error::MemoryError(
@@ -393,6 +417,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         Ok(guard.clone())
     }
 
+    /// Record that the device wrote to this buffer at the given submission.
     pub fn mark_device_write(&mut self, index: SubmissionIndex) {
         self.last_write_submission = index;
         if let Some((did, dv)) = self.device_version {
@@ -400,30 +425,37 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         }
     }
 
+    /// Record that the device read from this buffer at the given submission.
     pub fn mark_device_read(&mut self, index: SubmissionIndex) {
         self.last_read_submission = index;
     }
 
+    /// Return a reference to the underlying GPU buffer, if allocated.
     pub fn device_buffer(&self) -> Option<&wgpu::Buffer> {
         self.device_data.as_ref()
     }
 
+    /// Clone the underlying GPU buffer handle, if allocated.
     pub fn device_buffer_cloned(&self) -> Option<wgpu::Buffer> {
         self.device_data.clone()
     }
 
+    /// Return the device this buffer's GPU data resides on, if any.
     pub fn device_id(&self) -> Option<DeviceId> {
         self.device_id
     }
 
+    /// Return the host-side version counter.
     pub fn host_version(&self) -> u64 {
         self.host_version
     }
 
+    /// Return the device-side version as `(device_id, version)`, if any.
     pub fn device_version(&self) -> Option<(DeviceId, u64)> {
         self.device_version
     }
 
+    /// Consume the buffer and return the host data, retiring any GPU buffer.
     pub fn into_host_data(self) -> Vec<T> {
         // Clone the Arc before consuming self so we hold a reference across the drop.
         // This is the safe, correct way to move out of a field in a type with Drop:
@@ -444,6 +476,7 @@ impl<T: bytemuck::Pod + Clone + Default + Send + 'static + std::fmt::Debug> Unif
         }
     }
 
+    /// Clone the `Arc` to the host data, allowing shared access from another context.
     pub fn share(&self) -> Arc<RwLock<Vec<T>>> {
         self.host_data.clone()
     }

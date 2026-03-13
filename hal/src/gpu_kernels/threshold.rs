@@ -1,10 +1,9 @@
 use crate::context::ThresholdType;
 use crate::gpu::GpuContext;
+use crate::gpu_kernels::dispatch::GpuDispatch;
 use crate::GpuTensor;
 use crate::Result;
 use std::marker::PhantomData;
-use std::sync::Arc;
-use wgpu::util::DeviceExt;
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -28,17 +27,8 @@ pub fn threshold<T: cv_core::float::Float + bytemuck::Pod + bytemuck::Zeroable>(
     thresh_type: ThresholdType,
 ) -> Result<GpuTensor<T>> {
     let len = input.shape.len();
-
     let byte_size = (len * std::mem::size_of::<T>()) as u64;
 
-    let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Threshold Output Buffer"),
-        size: byte_size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-
-    // Prepare params
     let params = ThresholdParams {
         width: input.shape.width as u32,
         height: input.shape.height as u32,
@@ -48,71 +38,23 @@ pub fn threshold<T: cv_core::float::Float + bytemuck::Pod + bytemuck::Zeroable>(
         len: len as u32,
     };
 
-    let params_buffer = ctx
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Threshold Params"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+    let precision = crate::gpu_kernels::shader_template::precision_for_type::<T>()?;
+    let shader_source = crate::gpu_kernels::shader_template::resolve(
+        include_str!("../../shaders/threshold_f32.wgsl"),
+        precision,
+    );
 
-    // Pipeline setup
-    let shader_source = match cv_core::DataType::from_type::<T>() {
-        Ok(cv_core::DataType::F32) => include_str!("../../shaders/threshold_f32.wgsl"),
-        Ok(_) => {
-            return Err(crate::Error::NotSupported(
-                "Unsupported threshold precision type".into(),
-            ))
-        }
-        _ => {
-            include_str!("../../shaders/threshold_f32.wgsl")
-        }
-    };
-    let pipeline = ctx.create_compute_pipeline(shader_source, "main");
-
-    // Bind group
-    let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Threshold Bind Group"),
-        layout: &pipeline.get_bind_group_layout(0),
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: input.storage.buffer().as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: output_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: params_buffer.as_entire_binding(),
-            },
-        ],
-    });
-
-    // Dispatch
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Threshold Dispatch"),
-        });
-
-    {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Threshold Pass"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-
-        let wg_x = (len as u32).div_ceil(64);
-        pass.dispatch_workgroups(wg_x, 1, 1);
-    }
-
-    ctx.submit(encoder);
+    let outputs = GpuDispatch::new(ctx, &shader_source, "Threshold")
+        .input(input.storage.buffer())
+        .output(byte_size)
+        .params(&params)
+        .dispatch_1d(len as u32)?;
 
     Ok(crate::GpuTensor {
-        storage: crate::storage::WgpuGpuStorage::from_buffer(Arc::new(output_buffer), len),
+        storage: crate::storage::WgpuGpuStorage::from_buffer(
+            outputs.into_iter().next().unwrap(),
+            len,
+        ),
         shape: input.shape,
         dtype: input.dtype,
         _phantom: PhantomData,

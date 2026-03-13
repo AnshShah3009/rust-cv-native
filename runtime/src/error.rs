@@ -1,35 +1,65 @@
 use cv_hal::DeviceId;
 use std::fmt;
 
-/// Structured error context with source chain and metadata
+/// Structured error context with source chain, categorization, and retry metadata.
 #[derive(Debug)]
 pub struct ErrorContext {
+    /// Human-readable description of the error.
     pub message: String,
+    /// Optional underlying cause.
     pub source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    /// Category of the error for programmatic handling.
     pub context: ErrorKind,
+    /// Whether the operation can be retried.
     pub retryable: bool,
 }
 
-/// Error categorization for better debugging and handling
+/// Error categorization for debugging and programmatic handling.
 #[derive(Debug, Clone)]
 pub enum ErrorKind {
-    /// Device operation (GPU/CPU kernel)
-    DeviceExecution { device_id: DeviceId, kernel: String },
-    /// Memory allocation/sync
+    /// GPU or CPU kernel dispatch failure.
+    DeviceExecution {
+        /// Device where the failure occurred.
+        device_id: DeviceId,
+        /// Name of the failing kernel.
+        kernel: String,
+    },
+    /// Memory allocation or host/device sync failure.
     Memory {
+        /// Bytes requested.
         required: usize,
+        /// Bytes available, if known.
         available: Option<usize>,
     },
-    /// Pipeline execution
-    Pipeline { node_name: String, stage: String },
-    /// Distributed coordination
-    Coordination { reason: String },
-    /// Type/contract violation
-    ContractViolation { expected: String, actual: String },
-    /// User API misuse
-    ApiMisuse { reason: String },
-    /// Scheduler internal
-    SchedulerInternal { reason: String },
+    /// Failure during pipeline execution.
+    Pipeline {
+        /// Node that failed.
+        node_name: String,
+        /// Pipeline stage (e.g. `"build"`, `"execute"`).
+        stage: String,
+    },
+    /// Distributed coordination failure.
+    Coordination {
+        /// Reason for the failure.
+        reason: String,
+    },
+    /// A type or precondition was violated.
+    ContractViolation {
+        /// What was expected.
+        expected: String,
+        /// What was actually found.
+        actual: String,
+    },
+    /// Incorrect API usage by the caller.
+    ApiMisuse {
+        /// Explanation of the misuse.
+        reason: String,
+    },
+    /// Internal scheduler error.
+    SchedulerInternal {
+        /// Explanation of the failure.
+        reason: String,
+    },
 }
 
 impl ErrorContext {

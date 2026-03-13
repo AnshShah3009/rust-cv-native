@@ -3,9 +3,11 @@ use cv_hal::DeviceId;
 use std::sync::{Arc, Mutex};
 use wgpu::{Buffer, BufferUsages, Device};
 
-/// A buffer that is no longer needed but may still be in use by the GPU.
+/// A GPU buffer pending deferred destruction until the GPU has finished using it.
 pub struct RetiredBuffer {
+    /// The GPU buffer to eventually recycle.
     pub buffer: Buffer,
+    /// The submission index after which it is safe to recycle this buffer.
     pub safe_after: SubmissionIndex,
 }
 /// Manages memory for a specific device, including buffer pooling and deferred destruction.
@@ -16,6 +18,8 @@ pub struct MemoryManager {
 }
 
 impl MemoryManager {
+    /// Create a new memory manager. Pass a `Device` for GPU buffer pooling,
+    /// or `None` for CPU-only operation.
     pub fn new(device_id: DeviceId, device: Option<Arc<Device>>) -> Self {
         Self {
             device_id,
@@ -24,6 +28,7 @@ impl MemoryManager {
         }
     }
 
+    /// Return the device this manager belongs to.
     pub fn device_id(&self) -> DeviceId {
         self.device_id
     }

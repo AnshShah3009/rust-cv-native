@@ -6,11 +6,16 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
+/// File-system based [`LoadCoordinator`](super::LoadCoordinator).
+///
+/// Each process writes a `<pid>.load` file containing per-device load counts.
+/// Stale files from dead processes are automatically cleaned up.
 pub struct FileCoordinator {
     dir: PathBuf,
 }
 
 impl FileCoordinator {
+    /// Create a new file coordinator using the given directory.
     pub fn new(dir: PathBuf) -> Self {
         let _ = fs::create_dir_all(&dir);
         Self { dir }

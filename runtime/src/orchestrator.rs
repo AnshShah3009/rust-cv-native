@@ -12,13 +12,18 @@ use std::time::{Duration, Instant};
 /// for longer than this period, it will be re-tried.
 const DEVICE_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Priority level for a resource group
+/// Priority level for scheduling tasks within resource groups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TaskPriority {
+    /// Lowest priority, suitable for non-urgent background work.
     Background = 0,
+    /// Below-normal priority.
     Low = 1,
+    /// Default priority for most workloads.
     Normal = 2,
+    /// Elevated priority for latency-sensitive work.
     High = 3,
+    /// Highest priority, reserved for must-complete operations.
     Critical = 4,
 }
 
@@ -35,10 +40,12 @@ pub enum WorkloadHint {
     Default,
 }
 
-/// Statistics for a workload across all coordinated processes.
+/// Aggregate workload statistics across all coordinated processes.
 #[derive(Debug, Clone, Default)]
 pub struct WorkloadStats {
+    /// Number of tasks currently executing or queued.
     pub active_tasks: usize,
+    /// Total number of resource groups across all processes.
     pub total_groups: usize,
 }
 
@@ -54,7 +61,7 @@ pub enum OrchestratorMode {
     },
 }
 
-/// Policy for a resource group
+/// Scheduling and scaling policy for a [`ResourceGroup`].
 #[derive(Debug, Clone, Copy)]
 pub struct GroupPolicy {
     /// If true, this group uses the global thread pool (work stealing enabled)
@@ -75,9 +82,15 @@ impl Default for GroupPolicy {
     }
 }
 
+/// A named group of threads bound to a single device, used for executing tasks.
+///
+/// Resource groups isolate workloads and allow per-group scheduling policies,
+/// core pinning, and dynamic resizing.
 #[derive(Debug)]
 pub struct ResourceGroup {
+    /// Human-readable name (e.g. `"default"`, `"gpu-0"`).
     pub name: String,
+    /// Scheduling policy for this group.
     pub policy: GroupPolicy,
     device_id: DeviceId,
     pub(crate) executor: Arc<Executor>,
@@ -85,6 +98,7 @@ pub struct ResourceGroup {
 }
 
 impl ResourceGroup {
+    /// Create a new resource group with the given thread count and policy.
     pub fn new(
         name: &str,
         device_id: DeviceId,
@@ -97,6 +111,7 @@ impl ResourceGroup {
             name: name.to_string(),
             work_stealing: policy.allow_work_stealing,
             core_affinity: core_ids.clone(),
+            ..Default::default()
         };
 
         let executor = Arc::new(Executor::with_config(device_id, config)?);
@@ -110,13 +125,17 @@ impl ResourceGroup {
         })
     }
 
-    pub fn spawn<F>(&self, f: F)
+    /// Spawn a fire-and-forget task on this group's thread pool.
+    ///
+    /// Returns `Err` under backpressure (too many in-flight tasks).
+    pub fn spawn<F>(&self, f: F) -> crate::Result<()>
     where
         F: FnOnce() + Send + 'static,
     {
-        self.executor.spawn(f);
+        self.executor.spawn(f)
     }
 
+    /// Run a closure synchronously on this group's thread pool and return its result.
     pub fn run<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send,
@@ -125,22 +144,27 @@ impl ResourceGroup {
         self.executor.install(f)
     }
 
+    /// Return the device this group is bound to.
     pub fn device_id(&self) -> DeviceId {
         self.device_id
     }
 
+    /// Return the number of in-flight tasks on this group.
     pub fn load(&self) -> usize {
         self.executor.load()
     }
 
+    /// Return the number of threads in this group's pool.
     pub fn num_threads(&self) -> usize {
         self.executor.num_threads()
     }
 
+    /// Return the core IDs this group is pinned to, if any.
     pub fn core_ids(&self) -> Option<&[usize]> {
         self.core_ids.as_deref()
     }
 
+    /// Look up this group's [`DeviceRuntime`] in the global registry.
     pub fn device_runtime(&self) -> Result<Arc<DeviceRuntime>> {
         registry()?.get_device(self.device_id).ok_or_else(|| {
             crate::Error::RuntimeError(format!("Device {:?} not found", self.device_id))
@@ -153,6 +177,7 @@ impl ResourceGroup {
         self.try_device()
     }
 
+    /// Try to resolve the HAL compute device for this group.
     pub fn try_device(&self) -> Result<cv_hal::compute::ComputeDevice<'static>> {
         cv_hal::compute::get_device_by_id(self.device_id).map_err(|e| {
             crate::Error::RuntimeError(format!(
@@ -162,6 +187,7 @@ impl ResourceGroup {
         })
     }
 
+    /// Resize the thread pool. Fails if `allow_dynamic_scaling` is false.
     pub fn resize(&self, new_num_threads: usize) -> Result<()> {
         if !self.policy.allow_dynamic_scaling {
             return Err(crate::Error::RuntimeError(format!(
@@ -172,11 +198,16 @@ impl ResourceGroup {
         self.executor.resize(new_num_threads)
     }
 
+    /// Rebuild the thread pool with new core affinity settings.
     pub fn set_core_affinity(&self, cores: Vec<usize>) -> Result<()> {
         self.executor.set_core_affinity(cores)
     }
 }
 
+/// Central scheduler that manages resource groups and routes tasks to devices.
+///
+/// Supports both local and distributed (file/shared-memory) coordination modes.
+/// A singleton instance is accessible via [`scheduler()`].
 pub struct TaskScheduler {
     groups: Mutex<HashMap<String, Arc<ResourceGroup>>>,
     mode: OrchestratorMode,
@@ -187,12 +218,17 @@ pub struct TaskScheduler {
     failed_devices: Mutex<HashMap<DeviceId, Instant>>,
 }
 
+/// A handle for executing closures, either on a resource group's thread pool
+/// or synchronously on the calling thread.
 pub enum RuntimeRunner {
+    /// Execute on a resource group's thread pool.
     Group(Arc<ResourceGroup>),
+    /// Execute synchronously on the calling thread for the given device.
     Sync(DeviceId),
 }
 
 impl RuntimeRunner {
+    /// Run a closure on this runner and return its result.
     pub fn run<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send,
@@ -228,6 +264,7 @@ impl RuntimeRunner {
         res
     }
 
+    /// Return the device ID associated with this runner.
     pub fn device_id(&self) -> DeviceId {
         match self {
             RuntimeRunner::Group(g) => g.device_id(),
@@ -235,6 +272,7 @@ impl RuntimeRunner {
         }
     }
 
+    /// Look up this runner's [`DeviceRuntime`] in the global registry.
     pub fn device_runtime(&self) -> Result<Arc<DeviceRuntime>> {
         registry()?.get_device(self.device_id()).ok_or_else(|| {
             crate::Error::RuntimeError(format!("Device {:?} not found", self.device_id()))
@@ -247,6 +285,7 @@ impl RuntimeRunner {
         self.try_device()
     }
 
+    /// Try to resolve the HAL compute device for this runner.
     pub fn try_device(&self) -> Result<cv_hal::compute::ComputeDevice<'static>> {
         cv_hal::compute::get_device_by_id(self.device_id()).map_err(|e| {
             crate::Error::RuntimeError(format!(
@@ -258,12 +297,12 @@ impl RuntimeRunner {
     }
 }
 
-/// Get the best available runtime runner (GPU if available, else CPU)
-/// Returns a Result instead of panicking on error
+/// Get the best available runtime runner (GPU if available, else CPU).
 pub fn best_runner() -> Result<RuntimeRunner> {
     try_best_runner()
 }
 
+/// Try to get the best runner; falls back to synchronous CPU if no scheduler is available.
 pub fn try_best_runner() -> Result<RuntimeRunner> {
     if let Ok(s) = scheduler() {
         if let Ok(g) = s.best_gpu_or_cpu() {
@@ -280,12 +319,12 @@ pub fn try_best_runner() -> Result<RuntimeRunner> {
     ))
 }
 
-/// Get the default runtime runner (from configured default group or CPU fallback)
-/// Returns a Result instead of panicking on error
+/// Get the default runtime runner (from the `"default"` group or CPU fallback).
 pub fn default_runner() -> Result<RuntimeRunner> {
     try_default_runner()
 }
 
+/// Try to get the default runner; falls back to synchronous CPU if no scheduler is available.
 pub fn try_default_runner() -> Result<RuntimeRunner> {
     if let Ok(s) = scheduler() {
         if let Ok(g) = s.get_default_group() {
@@ -309,6 +348,8 @@ impl Default for TaskScheduler {
 }
 
 impl TaskScheduler {
+    /// Create a new scheduler, optionally enabling distributed coordination
+    /// if `CV_RUNTIME_COORDINATOR` is set.
     pub fn new() -> Self {
         let (mode, coordinator): (OrchestratorMode, Option<Box<dyn LoadCoordinator>>) =
             if let Ok(path) = std::env::var("CV_RUNTIME_COORDINATOR") {
@@ -335,15 +376,18 @@ impl TaskScheduler {
         }
     }
 
+    /// Return the current orchestration mode (local or distributed).
     pub fn mode(&self) -> &OrchestratorMode {
         &self.mode
     }
 
+    /// Record a device failure so subsequent scheduling avoids it temporarily.
     pub fn report_failure(&self, device_id: DeviceId) {
         let mut failed = self.failed_devices.lock();
         failed.insert(device_id, Instant::now());
     }
 
+    /// Check whether a device is healthy (has not failed recently).
     pub fn is_device_healthy(&self, device_id: DeviceId) -> bool {
         let mut failed = self.failed_devices.lock();
 
@@ -362,6 +406,7 @@ impl TaskScheduler {
         }
     }
 
+    /// Create a new resource group on the default CPU device.
     pub fn create_group(
         &self,
         name: &str,
@@ -373,6 +418,7 @@ impl TaskScheduler {
         self.create_group_with_device(name, num_threads, cores, policy, cpu_id)
     }
 
+    /// Create a new resource group bound to a specific device.
     pub fn create_group_with_device(
         &self,
         name: &str,
@@ -415,6 +461,7 @@ impl TaskScheduler {
         Ok(group)
     }
 
+    /// Remove and return a resource group by name, if it exists.
     pub fn remove_group(&self, name: &str) -> Result<Option<Arc<ResourceGroup>>> {
         let mut groups = self.groups.lock();
         if let Some(group) = groups.remove(name) {
@@ -424,6 +471,7 @@ impl TaskScheduler {
         }
     }
 
+    /// Look up a resource group by name.
     pub fn get_group(&self, name: &str) -> Result<Option<Arc<ResourceGroup>>> {
         let groups = self.groups.lock();
         Ok(groups.get(name).cloned())
@@ -524,16 +572,19 @@ impl TaskScheduler {
         Ok(best_group)
     }
 
+    /// Return the `"default"` resource group.
     pub fn get_default_group(&self) -> Result<Arc<ResourceGroup>> {
         self.get_group("default")?.ok_or_else(|| {
             crate::Error::RuntimeError("Default resource group not found".to_string())
         })
     }
 
+    /// Return the best GPU group, falling back to the default CPU group.
     pub fn best_gpu_or_cpu(&self) -> Result<Arc<ResourceGroup>> {
         self.best_gpu_or_cpu_for(WorkloadHint::Default)
     }
 
+    /// Like [`best_gpu_or_cpu`](Self::best_gpu_or_cpu) but with a workload hint for scheduling.
     pub fn best_gpu_or_cpu_for(&self, hint: WorkloadHint) -> Result<Arc<ResourceGroup>> {
         // Try WebGPU first (as it's our primary accelerator)
         if let Some(group) = self.get_best_group(BackendType::WebGPU, hint)? {
@@ -545,12 +596,13 @@ impl TaskScheduler {
         self.get_default_group()
     }
 
+    /// Submit a task to the named resource group for asynchronous execution.
     pub fn submit<F>(&self, group_name: &str, f: F) -> Result<()>
     where
         F: FnOnce() + Send + 'static,
     {
         if let Some(group) = self.get_group(group_name)? {
-            group.spawn(f);
+            group.spawn(f)?;
             Ok(())
         } else {
             Err(crate::Error::RuntimeError(format!(
@@ -563,6 +615,9 @@ impl TaskScheduler {
 
 static GLOBAL_SCHEDULER: OnceLock<Result<TaskScheduler>> = OnceLock::new();
 
+/// Return the global [`TaskScheduler`] singleton, creating it on first call.
+///
+/// Initializes a `"default"` resource group with one thread per logical CPU core.
 pub fn scheduler() -> Result<&'static TaskScheduler> {
     GLOBAL_SCHEDULER
         .get_or_init(|| {

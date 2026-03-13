@@ -13,12 +13,19 @@ use wgpu::{Backends, Device, Instance, PowerPreference, Queue, RequestAdapterOpt
 
 static GLOBAL_CONTEXT: OnceLock<crate::Result<GpuContext>> = OnceLock::new();
 
-/// Shared GPU Context containing Device and Queue.
+/// Shared GPU context holding a wgpu `Device`, `Queue`, and a pipeline cache.
+///
+/// All GPU kernel dispatches flow through this struct. Obtain a global
+/// singleton via [`GpuContext::global`] or [`GpuContext::init_global`].
 #[derive(Debug, Clone)]
 pub struct GpuContext {
+    /// The wgpu logical device used for buffer and pipeline creation.
     pub device: Arc<Device>,
+    /// The wgpu command queue used for submitting work.
     pub queue: Arc<Queue>,
-    pipeline_cache: Arc<std::sync::Mutex<std::collections::HashMap<String, wgpu::ComputePipeline>>>,
+    /// Cache of compiled compute pipelines keyed by shader source + entry point.
+    pipeline_cache: Arc<std::sync::Mutex<std::collections::HashMap<u64, wgpu::ComputePipeline>>>,
+    /// Monotonically increasing counter for tracking GPU submissions.
     last_submission: Arc<AtomicU64>,
 }
 
@@ -2471,6 +2478,7 @@ impl GpuContext {
         Self::new_with_policy(PowerPreference::HighPerformance).await
     }
 
+    /// Initialize a new GPU context with the given power preference.
     pub async fn new_with_policy(preference: PowerPreference) -> crate::Result<Self> {
         // Create instance with conservative flags to avoid driver panics on integrated GPUs
         let instance = Instance::new(&wgpu::InstanceDescriptor {
@@ -2495,6 +2503,7 @@ impl GpuContext {
         Self::from_adapter(adapter).await
     }
 
+    /// Create a context from an already-obtained wgpu adapter.
     pub async fn from_adapter(adapter: wgpu::Adapter) -> crate::Result<Self> {
         // Request device
         let (device, queue) = adapter
@@ -2575,13 +2584,21 @@ impl GpuContext {
         SubmissionIndex(index)
     }
 
-    /// Create a simplified compute pipeline.
+    /// Create (or retrieve from cache) a compute pipeline for the given WGSL source.
+    ///
+    /// The cache key is a 64-bit hash of the shader source + entry point, avoiding
+    /// the cost of storing full shader source strings as keys.
     pub fn create_compute_pipeline(
         &self,
         shader_source: &str,
         entry_point: &str,
     ) -> wgpu::ComputePipeline {
-        let cache_key = format!("{}:{}", shader_source, entry_point);
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        shader_source.hash(&mut hasher);
+        entry_point.hash(&mut hasher);
+        let cache_key = hasher.finish();
+
         if let Ok(cache) = self.pipeline_cache.lock() {
             if let Some(pipeline) = cache.get(&cache_key) {
                 return pipeline.clone();

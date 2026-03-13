@@ -209,6 +209,7 @@ pub trait ComputeContext: Send + Sync {
     ) -> Result<Vec<cv_core::Detection>>;
 
     #[allow(clippy::too_many_arguments)]
+    /// Raycast into a TSDF volume to produce a depth image from a given camera pose.
     fn tsdf_raycast<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
         tsdf_volume: &Tensor<T, S>,
@@ -220,6 +221,7 @@ pub trait ComputeContext: Send + Sync {
         truncation: T,
     ) -> Result<Tensor<T, S>>;
 
+    /// Extract a triangle mesh from a TSDF volume using Marching Cubes.
     fn tsdf_extract_mesh<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
         tsdf_volume: &Tensor<T, S>,
@@ -228,6 +230,7 @@ pub trait ComputeContext: Send + Sync {
         max_triangles: u32,
     ) -> Result<Vec<crate::gpu_kernels::marching_cubes::Vertex>>;
 
+    /// Lucas-Kanade sparse optical flow on image pyramids.
     fn optical_flow_lk<
         T: Float + bytemuck::Pod + 'static,
         S: Storage<T> + cv_core::StorageFactory<T> + 'static,
@@ -376,6 +379,7 @@ pub trait ComputeContext: Send + Sync {
         transform: &nalgebra::Matrix4<T>,
     ) -> Result<(nalgebra::Matrix6<T>, nalgebra::Vector6<T>)>;
 
+    /// Dense (projective) ICP step — accumulates J^T*J and J^T*r from depth images.
     fn dense_icp_step<
         T: Float + bytemuck::Pod + 'static,
         S: Storage<T> + cv_core::StorageFactory<T> + 'static,
@@ -431,6 +435,7 @@ pub trait ComputeContext: Send + Sync {
         x: &Tensor<T, S>,
     ) -> Result<Tensor<T, S>>;
 
+    /// Update the MOG2 background model with a new frame and write the foreground mask.
     fn mog2_update<
         T: Float + bytemuck::Pod + 'static,
         S1: Storage<T> + 'static,
@@ -479,83 +484,134 @@ pub trait ComputeContext: Send + Sync {
     ) -> Result<Vec<cv_core::KeyPoint>>;
 }
 
+/// Parameters for stereo disparity estimation.
 #[derive(Debug, Clone, Copy)]
 pub struct StereoMatchParams {
+    /// Matching algorithm to use.
     pub method: StereoMatchMethod,
+    /// Minimum disparity value (can be negative).
     pub min_disparity: i32,
+    /// Number of disparity levels to search.
     pub num_disparities: i32,
+    /// Side length of the matching block (must be odd).
     pub block_size: usize,
 }
 
+/// Stereo matching algorithm variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StereoMatchMethod {
+    /// Simple block (SAD/SSD) matching.
     BlockMatching,
+    /// Semi-Global Matching (SGM) for better accuracy at higher cost.
     SemiGlobalMatching,
 }
 
+/// Parameters for the MOG2 (Mixture of Gaussians) background subtraction model.
+///
+/// Layout is `repr(C)` so it can be uploaded directly as a GPU uniform buffer.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Mog2Params<T: Float> {
+    /// Frame width in pixels.
     pub width: u32,
+    /// Frame height in pixels.
     pub height: u32,
+    /// Number of Gaussian mixture components per pixel.
     pub n_mixtures: u32,
+    /// Learning rate (0..1). Higher values adapt faster to changes.
     pub alpha: T,
+    /// Mahalanobis distance threshold for classifying a pixel as foreground.
     pub var_threshold: T,
+    /// Fraction of total weight required to consider a component as background.
     pub background_ratio: T,
+    /// Initial variance for new Gaussian components.
     pub var_init: T,
+    /// Minimum allowed variance (clamping floor).
     pub var_min: T,
+    /// Maximum allowed variance (clamping ceiling).
     pub var_max: T,
-    pub _padding: [u32; 3], // Align to 16 bytes for WGSL
+    /// Padding to align the struct to 16 bytes for WGSL uniform buffers.
+    pub _padding: [u32; 3],
 }
 
 // Safety: All fields are Pod when T: Pod. Repr(C) guarantees no padding surprises.
 unsafe impl<T: Float + bytemuck::Pod> bytemuck::Pod for Mog2Params<T> {}
 unsafe impl<T: Float + bytemuck::Zeroable> bytemuck::Zeroable for Mog2Params<T> {}
 
+/// Color space conversion codes, mirroring OpenCV conventions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorConversion {
+    /// RGB to single-channel grayscale.
     RgbToGray,
+    /// BGR to single-channel grayscale.
     BgrToGray,
+    /// Single-channel grayscale to 3-channel RGB.
     GrayToRgb,
 }
 
+/// Type of geometric warp transformation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WarpType {
+    /// 2x3 affine transformation (rotation, scale, translation).
     Affine,
+    /// 3x3 perspective (homography) transformation.
     Perspective,
 }
 
+/// Morphological operation type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MorphologyType {
+    /// Shrink bright regions / grow dark regions.
     Erode,
+    /// Grow bright regions / shrink dark regions.
     Dilate,
+    /// Erosion followed by dilation (removes small bright spots).
     Open,
+    /// Dilation followed by erosion (fills small dark holes).
     Close,
 }
 
+/// Pixel thresholding strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThresholdType {
+    /// dst = max_value if src > thresh, else 0.
     Binary,
+    /// dst = 0 if src > thresh, else max_value.
     BinaryInv,
+    /// dst = thresh if src > thresh, else src.
     Trunc,
+    /// dst = src if src > thresh, else 0.
     ToZero,
+    /// dst = 0 if src > thresh, else src.
     ToZeroInv,
 }
 
+/// Border extrapolation mode for convolution and filtering.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BorderMode<T: Float> {
+    /// Pad with a fixed constant value.
     Constant(T),
+    /// Replicate the edge pixel.
     Replicate,
+    /// Reflect across the border (e.g. `dcb|abcd|cba`).
     Reflect,
+    /// Wrap around to the opposite edge.
     Wrap,
 }
 
+/// Template matching similarity metric.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateMatchMethod {
+    /// Sum of squared differences.
     SqDiff,
+    /// Normalised sum of squared differences.
     SqDiffNormed,
+    /// Cross-correlation.
     Ccorr,
+    /// Normalised cross-correlation.
     CcorrNormed,
+    /// Cross-correlation coefficient.
     Ccoeff,
+    /// Normalised cross-correlation coefficient (best overall).
     CcoeffNormed,
 }

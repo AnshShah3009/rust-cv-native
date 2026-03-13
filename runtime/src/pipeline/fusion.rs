@@ -2,26 +2,41 @@ use super::{BufferId, PipelineNode};
 use crate::Result;
 use std::collections::HashSet;
 
+/// Recognized patterns of consecutive kernels that can be fused into a single dispatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FusionPattern {
+    /// Convolution followed by thresholding.
     ConvThreshold,
+    /// Two consecutive convolutions.
     ConvConv,
+    /// Thresholding followed by non-maximum suppression.
     ThresholdNms,
+    /// Gaussian blur followed by thresholding.
     GaussianThreshold,
+    /// Sobel edge detection followed by Canny.
     SobelCanny,
+    /// User-defined pattern specified by kernel name sequence.
     Custom(Vec<String>),
 }
 
+/// Result of fusing multiple consecutive kernel nodes into one.
 #[derive(Debug, Clone)]
 pub struct FusedKernel {
+    /// Name of the fused kernel (e.g. `"fused_conv_threshold"`).
     pub name: String,
+    /// Indices of the original nodes that were fused.
     pub original_nodes: Vec<usize>,
+    /// External inputs (intermediate buffers excluded).
     pub inputs: Vec<BufferId>,
+    /// External outputs (intermediate buffers excluded).
     pub outputs: Vec<BufferId>,
+    /// Concatenated parameters from the fused kernels.
     pub combined_params: Vec<u8>,
+    /// Optional pre-compiled shader source for the fused kernel.
     pub shader_source: Option<String>,
 }
 
+/// Optimizer that detects and fuses compatible consecutive kernel nodes.
 pub struct KernelFuser {
     enabled: bool,
     max_fusion_depth: usize,
@@ -29,6 +44,7 @@ pub struct KernelFuser {
 }
 
 impl KernelFuser {
+    /// Create a fuser with the default set of fusible kernels.
     pub fn new() -> Self {
         let mut fusible = HashSet::new();
         fusible.insert("conv2d".into());
@@ -45,16 +61,19 @@ impl KernelFuser {
         }
     }
 
+    /// Enable or disable kernel fusion.
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
     }
 
+    /// Set the maximum number of consecutive nodes that can be fused.
     pub fn with_max_fusion_depth(mut self, depth: usize) -> Self {
         self.max_fusion_depth = depth;
         self
     }
 
+    /// Check whether a node's kernel is in the set of fusible kernels.
     pub fn is_fusible(&self, node: &PipelineNode) -> bool {
         match node {
             PipelineNode::Kernel { name, .. } => self.fusible_kernels.contains(name),
@@ -62,6 +81,7 @@ impl KernelFuser {
         }
     }
 
+    /// Identify a known fusion pattern from a sequence of kernel nodes.
     pub fn detect_pattern(&self, nodes: &[&PipelineNode]) -> Option<FusionPattern> {
         if nodes.is_empty() || nodes.len() > self.max_fusion_depth {
             return None;
@@ -92,6 +112,7 @@ impl KernelFuser {
         }
     }
 
+    /// Scan the node list and produce fused kernels for all detected patterns.
     pub fn try_fuse(&self, nodes: &[PipelineNode]) -> Result<Vec<FusedKernel>> {
         if !self.enabled {
             return Ok(Vec::new());
@@ -214,6 +235,7 @@ impl KernelFuser {
         })
     }
 
+    /// Replace fusible node sequences with single fused kernel nodes.
     pub fn optimize(&self, nodes: Vec<PipelineNode>) -> Result<Vec<PipelineNode>> {
         let fused = self.try_fuse(&nodes)?;
 

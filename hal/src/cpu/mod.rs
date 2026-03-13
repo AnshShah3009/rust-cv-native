@@ -7,8 +7,13 @@ use cv_core::{storage::Storage, Float, Tensor, TensorShape};
 use rayon::prelude::*;
 use wide::*;
 
+/// SIMD-accelerated helpers.
 pub mod simd;
 
+/// CPU compute backend using Rayon for parallelism and `wide` for SIMD.
+///
+/// Thread count defaults to the Rayon global pool size but can be overridden
+/// via the `RUSTCV_CPU_THREADS` environment variable.
 #[derive(Clone, Debug)]
 pub struct CpuBackend {
     device_id: DeviceId,
@@ -17,6 +22,7 @@ pub struct CpuBackend {
 }
 
 impl CpuBackend {
+    /// Create a new CPU backend, returning `None` only if initialization fails.
     pub fn new() -> Option<Self> {
         let num_threads = std::env::var("RUSTCV_CPU_THREADS")
             .ok()
@@ -30,11 +36,13 @@ impl CpuBackend {
         })
     }
 
+    /// Return the number of worker threads this backend uses.
     pub fn num_threads(&self) -> usize {
         self.num_threads
     }
 }
 
+/// Build a normalised 1-D Gaussian kernel of the given `size` and `sigma`.
 #[allow(clippy::needless_range_loop)]
 pub fn gaussian_kernel_1d<T: Float>(sigma: T, size: usize) -> Vec<T> {
     let mut kernel = vec![T::ZERO; size];
@@ -3465,6 +3473,7 @@ fn hamming_dist(a: &[u8], b: &[u8]) -> u32 {
 }
 
 impl CpuBackend {
+    /// CPU backend is always available.
     pub fn is_available() -> bool {
         true
     }

@@ -15,13 +15,17 @@ use wgpu::util::DeviceExt;
 /// a handle-based design.
 #[derive(Clone)]
 pub struct WgpuGpuStorage<T> {
+    /// The underlying wgpu buffer (wrapped in `Arc` for cheap cloning).
     pub buffer: Option<Arc<wgpu::Buffer>>,
+    /// Number of `T` elements stored.
     pub len: usize,
+    /// Buffer usage flags (STORAGE, COPY_SRC, COPY_DST, etc.).
     pub usage: wgpu::BufferUsages,
     _phantom: PhantomData<T>,
 }
 
 impl<T> WgpuGpuStorage<T> {
+    /// Wrap an existing wgpu buffer with default STORAGE | COPY_SRC | COPY_DST usage.
     pub fn from_buffer(buffer: Arc<wgpu::Buffer>, len: usize) -> Self {
         Self::from_buffer_with_usage(
             buffer,
@@ -32,6 +36,7 @@ impl<T> WgpuGpuStorage<T> {
         )
     }
 
+    /// Wrap an existing wgpu buffer with explicit usage flags.
     pub fn from_buffer_with_usage(
         buffer: Arc<wgpu::Buffer>,
         len: usize,
@@ -57,6 +62,7 @@ impl<T> WgpuGpuStorage<T> {
         self.buffer.as_deref()
     }
 
+    /// Allocate a new GPU buffer filled with `default_value`, using the given context.
     pub fn new_with_ctx(ctx: &GpuContext, size: usize, default_value: T) -> Result<Self, String>
     where
         T: bytemuck::Pod,
@@ -65,6 +71,7 @@ impl<T> WgpuGpuStorage<T> {
         Self::from_slice_ctx(ctx, &data)
     }
 
+    /// Upload a CPU slice to a new GPU buffer using the given context.
     pub fn from_slice_ctx(ctx: &GpuContext, data: &[T]) -> Result<Self, String>
     where
         T: bytemuck::Pod,
@@ -214,5 +221,5 @@ impl<T> PartialEq for WgpuGpuStorage<T> {
 
 impl<T> Eq for WgpuGpuStorage<T> {}
 
-// Type alias for backward compatibility
+/// Backward-compatible alias for [`WgpuGpuStorage`].
 pub type GpuStorage<T> = WgpuGpuStorage<T>;

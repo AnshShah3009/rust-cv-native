@@ -1,11 +1,10 @@
 use crate::gpu::GpuContext;
+use crate::gpu_kernels::dispatch::GpuDispatch;
 use crate::GpuTensor;
 use crate::Result;
 use cv_core::storage::Storage;
 use cv_core::TensorShape;
 use std::marker::PhantomData;
-use std::sync::Arc;
-use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -34,16 +33,8 @@ pub fn resize<T: cv_core::float::Float + bytemuck::Pod>(
         ));
     }
 
-    let _out_shape = TensorShape::new(c, new_height as usize, new_width as usize);
-    let out_len = (new_width * new_height) as usize * c;
+    let out_len = dst_w * dst_h * c;
     let byte_size = (out_len * std::mem::size_of::<T>()) as u64;
-
-    let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Resize Output Buffer"),
-        size: byte_size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
 
     let params = ResizeParams {
         src_w: src_w as u32,
@@ -53,73 +44,32 @@ pub fn resize<T: cv_core::float::Float + bytemuck::Pod>(
         channels: c as u32,
     };
 
-    let params_buffer = ctx
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Resize Params"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+    let precision = crate::gpu_kernels::shader_template::precision_for_type::<T>()?;
+    let shader_source = crate::gpu_kernels::shader_template::resolve(
+        include_str!("../../shaders/resize_f32.wgsl"),
+        precision,
+    );
 
-    let shader_source = match cv_core::DataType::from_type::<T>() {
-        Ok(cv_core::DataType::F32) => include_str!("../../shaders/resize_f32.wgsl"),
-        Ok(_) => {
-            return Err(crate::Error::NotSupported(
-                "Unsupported resize precision type".into(),
-            ))
-        }
-        _ => {
-            include_str!("../../shaders/resize_f32.wgsl")
-        }
-    };
-    let pipeline = ctx.create_compute_pipeline(shader_source, "main");
+    let outputs = GpuDispatch::new(ctx, &shader_source, "Resize")
+        .input(
+            input
+                .storage
+                .as_any()
+                .downcast_ref::<GpuStorage<f32>>()
+                .unwrap()
+                .buffer(),
+        )
+        .output(byte_size)
+        .params(&params)
+        .dispatch_2d(dst_w as u32, dst_h as u32)?;
 
-    let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Resize Bind Group"),
-        layout: &pipeline.get_bind_group_layout(0),
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: input
-                    .storage
-                    .as_any()
-                    .downcast_ref::<GpuStorage<f32>>()
-                    .unwrap()
-                    .buffer()
-                    .as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: output_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: params_buffer.as_entire_binding(),
-            },
-        ],
-    });
-
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: None,
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        let x = (dst_w as u32).div_ceil(16);
-        let y = (dst_h as u32).div_ceil(16);
-        pass.dispatch_workgroups(x, y, 1);
-    }
-    ctx.submit(encoder);
-
-    let res_gpu = crate::GpuTensor {
-        storage: crate::storage::WgpuGpuStorage::from_buffer(Arc::new(output_buffer), out_len),
-        shape: cv_core::TensorShape::new(c, dst_h, dst_w),
+    Ok(crate::GpuTensor {
+        storage: crate::storage::WgpuGpuStorage::from_buffer(
+            outputs.into_iter().next().unwrap(),
+            out_len,
+        ),
+        shape: TensorShape::new(c, dst_h, dst_w),
         dtype: input.dtype,
         _phantom: PhantomData,
-    };
-    Ok(res_gpu)
+    })
 }

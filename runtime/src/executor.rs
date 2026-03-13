@@ -17,24 +17,36 @@ impl Drop for JobGuard {
     }
 }
 
+/// Configuration for constructing an [`Executor`].
 pub struct ExecutorConfig {
+    /// Number of worker threads.
     pub num_threads: usize,
+    /// Name prefix for worker threads (appears in debuggers / `top`).
     pub name: String,
+    /// Enable rayon work-stealing between threads.
     pub work_stealing: bool,
+    /// Pin threads to specific CPU cores, if provided.
     pub core_affinity: Option<Vec<usize>>,
+    /// Maximum number of in-flight tasks before [`Executor::spawn`] returns an error.
+    /// Prevents unbounded memory growth under load. `0` means unlimited.
+    pub max_inflight: usize,
 }
 
 impl Default for ExecutorConfig {
     fn default() -> Self {
+        let threads = num_cpus::get();
         Self {
-            num_threads: num_cpus::get(),
+            num_threads: threads,
             name: "executor".to_string(),
             work_stealing: true,
             core_affinity: None,
+            max_inflight: threads * 8,
         }
     }
 }
 
+/// A thread pool executor bound to a specific device, supporting dynamic resizing
+/// and core affinity.
 pub struct Executor {
     device_id: DeviceId,
     pool: RwLock<rayon::ThreadPool>,
@@ -54,6 +66,7 @@ impl std::fmt::Debug for Executor {
 }
 
 impl Executor {
+    /// Create an executor with the given thread count and name.
     pub fn new(device_id: DeviceId, num_threads: usize, name: &str) -> Result<Self> {
         Self::with_config(
             device_id,
@@ -65,6 +78,7 @@ impl Executor {
         )
     }
 
+    /// Create an executor from a full configuration.
     pub fn with_config(device_id: DeviceId, config: ExecutorConfig) -> Result<Self> {
         let pool = Self::build_pool(&config)?;
 
@@ -99,22 +113,39 @@ impl Executor {
             .map_err(|e| crate::Error::RuntimeError(format!("Failed to build thread pool: {}", e)))
     }
 
+    /// Return the device this executor is associated with.
     pub fn device_id(&self) -> DeviceId {
         self.device_id
     }
 
+    /// Return the current thread count.
     pub fn num_threads(&self) -> usize {
         self.config.read().num_threads
     }
 
+    /// Return whether work-stealing is enabled.
     pub fn work_stealing_enabled(&self) -> bool {
         self.config.read().work_stealing
     }
 
-    pub fn spawn<F>(&self, f: F)
+    /// Spawn a fire-and-forget task on the thread pool.
+    ///
+    /// Returns `Err` if the in-flight count exceeds [`ExecutorConfig::max_inflight`]
+    /// (backpressure). A `max_inflight` of 0 disables the limit.
+    pub fn spawn<F>(&self, f: F) -> crate::Result<()>
     where
         F: FnOnce() + Send + 'static,
     {
+        let max = self.config.read().max_inflight;
+        if max > 0 {
+            let current = self.inflight_jobs.load(Ordering::SeqCst);
+            if current >= max {
+                return Err(crate::Error::RuntimeError(format!(
+                    "Executor backpressure: {current} in-flight tasks (limit {max})"
+                )));
+            }
+        }
+
         let inflight = self.inflight_jobs.clone();
         inflight.fetch_add(1, Ordering::SeqCst);
 
@@ -123,8 +154,10 @@ impl Executor {
             let _guard = JobGuard(inflight);
             f();
         });
+        Ok(())
     }
 
+    /// Run a closure on the thread pool and block until it returns.
     pub fn install<F, R>(&self, f: F) -> R
     where
         F: FnOnce() -> R + Send,
@@ -137,14 +170,17 @@ impl Executor {
         pool.install(f)
     }
 
+    /// Return the number of in-flight jobs.
     pub fn load(&self) -> usize {
         self.inflight_jobs.load(Ordering::Relaxed)
     }
 
+    /// Return `true` if a resize operation is currently in progress.
     pub fn is_resizing(&self) -> bool {
         self.resizing.load(Ordering::Relaxed)
     }
 
+    /// Resize the thread pool, waiting for in-flight jobs to drain first.
     pub fn resize(&self, new_num_threads: usize) -> Result<()> {
         if self
             .resizing
@@ -187,6 +223,7 @@ impl Executor {
         Ok(())
     }
 
+    /// Rebuild the thread pool with new core affinity settings.
     pub fn set_core_affinity(&self, cores: Vec<usize>) -> Result<()> {
         if self
             .resizing
@@ -229,6 +266,7 @@ impl Executor {
         Ok(())
     }
 
+    /// Spawn an async task on the current Tokio runtime. Requires a Tokio context.
     pub fn spawn_async<F, Fut>(&self, f: F) -> Result<()>
     where
         F: FnOnce() -> Fut + Send + 'static,
@@ -255,6 +293,7 @@ impl Executor {
         Ok(())
     }
 
+    /// Execute `f` in parallel over `items` using rayon's `par_iter`.
     pub fn spawn_batch<T, F>(&self, items: &[T], f: F)
     where
         T: Send + Sync,
@@ -274,12 +313,14 @@ impl Executor {
     }
 }
 
+/// Collection of executors for a single device, enabling load-balanced dispatch.
 pub struct ExecutorPool {
     device_id: DeviceId,
     executors: Vec<Arc<Executor>>,
 }
 
 impl ExecutorPool {
+    /// Create an empty pool for the given device.
     pub fn new(device_id: DeviceId) -> Self {
         Self {
             device_id,
@@ -287,23 +328,28 @@ impl ExecutorPool {
         }
     }
 
+    /// Add an executor to the pool. Panics if the executor belongs to a different device.
     pub fn add_executor(&mut self, executor: Arc<Executor>) {
         assert_eq!(executor.device_id(), self.device_id);
         self.executors.push(executor);
     }
 
+    /// Return the executor with the lowest current load.
     pub fn best_executor(&self) -> Option<Arc<Executor>> {
         self.executors.iter().min_by_key(|e| e.load()).cloned()
     }
 
+    /// Return the number of executors in this pool.
     pub fn executor_count(&self) -> usize {
         self.executors.len()
     }
 
+    /// Return the sum of in-flight jobs across all executors.
     pub fn total_load(&self) -> usize {
         self.executors.iter().map(|e| e.load()).sum()
     }
 
+    /// Return the least-loaded executor along with its current load.
     pub fn least_loaded(&self) -> Option<(Arc<Executor>, usize)> {
         self.executors
             .iter()
@@ -331,9 +377,11 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
 
         let counter_clone = counter.clone();
-        executor.spawn(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        });
+        executor
+            .spawn(move || {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            })
+            .unwrap();
 
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -353,5 +401,47 @@ mod tests {
 
         let best = pool.best_executor().unwrap();
         assert_eq!(best.load(), 0);
+    }
+
+    #[test]
+    fn test_executor_backpressure() {
+        let executor = Executor::with_config(
+            cv_hal::DeviceId(0),
+            ExecutorConfig {
+                num_threads: 2,
+                name: "backpressure-test".to_string(),
+                max_inflight: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Spawn 2 blocking tasks to fill the limit (need 2 threads so both run)
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        for _ in 0..2 {
+            let b = barrier.clone();
+            executor
+                .spawn(move || {
+                    b.wait();
+                })
+                .unwrap();
+        }
+        // Brief pause to let rayon pick up both tasks
+        std::thread::sleep(Duration::from_millis(20));
+
+        // Third spawn should be rejected (backpressure)
+        let result = executor.spawn(|| {});
+        assert!(result.is_err(), "Expected backpressure error");
+
+        // Release the barrier so tasks complete
+        barrier.wait();
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Now spawn should succeed again
+        let result = executor.spawn(|| {});
+        assert!(
+            result.is_ok(),
+            "Expected spawn to succeed after tasks drained"
+        );
     }
 }

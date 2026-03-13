@@ -5,14 +5,20 @@ use crate::context::{
 use crate::{BackendType, DeviceId, Error, Result};
 use cv_core::{storage::Storage, Float, Tensor};
 
-/// Experimental MLX Context for Apple Silicon
-/// WARNING: Currently untested on actual hardware.
+/// Experimental MLX context for Apple Silicon.
+///
+/// Most operations return [`Error::NotSupported`](crate::Error::NotSupported);
+/// only `pointcloud_normals` has a partial (CPU fallback) implementation.
+///
+/// **WARNING:** Currently untested on actual hardware.
 #[derive(Debug)]
 pub struct MlxContext {
+    /// Device identifier (defaults to `DeviceId(2)` to avoid collisions).
     pub device_id: DeviceId,
 }
 
 impl MlxContext {
+    /// Create an MLX context. Returns `Some` only when the `mlx` feature is enabled.
     pub fn new() -> Option<Self> {
         #[cfg(feature = "mlx")]
         {

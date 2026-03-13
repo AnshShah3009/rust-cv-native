@@ -11,28 +11,39 @@ use std::sync::OnceLock;
 static CPU_CONTEXT: OnceLock<CpuBackend> = OnceLock::new();
 static MLX_CONTEXT: OnceLock<MlxContext> = OnceLock::new();
 
+/// Dispatch a method call to whichever backend variant `ComputeDevice` holds.
+macro_rules! dispatch {
+    ($self:expr, $method:ident $(, $arg:expr)*) => {
+        match $self {
+            ComputeDevice::Cpu(c) => c.$method($($arg),*),
+            ComputeDevice::Gpu(g) => g.$method($($arg),*),
+            ComputeDevice::Mlx(m) => m.$method($($arg),*),
+        }
+    };
+}
+
+/// A reference to the active compute backend.
+///
+/// `ComputeDevice` is the main entry-point for dispatching operations.
+/// Obtain one via [`get_device`] (auto-select best backend) or
+/// [`get_device_by_id`] (specific device).
 #[derive(Clone, Copy, Debug)]
 pub enum ComputeDevice<'a> {
+    /// CPU backend (Rayon + SIMD).
     Cpu(&'a CpuBackend),
+    /// GPU backend (wgpu / WebGPU).
     Gpu(&'a GpuContext),
+    /// Apple MLX backend (experimental).
     Mlx(&'a MlxContext),
 }
 
 impl<'a> ComputeDevice<'a> {
     pub fn backend_type(&self) -> crate::BackendType {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.backend_type(),
-            ComputeDevice::Gpu(gpu) => gpu.backend_type(),
-            ComputeDevice::Mlx(mlx) => mlx.backend_type(),
-        }
+        dispatch!(self, backend_type)
     }
 
     pub fn device_id(&self) -> crate::DeviceId {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.device_id(),
-            ComputeDevice::Gpu(gpu) => gpu.device_id(),
-            ComputeDevice::Mlx(mlx) => mlx.device_id(),
-        }
+        dispatch!(self, device_id)
     }
 
     pub fn convolve_2d<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
@@ -41,11 +52,7 @@ impl<'a> ComputeDevice<'a> {
         kernel: &Tensor<T, S>,
         border_mode: BorderMode<T>,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.convolve_2d(input, kernel, border_mode),
-            ComputeDevice::Gpu(gpu) => gpu.convolve_2d(input, kernel, border_mode),
-            ComputeDevice::Mlx(mlx) => mlx.convolve_2d(input, kernel, border_mode),
-        }
+        dispatch!(self, convolve_2d, input, kernel, border_mode)
     }
 
     pub fn threshold<
@@ -58,11 +65,7 @@ impl<'a> ComputeDevice<'a> {
         max_value: T,
         typ: ThresholdType,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.threshold(input, thresh, max_value, typ),
-            ComputeDevice::Gpu(gpu) => gpu.threshold(input, thresh, max_value, typ),
-            ComputeDevice::Mlx(mlx) => mlx.threshold(input, thresh, max_value, typ),
-        }
+        dispatch!(self, threshold, input, thresh, max_value, typ)
     }
 
     pub fn sobel<
@@ -75,11 +78,7 @@ impl<'a> ComputeDevice<'a> {
         dy: i32,
         ksize: usize,
     ) -> Result<(Tensor<T, S>, Tensor<T, S>)> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.sobel(input, dx, dy, ksize),
-            ComputeDevice::Gpu(gpu) => gpu.sobel(input, dx, dy, ksize),
-            ComputeDevice::Mlx(mlx) => mlx.sobel(input, dx, dy, ksize),
-        }
+        dispatch!(self, sobel, input, dx, dy, ksize)
     }
 
     pub fn morphology<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
@@ -89,11 +88,7 @@ impl<'a> ComputeDevice<'a> {
         kernel: &Tensor<u8, S>,
         iterations: u32,
     ) -> Result<Tensor<u8, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.morphology(input, typ, kernel, iterations),
-            ComputeDevice::Gpu(gpu) => gpu.morphology(input, typ, kernel, iterations),
-            ComputeDevice::Mlx(mlx) => mlx.morphology(input, typ, kernel, iterations),
-        }
+        dispatch!(self, morphology, input, typ, kernel, iterations)
     }
 
     pub fn warp<
@@ -106,11 +101,7 @@ impl<'a> ComputeDevice<'a> {
         new_shape: (usize, usize),
         typ: WarpType,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.warp(input, matrix, new_shape, typ),
-            ComputeDevice::Gpu(gpu) => gpu.warp(input, matrix, new_shape, typ),
-            ComputeDevice::Mlx(mlx) => mlx.warp(input, matrix, new_shape, typ),
-        }
+        dispatch!(self, warp, input, matrix, new_shape, typ)
     }
 
     pub fn nms<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
@@ -119,11 +110,7 @@ impl<'a> ComputeDevice<'a> {
         threshold: T,
         window_size: usize,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.nms(input, threshold, window_size),
-            ComputeDevice::Gpu(gpu) => gpu.nms(input, threshold, window_size),
-            ComputeDevice::Mlx(mlx) => mlx.nms(input, threshold, window_size),
-        }
+        dispatch!(self, nms, input, threshold, window_size)
     }
 
     pub fn nms_boxes<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
@@ -131,11 +118,7 @@ impl<'a> ComputeDevice<'a> {
         input: &Tensor<T, S>,
         iou_threshold: T,
     ) -> Result<Vec<usize>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.nms_boxes(input, iou_threshold),
-            ComputeDevice::Gpu(gpu) => gpu.nms_boxes(input, iou_threshold),
-            ComputeDevice::Mlx(mlx) => mlx.nms_boxes(input, iou_threshold),
-        }
+        dispatch!(self, nms_boxes, input, iou_threshold)
     }
 
     pub fn nms_rotated_boxes<
@@ -146,11 +129,7 @@ impl<'a> ComputeDevice<'a> {
         input: &Tensor<T, S>,
         iou_threshold: T,
     ) -> Result<Vec<usize>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.nms_rotated_boxes(input, iou_threshold),
-            ComputeDevice::Gpu(gpu) => gpu.nms_rotated_boxes(input, iou_threshold),
-            ComputeDevice::Mlx(mlx) => mlx.nms_rotated_boxes(input, iou_threshold),
-        }
+        dispatch!(self, nms_rotated_boxes, input, iou_threshold)
     }
 
     pub fn nms_polygons<T: Float + 'static>(
@@ -159,11 +138,7 @@ impl<'a> ComputeDevice<'a> {
         scores: &[T],
         iou_threshold: T,
     ) -> Result<Vec<usize>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.nms_polygons(polygons, scores, iou_threshold),
-            ComputeDevice::Gpu(gpu) => gpu.nms_polygons(polygons, scores, iou_threshold),
-            ComputeDevice::Mlx(mlx) => mlx.nms_polygons(polygons, scores, iou_threshold),
-        }
+        dispatch!(self, nms_polygons, polygons, scores, iou_threshold)
     }
 
     pub fn pointcloud_transform<
@@ -174,11 +149,7 @@ impl<'a> ComputeDevice<'a> {
         points: &Tensor<T, S>,
         transform: &[[T; 4]; 4],
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.pointcloud_transform(points, transform),
-            ComputeDevice::Gpu(gpu) => gpu.pointcloud_transform(points, transform),
-            ComputeDevice::Mlx(mlx) => mlx.pointcloud_transform(points, transform),
-        }
+        dispatch!(self, pointcloud_transform, points, transform)
     }
 
     pub fn pointcloud_normals<
@@ -189,11 +160,7 @@ impl<'a> ComputeDevice<'a> {
         points: &Tensor<T, S>,
         k_neighbors: u32,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.pointcloud_normals(points, k_neighbors),
-            ComputeDevice::Gpu(gpu) => gpu.pointcloud_normals(points, k_neighbors),
-            ComputeDevice::Mlx(mlx) => mlx.pointcloud_normals(points, k_neighbors),
-        }
+        dispatch!(self, pointcloud_normals, points, k_neighbors)
     }
 
     pub fn tsdf_integrate<
@@ -208,32 +175,16 @@ impl<'a> ComputeDevice<'a> {
         voxel_size: T,
         truncation: T,
     ) -> Result<()> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.tsdf_integrate(
-                depth_image,
-                camera_pose,
-                intrinsics,
-                voxel_volume,
-                voxel_size,
-                truncation,
-            ),
-            ComputeDevice::Gpu(gpu) => gpu.tsdf_integrate(
-                depth_image,
-                camera_pose,
-                intrinsics,
-                voxel_volume,
-                voxel_size,
-                truncation,
-            ),
-            ComputeDevice::Mlx(mlx) => mlx.tsdf_integrate(
-                depth_image,
-                camera_pose,
-                intrinsics,
-                voxel_volume,
-                voxel_size,
-                truncation,
-            ),
-        }
+        dispatch!(
+            self,
+            tsdf_integrate,
+            depth_image,
+            camera_pose,
+            intrinsics,
+            voxel_volume,
+            voxel_size,
+            truncation
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -250,35 +201,17 @@ impl<'a> ComputeDevice<'a> {
         voxel_size: T,
         truncation: T,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.tsdf_raycast(
-                tsdf_volume,
-                camera_pose,
-                intrinsics,
-                image_size,
-                depth_range,
-                voxel_size,
-                truncation,
-            ),
-            ComputeDevice::Gpu(gpu) => gpu.tsdf_raycast(
-                tsdf_volume,
-                camera_pose,
-                intrinsics,
-                image_size,
-                depth_range,
-                voxel_size,
-                truncation,
-            ),
-            ComputeDevice::Mlx(mlx) => mlx.tsdf_raycast(
-                tsdf_volume,
-                camera_pose,
-                intrinsics,
-                image_size,
-                depth_range,
-                voxel_size,
-                truncation,
-            ),
-        }
+        dispatch!(
+            self,
+            tsdf_raycast,
+            tsdf_volume,
+            camera_pose,
+            intrinsics,
+            image_size,
+            depth_range,
+            voxel_size,
+            truncation
+        )
     }
 
     pub fn tsdf_extract_mesh<
@@ -291,17 +224,14 @@ impl<'a> ComputeDevice<'a> {
         iso_level: T,
         max_triangles: u32,
     ) -> Result<Vec<crate::gpu_kernels::marching_cubes::Vertex>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => {
-                cpu.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles)
-            }
-            ComputeDevice::Gpu(gpu) => {
-                gpu.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles)
-            }
-            ComputeDevice::Mlx(mlx) => {
-                mlx.tsdf_extract_mesh(tsdf_volume, voxel_size, iso_level, max_triangles)
-            }
-        }
+        dispatch!(
+            self,
+            tsdf_extract_mesh,
+            tsdf_volume,
+            voxel_size,
+            iso_level,
+            max_triangles
+        )
     }
 
     pub fn optical_flow_lk<
@@ -315,17 +245,15 @@ impl<'a> ComputeDevice<'a> {
         window_size: usize,
         max_iters: u32,
     ) -> Result<Vec<[T; 2]>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => {
-                cpu.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters)
-            }
-            ComputeDevice::Gpu(gpu) => {
-                gpu.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters)
-            }
-            ComputeDevice::Mlx(mlx) => {
-                mlx.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters)
-            }
-        }
+        dispatch!(
+            self,
+            optical_flow_lk,
+            prev_pyramid,
+            next_pyramid,
+            points,
+            window_size,
+            max_iters
+        )
     }
 
     pub fn cvt_color<
@@ -336,11 +264,7 @@ impl<'a> ComputeDevice<'a> {
         input: &Tensor<T, S>,
         code: ColorConversion,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.cvt_color(input, code),
-            ComputeDevice::Gpu(gpu) => gpu.cvt_color(input, code),
-            ComputeDevice::Mlx(mlx) => mlx.cvt_color(input, code),
-        }
+        dispatch!(self, cvt_color, input, code)
     }
 
     pub fn resize<
@@ -351,11 +275,7 @@ impl<'a> ComputeDevice<'a> {
         input: &Tensor<T, S>,
         new_shape: (usize, usize),
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.resize(input, new_shape),
-            ComputeDevice::Gpu(gpu) => gpu.resize(input, new_shape),
-            ComputeDevice::Mlx(mlx) => mlx.resize(input, new_shape),
-        }
+        dispatch!(self, resize, input, new_shape)
     }
 
     pub fn pyramid_down<
@@ -365,11 +285,7 @@ impl<'a> ComputeDevice<'a> {
         &self,
         input: &Tensor<T, S>,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.pyramid_down(input),
-            ComputeDevice::Gpu(gpu) => gpu.pyramid_down(input),
-            ComputeDevice::Mlx(mlx) => mlx.pyramid_down(input),
-        }
+        dispatch!(self, pyramid_down, input)
     }
 
     pub fn bilateral_filter<
@@ -382,11 +298,7 @@ impl<'a> ComputeDevice<'a> {
         sigma_color: T,
         sigma_space: T,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.bilateral_filter(input, d, sigma_color, sigma_space),
-            ComputeDevice::Gpu(gpu) => gpu.bilateral_filter(input, d, sigma_color, sigma_space),
-            ComputeDevice::Mlx(mlx) => mlx.bilateral_filter(input, d, sigma_color, sigma_space),
-        }
+        dispatch!(self, bilateral_filter, input, d, sigma_color, sigma_space)
     }
 
     pub fn fast_detect<
@@ -398,11 +310,7 @@ impl<'a> ComputeDevice<'a> {
         threshold: T,
         non_max_suppression: bool,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.fast_detect(input, threshold, non_max_suppression),
-            ComputeDevice::Gpu(gpu) => gpu.fast_detect(input, threshold, non_max_suppression),
-            ComputeDevice::Mlx(mlx) => mlx.fast_detect(input, threshold, non_max_suppression),
-        }
+        dispatch!(self, fast_detect, input, threshold, non_max_suppression)
     }
 
     pub fn gaussian_blur<
@@ -414,11 +322,7 @@ impl<'a> ComputeDevice<'a> {
         sigma: T,
         k_size: usize,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.gaussian_blur(input, sigma, k_size),
-            ComputeDevice::Gpu(gpu) => gpu.gaussian_blur(input, sigma, k_size),
-            ComputeDevice::Mlx(mlx) => mlx.gaussian_blur(input, sigma, k_size),
-        }
+        dispatch!(self, gaussian_blur, input, sigma, k_size)
     }
 
     pub fn subtract<
@@ -429,11 +333,7 @@ impl<'a> ComputeDevice<'a> {
         a: &Tensor<T, S>,
         b: &Tensor<T, S>,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.subtract(a, b),
-            ComputeDevice::Gpu(gpu) => gpu.subtract(a, b),
-            ComputeDevice::Mlx(mlx) => mlx.subtract(a, b),
-        }
+        dispatch!(self, subtract, a, b)
     }
 
     pub fn match_descriptors<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
@@ -442,11 +342,7 @@ impl<'a> ComputeDevice<'a> {
         train: &Tensor<u8, S>,
         ratio_threshold: f32,
     ) -> Result<cv_core::Matches> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.match_descriptors(query, train, ratio_threshold),
-            ComputeDevice::Gpu(gpu) => gpu.match_descriptors(query, train, ratio_threshold),
-            ComputeDevice::Mlx(mlx) => mlx.match_descriptors(query, train, ratio_threshold),
-        }
+        dispatch!(self, match_descriptors, query, train, ratio_threshold)
     }
 
     pub fn sift_extrema<
@@ -460,17 +356,15 @@ impl<'a> ComputeDevice<'a> {
         threshold: T,
         edge_threshold: T,
     ) -> Result<Tensor<u8, cv_core::storage::CpuStorage<u8>>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => {
-                cpu.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold)
-            }
-            ComputeDevice::Gpu(gpu) => {
-                gpu.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold)
-            }
-            ComputeDevice::Mlx(mlx) => {
-                mlx.sift_extrema(dog_prev, dog_curr, dog_next, threshold, edge_threshold)
-            }
-        }
+        dispatch!(
+            self,
+            sift_extrema,
+            dog_prev,
+            dog_curr,
+            dog_next,
+            threshold,
+            edge_threshold
+        )
     }
 
     pub fn compute_sift_descriptors<
@@ -481,11 +375,7 @@ impl<'a> ComputeDevice<'a> {
         image: &Tensor<T, S>,
         keypoints: &cv_core::KeyPoints,
     ) -> Result<cv_core::Descriptors> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.compute_sift_descriptors(image, keypoints),
-            ComputeDevice::Gpu(gpu) => gpu.compute_sift_descriptors(image, keypoints),
-            ComputeDevice::Mlx(mlx) => mlx.compute_sift_descriptors(image, keypoints),
-        }
+        dispatch!(self, compute_sift_descriptors, image, keypoints)
     }
 
     pub fn icp_correspondences<
@@ -497,11 +387,7 @@ impl<'a> ComputeDevice<'a> {
         tgt: &Tensor<T, S>,
         max_dist: T,
     ) -> Result<Vec<(usize, usize, T)>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.icp_correspondences(src, tgt, max_dist),
-            ComputeDevice::Gpu(gpu) => gpu.icp_correspondences(src, tgt, max_dist),
-            ComputeDevice::Mlx(mlx) => mlx.icp_correspondences(src, tgt, max_dist),
-        }
+        dispatch!(self, icp_correspondences, src, tgt, max_dist)
     }
 
     pub fn icp_accumulate<
@@ -515,17 +401,15 @@ impl<'a> ComputeDevice<'a> {
         correspondences: &[(u32, u32)],
         transform: &nalgebra::Matrix4<T>,
     ) -> Result<(nalgebra::Matrix6<T>, nalgebra::Vector6<T>)> {
-        match self {
-            ComputeDevice::Cpu(cpu) => {
-                cpu.icp_accumulate(source, target, target_normals, correspondences, transform)
-            }
-            ComputeDevice::Gpu(gpu) => {
-                gpu.icp_accumulate(source, target, target_normals, correspondences, transform)
-            }
-            ComputeDevice::Mlx(mlx) => {
-                mlx.icp_accumulate(source, target, target_normals, correspondences, transform)
-            }
-        }
+        dispatch!(
+            self,
+            icp_accumulate,
+            source,
+            target,
+            target_normals,
+            correspondences,
+            transform
+        )
     }
 
     pub fn dense_icp_step<
@@ -540,32 +424,16 @@ impl<'a> ComputeDevice<'a> {
         max_dist: T,
         max_angle: T,
     ) -> Result<(nalgebra::Matrix6<T>, nalgebra::Vector6<T>)> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.dense_icp_step(
-                source_depth,
-                target_data,
-                intrinsics,
-                initial_guess,
-                max_dist,
-                max_angle,
-            ),
-            ComputeDevice::Gpu(gpu) => gpu.dense_icp_step(
-                source_depth,
-                target_data,
-                intrinsics,
-                initial_guess,
-                max_dist,
-                max_angle,
-            ),
-            ComputeDevice::Mlx(mlx) => mlx.dense_icp_step(
-                source_depth,
-                target_data,
-                intrinsics,
-                initial_guess,
-                max_dist,
-                max_angle,
-            ),
-        }
+        dispatch!(
+            self,
+            dense_icp_step,
+            source_depth,
+            target_data,
+            intrinsics,
+            initial_guess,
+            max_dist,
+            max_angle
+        )
     }
 
     pub fn akaze_diffusion<
@@ -577,11 +445,7 @@ impl<'a> ComputeDevice<'a> {
         k: T,
         tau: T,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.akaze_diffusion(input, k, tau),
-            ComputeDevice::Gpu(gpu) => gpu.akaze_diffusion(input, k, tau),
-            ComputeDevice::Mlx(mlx) => mlx.akaze_diffusion(input, k, tau),
-        }
+        dispatch!(self, akaze_diffusion, input, k, tau)
     }
 
     #[allow(clippy::type_complexity)]
@@ -592,11 +456,7 @@ impl<'a> ComputeDevice<'a> {
         &self,
         input: &Tensor<T, S>,
     ) -> Result<(Tensor<T, S>, Tensor<T, S>, Tensor<T, S>)> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.akaze_derivatives(input),
-            ComputeDevice::Gpu(gpu) => gpu.akaze_derivatives(input),
-            ComputeDevice::Mlx(mlx) => mlx.akaze_derivatives(input),
-        }
+        dispatch!(self, akaze_derivatives, input)
     }
 
     pub fn akaze_contrast_k<
@@ -606,11 +466,7 @@ impl<'a> ComputeDevice<'a> {
         &self,
         input: &Tensor<T, S>,
     ) -> Result<T> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.akaze_contrast_k(input),
-            ComputeDevice::Gpu(gpu) => gpu.akaze_contrast_k(input),
-            ComputeDevice::Mlx(mlx) => mlx.akaze_contrast_k(input),
-        }
+        dispatch!(self, akaze_contrast_k, input)
     }
 
     pub fn spmv<
@@ -623,11 +479,7 @@ impl<'a> ComputeDevice<'a> {
         values: &[T],
         x: &Tensor<T, S>,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.spmv(row_ptr, col_indices, values, x),
-            ComputeDevice::Gpu(gpu) => gpu.spmv(row_ptr, col_indices, values, x),
-            ComputeDevice::Mlx(mlx) => mlx.spmv(row_ptr, col_indices, values, x),
-        }
+        dispatch!(self, spmv, row_ptr, col_indices, values, x)
     }
 
     pub fn mog2_update<
@@ -641,11 +493,7 @@ impl<'a> ComputeDevice<'a> {
         mask: &mut Tensor<u32, S2>,
         params: &crate::context::Mog2Params<T>,
     ) -> Result<()> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.mog2_update(frame, model, mask, params),
-            ComputeDevice::Gpu(gpu) => gpu.mog2_update(frame, model, mask, params),
-            ComputeDevice::Mlx(mlx) => mlx.mog2_update(frame, model, mask, params),
-        }
+        dispatch!(self, mog2_update, frame, model, mask, params)
     }
 
     /// Get a pooled GPU buffer if this is a GPU device.

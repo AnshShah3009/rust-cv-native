@@ -64,15 +64,19 @@ struct ShmHeader {
     slot_size: AtomicU32,
 }
 
+/// Shared-memory based [`LoadCoordinator`](super::LoadCoordinator).
+///
+/// Uses a memory-mapped file with fixed-size slots (one per process) for
+/// lock-free load reporting. Suitable for low-latency coordination on a
+/// single machine.
 pub struct ShmCoordinator {
     mmap: memmap2::MmapMut,
     slot_index: usize,
-    #[allow(dead_code)]
-    pid: u32,
     path: std::path::PathBuf,
 }
 
 impl ShmCoordinator {
+    /// Open or create shared memory region `name` with the given byte `size`.
     pub fn new(name: &str, size: usize) -> io::Result<Self> {
         let path = Self::get_shm_path(name);
 
@@ -110,13 +114,11 @@ impl ShmCoordinator {
                 .store(std::mem::size_of::<LoadSlot>() as u32, Ordering::Relaxed);
         }
 
-        let pid = std::process::id();
-        let slot_index = Self::find_or_allocate_slot(&mut mmap, pid)?;
+        let slot_index = Self::find_or_allocate_slot(&mut mmap, std::process::id())?;
 
         Ok(Self {
             mmap,
             slot_index,
-            pid,
             path,
         })
     }

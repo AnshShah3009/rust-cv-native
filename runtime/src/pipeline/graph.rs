@@ -3,25 +3,41 @@ use super::PipelineNode;
 use crate::Result;
 use std::collections::{HashMap, VecDeque};
 
+/// Index of a node within a pipeline's execution graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub usize);
 
+/// An edge in the execution graph: node `from` must complete before node `to`
+/// because `to` reads the `buffer` produced by `from`.
 #[derive(Debug, Clone)]
 pub struct NodeDependency {
+    /// Producer node.
     pub from: NodeId,
+    /// Consumer node.
     pub to: NodeId,
+    /// The buffer that creates the dependency.
     pub buffer: BufferId,
 }
 
+/// A directed acyclic graph that determines the execution order of pipeline nodes.
+///
+/// Nodes are topologically sorted and assigned to levels for parallelism analysis.
 #[derive(Clone)]
 pub struct ExecutionGraph {
+    /// All node IDs in the graph.
     pub nodes: Vec<NodeId>,
+    /// Edges representing data dependencies between nodes.
     pub dependencies: Vec<NodeDependency>,
+    /// Nodes in valid execution order (topological sort).
     pub topology_order: Vec<NodeId>,
+    /// Parallelism level for each node (1-based; nodes at the same level are independent).
     pub levels: HashMap<NodeId, usize>,
 }
 
 impl ExecutionGraph {
+    /// Build an execution graph from the given pipeline nodes.
+    ///
+    /// Returns an error if the graph contains a cycle.
     pub fn build(pipeline_nodes: &[PipelineNode]) -> Result<Self> {
         let nodes: Vec<NodeId> = (0..pipeline_nodes.len()).map(NodeId).collect();
 
@@ -148,6 +164,7 @@ impl ExecutionGraph {
         levels
     }
 
+    /// Return all dependencies where `node_id` is the consumer.
     pub fn get_dependencies(&self, node_id: NodeId) -> Vec<&NodeDependency> {
         self.dependencies
             .iter()
@@ -155,6 +172,7 @@ impl ExecutionGraph {
             .collect()
     }
 
+    /// Return all dependencies where `node_id` is the producer.
     pub fn get_dependents(&self, node_id: NodeId) -> Vec<&NodeDependency> {
         self.dependencies
             .iter()
@@ -162,14 +180,17 @@ impl ExecutionGraph {
             .collect()
     }
 
+    /// Return the parallelism level of a node (0 if not found).
     pub fn get_level(&self, node_id: NodeId) -> usize {
         self.levels.get(&node_id).copied().unwrap_or(0)
     }
 
+    /// Return the deepest parallelism level in the graph.
     pub fn max_level(&self) -> usize {
         self.levels.values().copied().max().unwrap_or(0)
     }
 
+    /// Return all nodes at the given parallelism level.
     pub fn nodes_at_level(&self, level: usize) -> Vec<NodeId> {
         self.levels
             .iter()
@@ -177,6 +198,7 @@ impl ExecutionGraph {
             .collect()
     }
 
+    /// Return groups of nodes that can execute in parallel, one group per level.
     pub fn parallelizable_groups(&self) -> Vec<Vec<NodeId>> {
         let max_level = self.max_level();
         (1..=max_level)
