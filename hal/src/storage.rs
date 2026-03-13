@@ -56,6 +56,38 @@ impl<T> WgpuGpuStorage<T> {
     pub fn try_buffer(&self) -> Option<&wgpu::Buffer> {
         self.buffer.as_deref()
     }
+
+    pub fn new_with_ctx(ctx: &GpuContext, size: usize, default_value: T) -> Result<Self, String>
+    where
+        T: bytemuck::Pod,
+    {
+        let data = vec![default_value; size];
+        Self::from_slice_ctx(ctx, &data)
+    }
+
+    pub fn from_slice_ctx(ctx: &GpuContext, data: &[T]) -> Result<Self, String>
+    where
+        T: bytemuck::Pod,
+    {
+        let len = data.len();
+        let buffer = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("WgpuGpuStorage buffer"),
+                contents: bytemuck::cast_slice(data),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            });
+        Ok(Self {
+            buffer: Some(Arc::new(buffer)),
+            len,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            _phantom: PhantomData,
+        })
+    }
 }
 
 impl<T> Drop for WgpuGpuStorage<T> {
@@ -141,6 +173,24 @@ impl<T: bytemuck::Pod + fmt::Debug + Any + 'static> cv_core::storage::StorageFac
 
     fn new(size: usize, default_value: T) -> std::result::Result<Self, String> {
         let data = vec![default_value; size];
+        Self::from_vec(data)
+    }
+
+    fn create(
+        shape: cv_core::tensor::TensorShape,
+        default_value: T,
+    ) -> std::result::Result<Self, String> {
+        let size = shape.len();
+        let data = vec![default_value; size];
+        Self::from_vec(data)
+    }
+
+    fn create_zeros(shape: cv_core::tensor::TensorShape) -> std::result::Result<Self, String>
+    where
+        T: Default,
+    {
+        let size = shape.len();
+        let data = vec![T::default(); size];
         Self::from_vec(data)
     }
 }

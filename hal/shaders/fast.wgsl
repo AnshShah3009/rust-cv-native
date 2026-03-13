@@ -5,7 +5,7 @@ struct Params {
 }
 
 @group(0) @binding(0) var<storage, read> input_data: array<u32>;
-@group(0) @binding(1) var<storage, read_write> output_data: array<u32>;
+@group(0) @binding(1) var<storage, read_write> output_data: array<u32>; // Packed u8
 @group(0) @binding(2) var<uniform> params: Params;
 
 fn get_u8(x: i32, y: i32) -> u32 {

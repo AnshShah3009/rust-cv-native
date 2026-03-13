@@ -25,16 +25,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let scale_x = f32(params.src_w) / f32(params.dst_w);
-    let scale_y = f32(params.src_h) / f32(params.dst_h);
+    let src_width_f = f32(params.src_w) - 1.0;
+    let src_height_f = f32(params.src_h) - 1.0;
+    let dst_width_f = f32(params.dst_w) - 1.0;
+    let dst_height_f = f32(params.dst_h) - 1.0;
 
     var res_combined = 0u;
     for (var i = 0u; i < 4u; i++) {
         let x_dst = x_u32 * 4u + i;
         if (x_dst >= params.dst_w) { break; }
 
-        let src_x_f = (f32(x_dst) + 0.5) * scale_x - 0.5;
-        let src_y_f = (f32(y_dst) + 0.5) * scale_y - 0.5;
+        let src_x_f = f32(x_dst) * src_width_f / dst_width_f;
+        let src_y_f = f32(y_dst) * src_height_f / dst_height_f;
         
         let x0 = u32(max(0.0, floor(src_x_f)));
         let y0 = u32(max(0.0, floor(src_y_f)));

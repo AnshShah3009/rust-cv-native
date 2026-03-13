@@ -5,7 +5,7 @@ use crate::cpu::CpuBackend;
 use crate::gpu::GpuContext;
 use crate::mlx::MlxContext;
 use crate::Result;
-use cv_core::{storage::Storage, Tensor};
+use cv_core::{storage::Storage, Float, Tensor};
 use std::sync::OnceLock;
 
 static CPU_CONTEXT: OnceLock<CpuBackend> = OnceLock::new();
@@ -35,12 +35,12 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn convolve_2d<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn convolve_2d<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<f32, S>,
-        kernel: &Tensor<f32, S>,
-        border_mode: BorderMode,
-    ) -> Result<Tensor<f32, S>> {
+        input: &Tensor<T, S>,
+        kernel: &Tensor<T, S>,
+        border_mode: BorderMode<T>,
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.convolve_2d(input, kernel, border_mode),
             ComputeDevice::Gpu(gpu) => gpu.convolve_2d(input, kernel, border_mode),
@@ -48,13 +48,13 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn threshold<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    pub fn threshold<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<u8, S>,
-        thresh: u8,
-        max_value: u8,
+        input: &Tensor<T, S>,
+        thresh: T,
+        max_value: T,
         typ: ThresholdType,
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.threshold(input, thresh, max_value, typ),
             ComputeDevice::Gpu(gpu) => gpu.threshold(input, thresh, max_value, typ),
@@ -62,13 +62,13 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn sobel<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    pub fn sobel<T: Float + bytemuck::Pod + std::fmt::Debug + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<u8, S>,
+        input: &Tensor<T, S>,
         dx: i32,
         dy: i32,
         ksize: usize,
-    ) -> Result<(Tensor<u8, S>, Tensor<u8, S>)> {
+    ) -> Result<(Tensor<T, S>, Tensor<T, S>)> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.sobel(input, dx, dy, ksize),
             ComputeDevice::Gpu(gpu) => gpu.sobel(input, dx, dy, ksize),
@@ -90,13 +90,13 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn warp<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    pub fn warp<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<u8, S>,
-        matrix: &[[f32; 3]; 3],
+        input: &Tensor<T, S>,
+        matrix: &[[T; 3]; 3],
         new_shape: (usize, usize),
         typ: WarpType,
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.warp(input, matrix, new_shape, typ),
             ComputeDevice::Gpu(gpu) => gpu.warp(input, matrix, new_shape, typ),
@@ -104,12 +104,12 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn nms<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn nms<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<f32, S>,
-        threshold: f32,
+        input: &Tensor<T, S>,
+        threshold: T,
         window_size: usize,
-    ) -> Result<Tensor<f32, S>> {
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.nms(input, threshold, window_size),
             ComputeDevice::Gpu(gpu) => gpu.nms(input, threshold, window_size),
@@ -117,10 +117,10 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn nms_boxes<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn nms_boxes<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<f32, S>,
-        iou_threshold: f32,
+        input: &Tensor<T, S>,
+        iou_threshold: T,
     ) -> Result<Vec<usize>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.nms_boxes(input, iou_threshold),
@@ -129,10 +129,10 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn nms_rotated_boxes<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn nms_rotated_boxes<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<f32, S>,
-        iou_threshold: f32,
+        input: &Tensor<T, S>,
+        iou_threshold: T,
     ) -> Result<Vec<usize>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.nms_rotated_boxes(input, iou_threshold),
@@ -141,11 +141,11 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn nms_polygons(
+    pub fn nms_polygons<T: Float + 'static>(
         &self,
         polygons: &[cv_core::Polygon],
-        scores: &[f32],
-        iou_threshold: f32,
+        scores: &[T],
+        iou_threshold: T,
     ) -> Result<Vec<usize>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.nms_polygons(polygons, scores, iou_threshold),
@@ -154,11 +154,11 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn pointcloud_transform<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn pointcloud_transform<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        points: &Tensor<f32, S>,
-        transform: &[[f32; 4]; 4],
-    ) -> Result<Tensor<f32, S>> {
+        points: &Tensor<T, S>,
+        transform: &[[T; 4]; 4],
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.pointcloud_transform(points, transform),
             ComputeDevice::Gpu(gpu) => gpu.pointcloud_transform(points, transform),
@@ -166,11 +166,11 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn pointcloud_normals<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn pointcloud_normals<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        points: &Tensor<f32, S>,
+        points: &Tensor<T, S>,
         k_neighbors: u32,
-    ) -> Result<Tensor<f32, S>> {
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.pointcloud_normals(points, k_neighbors),
             ComputeDevice::Gpu(gpu) => gpu.pointcloud_normals(points, k_neighbors),
@@ -178,14 +178,14 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn tsdf_integrate<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn tsdf_integrate<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        depth_image: &Tensor<f32, S>,
-        camera_pose: &[[f32; 4]; 4],
-        intrinsics: &[f32; 4],
-        voxel_volume: &mut Tensor<f32, S>,
-        voxel_size: f32,
-        truncation: f32,
+        depth_image: &Tensor<T, S>,
+        camera_pose: &[[T; 4]; 4],
+        intrinsics: &[T; 4],
+        voxel_volume: &mut Tensor<T, S>,
+        voxel_size: T,
+        truncation: T,
     ) -> Result<()> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.tsdf_integrate(
@@ -215,16 +215,16 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn tsdf_raycast<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn tsdf_raycast<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        tsdf_volume: &Tensor<f32, S>,
-        camera_pose: &[[f32; 4]; 4],
-        intrinsics: &[f32; 4],
+        tsdf_volume: &Tensor<T, S>,
+        camera_pose: &[[T; 4]; 4],
+        intrinsics: &[T; 4],
         image_size: (u32, u32),
-        depth_range: (f32, f32),
-        voxel_size: f32,
-        truncation: f32,
-    ) -> Result<Tensor<f32, S>> {
+        depth_range: (T, T),
+        voxel_size: T,
+        truncation: T,
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.tsdf_raycast(
                 tsdf_volume,
@@ -256,11 +256,11 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn tsdf_extract_mesh<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn tsdf_extract_mesh<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        tsdf_volume: &Tensor<f32, S>,
-        voxel_size: f32,
-        iso_level: f32,
+        tsdf_volume: &Tensor<T, S>,
+        voxel_size: T,
+        iso_level: T,
         max_triangles: u32,
     ) -> Result<Vec<crate::gpu_kernels::marching_cubes::Vertex>> {
         match self {
@@ -276,14 +276,14 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn optical_flow_lk<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn optical_flow_lk<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        prev_pyramid: &[Tensor<f32, S>],
-        next_pyramid: &[Tensor<f32, S>],
-        points: &[[f32; 2]],
+        prev_pyramid: &[Tensor<T, S>],
+        next_pyramid: &[Tensor<T, S>],
+        points: &[[T; 2]],
         window_size: usize,
         max_iters: u32,
-    ) -> Result<Vec<[f32; 2]>> {
+    ) -> Result<Vec<[T; 2]>> {
         match self {
             ComputeDevice::Cpu(cpu) => {
                 cpu.optical_flow_lk(prev_pyramid, next_pyramid, points, window_size, max_iters)
@@ -297,11 +297,11 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn cvt_color<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    pub fn cvt_color<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<u8, S>,
+        input: &Tensor<T, S>,
         code: ColorConversion,
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.cvt_color(input, code),
             ComputeDevice::Gpu(gpu) => gpu.cvt_color(input, code),
@@ -309,11 +309,11 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn resize<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    pub fn resize<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<u8, S>,
+        input: &Tensor<T, S>,
         new_shape: (usize, usize),
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.resize(input, new_shape),
             ComputeDevice::Gpu(gpu) => gpu.resize(input, new_shape),
@@ -321,13 +321,27 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn bilateral_filter<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    pub fn pyramid_down<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<u8, S>,
+        input: &Tensor<T, S>,
+    ) -> Result<Tensor<T, S>> {
+        match self {
+            ComputeDevice::Cpu(cpu) => cpu.pyramid_down(input),
+            ComputeDevice::Gpu(gpu) => gpu.pyramid_down(input),
+            ComputeDevice::Mlx(mlx) => mlx.pyramid_down(input),
+        }
+    }
+
+    pub fn bilateral_filter<
+        T: Float + bytemuck::Pod + bytemuck::Zeroable + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
+        &self,
+        input: &Tensor<T, S>,
         d: i32,
-        sigma_color: f32,
-        sigma_space: f32,
-    ) -> Result<Tensor<u8, S>> {
+        sigma_color: T,
+        sigma_space: T,
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.bilateral_filter(input, d, sigma_color, sigma_space),
             ComputeDevice::Gpu(gpu) => gpu.bilateral_filter(input, d, sigma_color, sigma_space),
@@ -335,12 +349,12 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn fast_detect<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    pub fn fast_detect<T: Float + bytemuck::Pod + bytemuck::Zeroable + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<u8, S>,
-        threshold: u8,
+        input: &Tensor<T, S>,
+        threshold: T,
         non_max_suppression: bool,
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.fast_detect(input, threshold, non_max_suppression),
             ComputeDevice::Gpu(gpu) => gpu.fast_detect(input, threshold, non_max_suppression),
@@ -348,12 +362,15 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn gaussian_blur<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
+    pub fn gaussian_blur<
+        T: Float + bytemuck::Pod + 'static,
+        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
+    >(
         &self,
-        input: &Tensor<u8, S>,
-        sigma: f32,
+        input: &Tensor<T, S>,
+        sigma: T,
         k_size: usize,
-    ) -> Result<Tensor<u8, S>> {
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.gaussian_blur(input, sigma, k_size),
             ComputeDevice::Gpu(gpu) => gpu.gaussian_blur(input, sigma, k_size),
@@ -361,10 +378,7 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn subtract<
-        T: Clone + Copy + bytemuck::Pod + std::fmt::Debug,
-        S: Storage<T> + cv_core::StorageFactory<T> + 'static,
-    >(
+    pub fn subtract<T: Float + 'static + bytemuck::Pod, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
         a: &Tensor<T, S>,
         b: &Tensor<T, S>,
@@ -389,13 +403,13 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn sift_extrema<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn sift_extrema<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        dog_prev: &Tensor<f32, S>,
-        dog_curr: &Tensor<f32, S>,
-        dog_next: &Tensor<f32, S>,
-        threshold: f32,
-        edge_threshold: f32,
+        dog_prev: &Tensor<T, S>,
+        dog_curr: &Tensor<T, S>,
+        dog_next: &Tensor<T, S>,
+        threshold: T,
+        edge_threshold: T,
     ) -> Result<Tensor<u8, cv_core::storage::CpuStorage<u8>>> {
         match self {
             ComputeDevice::Cpu(cpu) => {
@@ -410,9 +424,9 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn compute_sift_descriptors<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn compute_sift_descriptors<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        image: &Tensor<f32, S>,
+        image: &Tensor<T, S>,
         keypoints: &cv_core::KeyPoints,
     ) -> Result<cv_core::Descriptors> {
         match self {
@@ -422,12 +436,12 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn icp_correspondences<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn icp_correspondences<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        src: &Tensor<f32, S>,
-        tgt: &Tensor<f32, S>,
-        max_dist: f32,
-    ) -> Result<Vec<(usize, usize, f32)>> {
+        src: &Tensor<T, S>,
+        tgt: &Tensor<T, S>,
+        max_dist: T,
+    ) -> Result<Vec<(usize, usize, T)>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.icp_correspondences(src, tgt, max_dist),
             ComputeDevice::Gpu(gpu) => gpu.icp_correspondences(src, tgt, max_dist),
@@ -435,14 +449,14 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn icp_accumulate<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn icp_accumulate<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        source: &Tensor<f32, S>,
-        target: &Tensor<f32, S>,
-        target_normals: &Tensor<f32, S>,
+        source: &Tensor<T, S>,
+        target: &Tensor<T, S>,
+        target_normals: &Tensor<T, S>,
         correspondences: &[(u32, u32)],
-        transform: &nalgebra::Matrix4<f32>,
-    ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
+        transform: &nalgebra::Matrix4<T>,
+    ) -> Result<(nalgebra::Matrix6<T>, nalgebra::Vector6<T>)> {
         match self {
             ComputeDevice::Cpu(cpu) => {
                 cpu.icp_accumulate(source, target, target_normals, correspondences, transform)
@@ -456,15 +470,15 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn dense_icp_step<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn dense_icp_step<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        source_depth: &Tensor<f32, S>,
-        target_data: &Tensor<f32, S>,
-        intrinsics: &[f32; 4],
-        initial_guess: &nalgebra::Matrix4<f32>,
-        max_dist: f32,
-        max_angle: f32,
-    ) -> Result<(nalgebra::Matrix6<f32>, nalgebra::Vector6<f32>)> {
+        source_depth: &Tensor<T, S>,
+        target_data: &Tensor<T, S>,
+        intrinsics: &[T; 4],
+        initial_guess: &nalgebra::Matrix4<T>,
+        max_dist: T,
+        max_angle: T,
+    ) -> Result<(nalgebra::Matrix6<T>, nalgebra::Vector6<T>)> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.dense_icp_step(
                 source_depth,
@@ -493,12 +507,12 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn akaze_diffusion<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn akaze_diffusion<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<f32, S>,
-        k: f32,
-        tau: f32,
-    ) -> Result<Tensor<f32, S>> {
+        input: &Tensor<T, S>,
+        k: T,
+        tau: T,
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.akaze_diffusion(input, k, tau),
             ComputeDevice::Gpu(gpu) => gpu.akaze_diffusion(input, k, tau),
@@ -506,10 +520,10 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn akaze_derivatives<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn akaze_derivatives<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<f32, S>,
-    ) -> Result<(Tensor<f32, S>, Tensor<f32, S>, Tensor<f32, S>)> {
+        input: &Tensor<T, S>,
+    ) -> Result<(Tensor<T, S>, Tensor<T, S>, Tensor<T, S>)> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.akaze_derivatives(input),
             ComputeDevice::Gpu(gpu) => gpu.akaze_derivatives(input),
@@ -517,10 +531,10 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn akaze_contrast_k<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn akaze_contrast_k<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
-        input: &Tensor<f32, S>,
-    ) -> Result<f32> {
+        input: &Tensor<T, S>,
+    ) -> Result<T> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.akaze_contrast_k(input),
             ComputeDevice::Gpu(gpu) => gpu.akaze_contrast_k(input),
@@ -528,13 +542,13 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn spmv<S: Storage<f32> + cv_core::StorageFactory<f32> + 'static>(
+    pub fn spmv<T: Float + bytemuck::Pod + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
         row_ptr: &[u32],
         col_indices: &[u32],
-        values: &[f32],
-        x: &Tensor<f32, S>,
-    ) -> Result<Tensor<f32, S>> {
+        values: &[T],
+        x: &Tensor<T, S>,
+    ) -> Result<Tensor<T, S>> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.spmv(row_ptr, col_indices, values, x),
             ComputeDevice::Gpu(gpu) => gpu.spmv(row_ptr, col_indices, values, x),
@@ -542,12 +556,12 @@ impl<'a> ComputeDevice<'a> {
         }
     }
 
-    pub fn mog2_update<S1: Storage<f32> + 'static, S2: Storage<u32> + 'static>(
+    pub fn mog2_update<T: Float + bytemuck::Pod + 'static, S1: Storage<T> + 'static, S2: Storage<u32> + 'static>(
         &self,
-        frame: &Tensor<f32, S1>,
-        model: &mut Tensor<f32, S1>,
+        frame: &Tensor<T, S1>,
+        model: &mut Tensor<T, S1>,
         mask: &mut Tensor<u32, S2>,
-        params: &crate::context::Mog2Params,
+        params: &crate::context::Mog2Params<T>,
     ) -> Result<()> {
         match self {
             ComputeDevice::Cpu(cpu) => cpu.mog2_update(frame, model, mask, params),

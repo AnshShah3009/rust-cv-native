@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-cv-core = { path = "../core" }
-cv-runtime = { path = "../runtime" }
-cv-imgproc = { path = "../imgproc" }
+cv-core = { workspace = true }
+cv-runtime = { workspace = true }
+cv-imgproc = { workspace = true }
 image = { workspace = true }
-tract-onnx = "0.21.7"
+tract-onnx = { workspace = true }
+
+[features]
+default = []

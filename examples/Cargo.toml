@@ -50,15 +50,18 @@ name = "orb_benchmark"
 path = "src/orb_benchmark.rs"
 
 [dependencies]
-cv-plot = { path = "../plot" }
-cv-core = { path = "../core" }
-cv-registration = { path = "../registration" }
-cv-rendering = { path = "../rendering" }
-cv-scientific = { path = "../scientific" }
-cv-3d = { path = "../3d" }
-cv-features = { path = "../features", features = ["gpu"] }
-cv-hal = { path = "../hal" }
-cv-runtime = { path = "../runtime" }
-nalgebra = "0.33"
-rand = "0.8"
-image = "0.25"
+cv-plot = { workspace = true }
+cv-core = { workspace = true }
+cv-registration = { workspace = true }
+cv-rendering = { workspace = true }
+cv-scientific = { workspace = true }
+cv-3d = { workspace = true }
+cv-features = { workspace = true, features = ["gpu"] }
+cv-hal = { workspace = true }
+cv-runtime = { workspace = true }
+nalgebra = { workspace = true }
+rand = { workspace = true }
+image = { workspace = true }
+
+[features]
+default = []

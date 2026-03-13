@@ -1,7 +1,6 @@
 use crate::gpu::GpuContext;
-use crate::storage::GpuStorage;
 use crate::Result;
-use cv_core::{HoughLine, Tensor};
+use cv_core::{Float, HoughLine};
 use wgpu::util::DeviceExt;
 
 #[repr(C)]
@@ -16,19 +15,28 @@ struct HoughParams {
     threshold: u32,
 }
 
-pub fn hough_lines(
+pub fn hough_lines<T: Float + bytemuck::Pod + bytemuck::Zeroable + 'static>(
     ctx: &GpuContext,
-    input: &Tensor<u8, GpuStorage<u8>>,
-    rho_res: f32,
-    theta_res: f32,
+    input: &crate::GpuTensor<T>,
+    rho_res: T,
+    theta_res: T,
     threshold: u32,
 ) -> Result<Vec<HoughLine>> {
+    // Only f32 WGSL shader available
+    if cv_core::DataType::from_type::<T>().ok() != Some(cv_core::DataType::F32) {
+        return Err(crate::Error::NotSupported(
+            "Hough Lines GPU kernel only supports f32".into(),
+        ));
+    }
+
     let (h, w) = input.shape.hw();
+    let rho_res_f32 = rho_res.to_f32();
+    let theta_res_f32 = theta_res.to_f32();
 
     // Calculate accumulator size
     let max_rho = (w as f32 * w as f32 + h as f32 * h as f32).sqrt();
-    let num_rho = (2.0 * max_rho / rho_res).ceil() as u32;
-    let num_theta = (std::f32::consts::PI / theta_res).ceil() as u32;
+    let num_rho = (2.0 * max_rho / rho_res_f32).ceil() as u32;
+    let num_theta = (std::f32::consts::PI / theta_res_f32).ceil() as u32;
     let acc_len = (num_rho * num_theta) as usize;
     let acc_byte_size = (acc_len * 4) as u64;
 
@@ -47,8 +55,8 @@ pub fn hough_lines(
         height: h as u32,
         num_rho,
         num_theta,
-        rho_res,
-        theta_res,
+        rho_res: rho_res_f32,
+        theta_res: theta_res_f32,
         threshold,
     };
 
@@ -136,7 +144,6 @@ pub fn hough_lines(
         for t in 0..num_theta {
             let val = acc_data[(r * num_theta + t) as usize];
             if val >= threshold {
-                // Simple non-max suppression in 3x3 neighborhood
                 let mut is_local_max = true;
                 for dr in -1..=1 {
                     for dt in -1..=1 {
@@ -161,8 +168,8 @@ pub fn hough_lines(
                 }
 
                 if is_local_max {
-                    let rho = (r as f32 - num_rho as f32 / 2.0) * rho_res;
-                    let theta = t as f32 * theta_res;
+                    let rho = (r as f32 - num_rho as f32 / 2.0) * rho_res_f32;
+                    let theta = t as f32 * theta_res_f32;
                     lines.push(HoughLine::new(rho, theta, val));
                 }
             }

@@ -1,8 +1,8 @@
 use crate::context::ColorConversion;
 use crate::gpu::GpuContext;
-use crate::storage::GpuStorage;
+use crate::GpuTensor;
 use crate::Result;
-use cv_core::{Tensor, TensorShape};
+use cv_core::storage::Storage;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -14,15 +14,16 @@ struct ColorParams {
     code: u32,
 }
 
-pub fn cvt_color(
+pub fn color_convert<T: cv_core::float::Float + bytemuck::Pod + bytemuck::Zeroable>(
     ctx: &GpuContext,
-    input: &Tensor<u8, GpuStorage<u8>>,
-    code: ColorConversion,
-) -> Result<Tensor<u8, GpuStorage<u8>>> {
+    input: &GpuTensor<T>,
+    conv: ColorConversion,
+) -> Result<GpuTensor<T>> {
+    use crate::storage::GpuStorage;
     let (h, w) = input.shape.hw();
     let num_pixels = h * w;
 
-    let (out_channels, code_int) = match code {
+    let (out_channels, code_int) = match conv {
         ColorConversion::RgbToGray => (1, 0),
         ColorConversion::BgrToGray => (1, 1),
         ColorConversion::GrayToRgb => (3, 2),
@@ -32,10 +33,10 @@ pub fn cvt_color(
         return Err(crate::Error::NotSupported("GPU GrayToRgb pending".into()));
     }
 
-    let out_len = num_pixels * out_channels;
-    let byte_size = (out_len.div_ceil(4) * 4) as u64;
+    let out_len = w * h * out_channels;
+    let byte_size = (out_len * std::mem::size_of::<T>()) as u64;
     let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Color Cvt Output"),
+        label: Some("Color Convert Output"),
         size: byte_size,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
@@ -54,7 +55,15 @@ pub fn cvt_color(
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
-    let shader_source = include_str!("../../shaders/color_cvt.wgsl");
+    let shader_source = match cv_core::DataType::from_type::<T>() {
+        #[cfg(feature = "half-precision")]
+        Ok(cv_core::DataType::F16) => include_str!("../../shaders/color_cvt_f16.wgsl"),
+        #[cfg(feature = "half-precision")]
+        Ok(cv_core::DataType::BF16) => include_str!("../../shaders/color_cvt_bf16.wgsl"),
+        _ => {
+            include_str!("../../shaders/color_cvt_f32.wgsl")
+        }
+    };
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
 
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -63,7 +72,7 @@ pub fn cvt_color(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: input.storage.buffer().as_entire_binding(),
+                resource: input.storage.as_any().downcast_ref::<GpuStorage<f32>>().unwrap().buffer().as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -86,15 +95,16 @@ pub fn cvt_color(
         });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        let x = (num_pixels as u32).div_ceil(4).div_ceil(64);
+        let x = (num_pixels as u32).div_ceil(64);
         pass.dispatch_workgroups(x, 1, 1);
     }
     ctx.submit(encoder);
 
-    Ok(Tensor {
-        storage: GpuStorage::from_buffer(Arc::new(output_buffer), out_len),
-        shape: TensorShape::new(out_channels, h, w),
+    let res_gpu = crate::GpuTensor {
+        storage: crate::storage::WgpuGpuStorage::from_buffer(Arc::new(output_buffer), out_len),
+        shape: cv_core::TensorShape::new(out_channels, h, w),
         dtype: input.dtype,
         _phantom: PhantomData,
-    })
+    };
+    Ok(res_gpu)
 }

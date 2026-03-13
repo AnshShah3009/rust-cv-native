@@ -7,28 +7,28 @@ edition = "2021"
 rayon = { workspace = true }
 nalgebra = { workspace = true }
 thiserror = { workspace = true }
-cv-hal = { path = "../hal" }
-cv-core = { path = "../core" }
+cv-hal = { workspace = true }
+cv-core = { workspace = true }
 core_affinity = { workspace = true }
 tokio = { workspace = true, features = ["sync", "macros", "rt-multi-thread", "time", "net"] }
-num_cpus = "1.16"
+num_cpus = { workspace = true }
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
-parking_lot = "0.12"
-dashmap = "6.0"
-memmap2 = "0.9"
-bincode = "1.3"
+parking_lot = { workspace = true }
+dashmap = { workspace = true }
+memmap2 = { workspace = true }
+bincode = { workspace = true }
 futures = { workspace = true }
-tracing = { version = "0.1", optional = true }
-libc = { version = "0.2", optional = true }
+tracing = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
 
 [features]
 default = []
 tracing = ["dep:tracing"]
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-libc = "0.2"
+libc = { workspace = true }
 
 [dev-dependencies]
-pollster = "0.3"
-tempfile = "3.10"
+pollster = { workspace = true }
+tempfile = { workspace = true }

@@ -1,8 +1,8 @@
 use crate::context::BorderMode;
 use crate::gpu::GpuContext;
-use crate::storage::GpuStorage;
+use crate::storage::WgpuGpuStorage;
 use crate::Result;
-use cv_core::Tensor;
+use cv_core::Float;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -18,16 +18,22 @@ struct ConvolveParams {
     border_const: f32,
 }
 
-pub fn convolve_2d(
+pub fn convolve_2d<T: Float + bytemuck::Pod + bytemuck::Zeroable + 'static>(
     ctx: &GpuContext,
-    input: &Tensor<f32, GpuStorage<f32>>,
-    kernel: &Tensor<f32, GpuStorage<f32>>,
-    border_mode: BorderMode,
-) -> Result<Tensor<f32, GpuStorage<f32>>> {
+    input: &crate::GpuTensor<T>,
+    kernel: &crate::GpuTensor<T>,
+    border_mode: BorderMode<T>,
+) -> Result<crate::GpuTensor<T>> {
+    // Only f32 WGSL shader available
+    if cv_core::DataType::from_type::<T>().ok() != Some(cv_core::DataType::F32) {
+        return Err(crate::Error::NotSupported(
+            "Convolve2D GPU kernel only supports f32".into(),
+        ));
+    }
+
     let (h, w) = input.shape.hw();
     let (kh, kw) = kernel.shape.hw();
 
-    // Create output buffer
     let output_size = input.shape.len();
     let output_byte_size = (output_size * std::mem::size_of::<f32>()) as u64;
     let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
@@ -37,9 +43,8 @@ pub fn convolve_2d(
         mapped_at_creation: false,
     });
 
-    // Prepare params
     let (mode_int, const_val) = match border_mode {
-        BorderMode::Constant(v) => (0, v),
+        BorderMode::Constant(v) => (0, v.to_f32()),
         BorderMode::Replicate => (1, 0.0),
         BorderMode::Reflect => (2, 0.0),
         BorderMode::Wrap => (3, 0.0),
@@ -104,8 +109,8 @@ pub fn convolve_2d(
     }
     ctx.submit(encoder);
 
-    Ok(Tensor {
-        storage: GpuStorage::from_buffer(Arc::new(output_buffer), output_size),
+    Ok(cv_core::Tensor {
+        storage: WgpuGpuStorage::from_buffer(Arc::new(output_buffer), output_size),
         shape: input.shape,
         dtype: input.dtype,
         _phantom: PhantomData,
@@ -123,14 +128,21 @@ struct SeparableParams {
     padding: u32,
 }
 
-pub fn gaussian_blur(
+pub fn gaussian_blur<T: Float + bytemuck::Pod + bytemuck::Zeroable + 'static>(
     ctx: &GpuContext,
-    input: &Tensor<f32, GpuStorage<f32>>,
-    sigma: f32,
+    input: &crate::GpuTensor<T>,
+    sigma: T,
     k_size: usize,
-) -> Result<Tensor<f32, GpuStorage<f32>>> {
+) -> Result<crate::GpuTensor<T>> {
+    // Only f32 WGSL shader available
+    if cv_core::DataType::from_type::<T>().ok() != Some(cv_core::DataType::F32) {
+        return Err(crate::Error::NotSupported(
+            "Gaussian Blur GPU kernel only supports f32".into(),
+        ));
+    }
+
     let (h, w) = input.shape.hw();
-    let kernel_1d = crate::cpu::gaussian_kernel_1d(sigma, k_size);
+    let kernel_1d = crate::cpu::gaussian_kernel_1d(sigma.to_f32(), k_size);
 
     let output_size = input.shape.len();
     let output_byte_size = (output_size * std::mem::size_of::<f32>()) as u64;
@@ -251,7 +263,6 @@ pub fn gaussian_blur(
         pass.set_bind_group(0, &h_bind_group, &[]);
         pass.dispatch_workgroups(wg_x, wg_y, 1);
     }
-    // Implicit barrier between passes in the same encoder
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("VPass"),
@@ -263,8 +274,8 @@ pub fn gaussian_blur(
     }
     ctx.submit(encoder);
 
-    Ok(Tensor {
-        storage: GpuStorage::from_buffer(Arc::new(output_buffer), output_size),
+    Ok(cv_core::Tensor {
+        storage: WgpuGpuStorage::from_buffer(Arc::new(output_buffer), output_size),
         shape: input.shape,
         dtype: input.dtype,
         _phantom: PhantomData,

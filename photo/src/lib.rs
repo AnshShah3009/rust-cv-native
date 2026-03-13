@@ -41,8 +41,11 @@ pub type PhotoResult<T> = cv_core::Result<T>;
 
 /// Edge-preserving bilateral filtering
 pub mod bilateral;
+/// Image inpainting (Telea FMM and Navier-Stokes diffusion)
+pub mod inpaint;
 /// Panoramic image stitching
 pub mod stitcher;
 
 pub use bilateral::*;
+pub use inpaint::{inpaint_ns, inpaint_telea};
 pub use stitcher::*;

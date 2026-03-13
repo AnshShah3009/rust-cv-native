@@ -1,7 +1,11 @@
 use crate::storage::{CpuStorage, Storage};
+use crate::float::Float;
 use std::default::Default;
 use std::fmt;
 use std::marker::PhantomData;
+
+#[cfg(feature = "half-precision")]
+use half;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataType {
@@ -11,6 +15,10 @@ pub enum DataType {
     I32,
     F32,
     F64,
+    #[cfg(feature = "half-precision")]
+    F16,
+    #[cfg(feature = "half-precision")]
+    BF16,
 }
 
 impl DataType {
@@ -20,6 +28,49 @@ impl DataType {
             DataType::U16 => 2,
             DataType::U32 | DataType::I32 | DataType::F32 => 4,
             DataType::F64 => 8,
+            #[cfg(feature = "half-precision")]
+            DataType::F16 | DataType::BF16 => 2,
+        }
+    }
+
+    pub fn is_float(&self) -> bool {
+        match self {
+            DataType::F32 | DataType::F64 => true,
+            #[cfg(feature = "half-precision")]
+            DataType::F16 | DataType::BF16 => true,
+            _ => false,
+        }
+    }
+
+    pub fn from_type<T: 'static>() -> crate::Result<DataType> {
+        use std::any::TypeId;
+        let t = TypeId::of::<T>();
+        if t == TypeId::of::<u8>() {
+            Ok(DataType::U8)
+        } else if t == TypeId::of::<u16>() {
+            Ok(DataType::U16)
+        } else if t == TypeId::of::<u32>() {
+            Ok(DataType::U32)
+        } else if t == TypeId::of::<i32>() {
+            Ok(DataType::I32)
+        } else if t == TypeId::of::<f32>() {
+            Ok(DataType::F32)
+        } else if t == TypeId::of::<f64>() {
+            Ok(DataType::F64)
+        } else {
+            #[cfg(feature = "half-precision")]
+            {
+                if t == TypeId::of::<half::f16>() {
+                    return Ok(DataType::F16);
+                }
+                if t == TypeId::of::<half::bf16>() {
+                    return Ok(DataType::BF16);
+                }
+            }
+            Err(crate::Error::InvalidInput(format!(
+                "Unsupported type: {}",
+                std::any::type_name::<T>()
+            )))
         }
     }
 }

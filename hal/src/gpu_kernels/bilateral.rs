@@ -1,13 +1,12 @@
 use crate::gpu::GpuContext;
-use crate::storage::GpuStorage;
 use crate::Result;
-use cv_core::Tensor;
+use cv_core::storage::Storage;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
+#[derive(Copy, Clone)]
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct BilateralParams {
     width: u32,
     height: u32,
@@ -16,13 +15,19 @@ struct BilateralParams {
     sigma_space_sq_inv: f32,
 }
 
-pub fn bilateral_filter(
+unsafe impl bytemuck::Pod for BilateralParams {}
+unsafe impl bytemuck::Zeroable for BilateralParams {}
+
+pub fn bilateral_filter<T: cv_core::float::Float + bytemuck::Pod + bytemuck::Zeroable>(
     ctx: &GpuContext,
-    input: &Tensor<u8, GpuStorage<u8>>,
+    input: &crate::GpuTensor<T>,
     d: i32,
-    sigma_color: f32,
-    sigma_space: f32,
-) -> Result<Tensor<u8, GpuStorage<u8>>> {
+    sigma_color: T,
+    sigma_space: T,
+) -> Result<crate::GpuTensor<T>> {
+    use crate::storage::GpuStorage;
+    let sigma_color_f = sigma_color.to_f32();
+    let sigma_space_f = sigma_space.to_f32();
     let (h, w) = input.shape.hw();
     let c = input.shape.channels;
 
@@ -32,8 +37,8 @@ pub fn bilateral_filter(
         ));
     }
 
-    let out_len = w * h;
-    let byte_size = (out_len.div_ceil(4) * 4) as u64;
+    let out_len = h * w * c;
+    let byte_size = (out_len * std::mem::size_of::<T>()) as u64;
     let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Bilateral Output"),
         size: byte_size,
@@ -42,7 +47,7 @@ pub fn bilateral_filter(
     });
 
     let radius = if d <= 0 {
-        (sigma_space * 1.5).ceil() as i32
+        (sigma_space_f * 1.5).ceil() as i32
     } else {
         d / 2
     };
@@ -50,8 +55,8 @@ pub fn bilateral_filter(
         width: w as u32,
         height: h as u32,
         radius,
-        sigma_color_sq_inv: -0.5 / (sigma_color * sigma_color),
-        sigma_space_sq_inv: -0.5 / (sigma_space * sigma_space),
+        sigma_color_sq_inv: -0.5 / (sigma_color_f * sigma_color_f),
+        sigma_space_sq_inv: -0.5 / (sigma_space_f * sigma_space_f),
     };
 
     let params_buffer = ctx
@@ -62,7 +67,15 @@ pub fn bilateral_filter(
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
-    let shader_source = include_str!("../../shaders/bilateral.wgsl");
+    let shader_source = match cv_core::DataType::from_type::<T>() {
+        #[cfg(feature = "half-precision")]
+        Ok(cv_core::DataType::F16) => include_str!("../../shaders/bilateral_f16.wgsl"),
+        #[cfg(feature = "half-precision")]
+        Ok(cv_core::DataType::BF16) => include_str!("../../shaders/bilateral_bf16.wgsl"),
+        _ => {
+            include_str!("../../shaders/bilateral_f32.wgsl")
+        }
+    };
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
 
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -71,7 +84,7 @@ pub fn bilateral_filter(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: input.storage.buffer().as_entire_binding(),
+                resource: input.storage.as_any().downcast_ref::<GpuStorage<f32>>().unwrap().buffer().as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -94,16 +107,17 @@ pub fn bilateral_filter(
         });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        let x = (w as u32).div_ceil(4).div_ceil(16);
+        let x = (w as u32).div_ceil(16);
         let y = (h as u32).div_ceil(16);
         pass.dispatch_workgroups(x, y, 1);
     }
     ctx.submit(encoder);
 
-    Ok(Tensor {
-        storage: GpuStorage::from_buffer(Arc::new(output_buffer), out_len),
+    let res_gpu = crate::GpuTensor {
+        storage: crate::storage::WgpuGpuStorage::from_buffer(Arc::new(output_buffer), out_len),
         shape: input.shape,
         dtype: input.dtype,
         _phantom: PhantomData,
-    })
+    };
+    Ok(res_gpu)
 }

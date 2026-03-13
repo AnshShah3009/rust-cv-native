@@ -19,11 +19,11 @@ struct WarpParams {
 
 pub fn warp(
     ctx: &GpuContext,
-    input: &Tensor<u8, GpuStorage<u8>>,
+    input: &Tensor<f32, GpuStorage<f32>>,
     matrix: &[[f32; 3]; 3],
     new_shape: (usize, usize),
     typ: WarpType,
-) -> Result<Tensor<u8, GpuStorage<u8>>> {
+) -> Result<Tensor<f32, GpuStorage<f32>>> {
     let (src_h, src_w) = input.shape.hw();
     let (dst_w, dst_h) = new_shape;
     let c = input.shape.channels;
@@ -35,7 +35,7 @@ pub fn warp(
     }
 
     let out_len = dst_w * dst_h;
-    let byte_size = (out_len.div_ceil(4) * 4) as u64;
+    let byte_size = (out_len * 4) as u64;
     let usages =
         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
     let output_buffer = ctx.get_buffer(byte_size, usages);

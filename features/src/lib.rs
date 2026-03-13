@@ -31,6 +31,8 @@
 //! let matches = matcher.match_descriptors(&descriptors, &descriptors);
 //! ```
 
+/// ArUco marker detection, generation, and pose estimation (tensor-based API)
+pub mod aruco;
 /// AKAZE (Accelerated-KAZE) feature detector and descriptor
 pub mod akaze;
 /// BRIEF (Binary Robust Independent Elementary Features) descriptor

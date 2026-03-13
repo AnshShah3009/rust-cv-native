@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-cv-core = { path = "../core" }
-cv-imgproc = { path = "../imgproc" }
+cv-core = { workspace = true }
+cv-imgproc = { workspace = true }
 image = { workspace = true }
 rayon = { workspace = true }
+
+[features]
+default = []

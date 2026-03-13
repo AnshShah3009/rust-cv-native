@@ -1,8 +1,8 @@
 use crate::context::StereoMatchParams;
 use crate::gpu::GpuContext;
-use crate::storage::GpuStorage;
+use crate::storage::WgpuGpuStorage;
 use crate::Result;
-use cv_core::Tensor;
+use cv_core::Float;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -18,15 +18,22 @@ struct StereoGpuParams {
     method: u32,
 }
 
-pub fn stereo_match(
+pub fn stereo_match<T: Float + bytemuck::Pod + bytemuck::Zeroable + 'static>(
     ctx: &GpuContext,
-    left: &Tensor<u8, GpuStorage<u8>>,
-    right: &Tensor<u8, GpuStorage<u8>>,
+    left: &crate::GpuTensor<T>,
+    right: &crate::GpuTensor<T>,
     params: &StereoMatchParams,
-) -> Result<Tensor<f32, GpuStorage<f32>>> {
+) -> Result<crate::GpuTensor<T>> {
+    // Only f32 WGSL shader available
+    if cv_core::DataType::from_type::<T>().ok() != Some(cv_core::DataType::F32) {
+        return Err(crate::Error::NotSupported(
+            "Stereo Match GPU kernel only supports f32".into(),
+        ));
+    }
+
     let (h, w) = left.shape.hw();
     let out_len = w * h;
-    let byte_size = (out_len * 4) as u64;
+    let byte_size = (out_len * std::mem::size_of::<f32>()) as u64;
     let usages = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
     let output_buffer = ctx.get_buffer(byte_size, usages);
 
@@ -94,10 +101,10 @@ pub fn stereo_match(
     }
     ctx.submit(encoder);
 
-    Ok(Tensor {
-        storage: GpuStorage::from_buffer(Arc::new(output_buffer), out_len),
+    Ok(cv_core::Tensor {
+        storage: WgpuGpuStorage::from_buffer(Arc::new(output_buffer), out_len),
         shape: left.shape,
-        dtype: cv_core::DataType::F32,
+        dtype: left.dtype,
         _phantom: PhantomData,
     })
 }

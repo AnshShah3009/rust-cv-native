@@ -1,7 +1,8 @@
 use crate::gpu::GpuContext;
-use crate::storage::GpuStorage;
+use crate::GpuTensor;
 use crate::Result;
-use cv_core::{Tensor, TensorShape};
+use cv_core::storage::Storage;
+use cv_core::TensorShape;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -16,13 +17,15 @@ struct ResizeParams {
     channels: u32,
 }
 
-pub fn resize(
+pub fn resize<T: cv_core::float::Float + bytemuck::Pod>(
     ctx: &GpuContext,
-    input: &Tensor<u8, GpuStorage<u8>>,
-    new_shape: (usize, usize),
-) -> Result<Tensor<u8, GpuStorage<u8>>> {
+    input: &GpuTensor<T>,
+    new_width: u32,
+    new_height: u32,
+) -> Result<GpuTensor<T>> {
+    use crate::storage::GpuStorage;
     let (src_h, src_w) = input.shape.hw();
-    let (dst_w, dst_h) = new_shape;
+    let (dst_w, dst_h) = (new_width as usize, new_height as usize);
     let c = input.shape.channels;
 
     if c != 1 {
@@ -31,10 +34,12 @@ pub fn resize(
         ));
     }
 
-    let out_len = dst_w * dst_h * c;
-    let byte_size = (out_len.div_ceil(4) * 4) as u64;
+    let _out_shape = TensorShape::new(c, new_height as usize, new_width as usize);
+    let out_len = (new_width * new_height) as usize * c;
+    let byte_size = (out_len * std::mem::size_of::<T>()) as u64;
+
     let output_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Resize Output"),
+        label: Some("Resize Output Buffer"),
         size: byte_size,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
@@ -56,7 +61,13 @@ pub fn resize(
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
-    let shader_source = include_str!("../../shaders/resize.wgsl");
+    let shader_source = match cv_core::DataType::from_type::<T>() {
+        Ok(cv_core::DataType::F32) => include_str!("../../shaders/resize_f32.wgsl"),
+        Ok(_) => return Err(crate::Error::NotSupported("Unsupported resize precision type".into())),
+        _ => {
+            include_str!("../../shaders/resize_f32.wgsl")
+        }
+    };
     let pipeline = ctx.create_compute_pipeline(shader_source, "main");
 
     let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -65,7 +76,7 @@ pub fn resize(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: input.storage.buffer().as_entire_binding(),
+                resource: input.storage.as_any().downcast_ref::<GpuStorage<f32>>().unwrap().buffer().as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -88,16 +99,17 @@ pub fn resize(
         });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        let x = (dst_w as u32).div_ceil(4).div_ceil(16);
+        let x = (dst_w as u32).div_ceil(16);
         let y = (dst_h as u32).div_ceil(16);
         pass.dispatch_workgroups(x, y, 1);
     }
     ctx.submit(encoder);
 
-    Ok(Tensor {
-        storage: GpuStorage::from_buffer(Arc::new(output_buffer), out_len),
-        shape: TensorShape::new(c, dst_h, dst_w),
+    let res_gpu = crate::GpuTensor {
+        storage: crate::storage::WgpuGpuStorage::from_buffer(Arc::new(output_buffer), out_len),
+        shape: cv_core::TensorShape::new(c, dst_h, dst_w),
         dtype: input.dtype,
         _phantom: PhantomData,
-    })
+    };
+    Ok(res_gpu)
 }
