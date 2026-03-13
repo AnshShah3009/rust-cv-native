@@ -3,8 +3,6 @@
 //! RANSAC-based global registration that doesn't require initial alignment.
 //! Uses FPFH (Fast Point Feature Histograms) for feature matching.
 
-#![allow(deprecated)]
-
 use cv_core::point_cloud::PointCloud;
 use cv_core::{Error, Result};
 use nalgebra::{Matrix4, Point3, Vector3};

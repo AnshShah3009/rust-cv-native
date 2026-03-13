@@ -25,20 +25,6 @@ pub use gpu::*;
 
 pub use cv_core::{Error, Result};
 
-/// Backward compatibility alias for deprecated custom error type
-#[deprecated(
-    since = "0.1.0",
-    note = "Use cv_core::Error instead. This type exists only for backward compatibility."
-)]
-pub type StereoError = cv_core::Error;
-
-/// Deprecated Result type alias - use cv_core::Result instead
-#[deprecated(
-    since = "0.1.0",
-    note = "Use cv_core::Result instead. This type alias exists only for backward compatibility."
-)]
-pub type StereoResult<T> = cv_core::Result<T>;
-
 use cv_runtime::orchestrator::RuntimeRunner;
 
 /// Stereo matching algorithm trait

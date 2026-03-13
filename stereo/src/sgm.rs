@@ -1,5 +1,3 @@
-#![allow(deprecated)]
-
 use crate::{DisparityMap, Result, StereoMatcher, StereoMatcherCtx};
 use cv_core::{storage::Storage, Error, Tensor};
 use cv_hal::compute::ComputeDevice;

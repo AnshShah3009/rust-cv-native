@@ -34,8 +34,7 @@ pub use resize::*;
 pub use template_matching::*;
 pub use threshold::*;
 
-pub type ImgprocError = cv_core::Error;
-pub type Result<T> = cv_core::Result<T>;
+pub use cv_core::Result;
 
 pub fn validate_image_size(width: u32, height: u32) -> Result<()> {
     if width == 0 || height == 0 {

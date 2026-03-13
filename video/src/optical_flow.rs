@@ -5,8 +5,6 @@
 //! - Farneback: Dense optical flow using polynomial expansion
 //! - Horn-Schunck: Global smoothness constraint
 
-#![allow(deprecated)]
-
 use crate::{MotionField, Result};
 use cv_core::{Error, KeyPoint};
 use image::GrayImage;

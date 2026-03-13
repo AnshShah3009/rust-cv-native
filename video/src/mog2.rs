@@ -3,8 +3,6 @@
 //! Robust background/foreground segmentation algorithm that models each pixel
 //! as a mixture of multiple Gaussian distributions.
 
-#![allow(deprecated)]
-
 use crate::Result;
 use cv_core::{storage::CpuStorage, storage::Storage, CpuTensor, Error, Tensor, TensorShape};
 use cv_hal::compute::ComputeDevice;

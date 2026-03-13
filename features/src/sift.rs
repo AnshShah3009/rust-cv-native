@@ -1,5 +1,3 @@
-#![allow(deprecated)]
-
 use cv_core::{storage::Storage, Descriptors, Error, KeyPoint, KeyPoints, Tensor};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::context::ComputeContext;

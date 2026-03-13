@@ -3,8 +3,6 @@
 //! AKAZE is a fast multi-scale feature detector and descriptor that uses
 //! non-linear diffusion scale-space.
 
-#![allow(deprecated)]
-
 use crate::descriptor::{Descriptor, Descriptors};
 use crate::Result;
 use cv_core::{storage::Storage, CpuTensor, Error, KeyPoint, KeyPoints, Tensor};

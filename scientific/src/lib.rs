@@ -55,8 +55,7 @@ pub mod spatial;
 pub mod special;
 pub mod stats;
 
-pub type Error = cv_core::Error;
-pub type Result<T> = cv_core::Result<T>;
+pub use cv_core::{Error, Result};
 
 pub use geometry::*;
 pub use integrate::*;

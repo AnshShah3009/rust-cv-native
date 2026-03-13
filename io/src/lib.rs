@@ -20,17 +20,3 @@ pub use stl::{read_stl, write_stl, write_stl_ascii, write_stl_binary};
 pub use mesh::TriangleMesh;
 
 pub use cv_core::{Error, Result};
-
-/// Backward compatibility alias for deprecated custom error type
-#[deprecated(
-    since = "0.1.0",
-    note = "Use cv_core::Error instead. This type exists only for backward compatibility."
-)]
-pub type IoError = cv_core::Error;
-
-/// Deprecated Result type alias - use cv_core::Result instead
-#[deprecated(
-    since = "0.1.0",
-    note = "Use cv_core::Result instead. This type alias exists only for backward compatibility."
-)]
-pub type IoResult<T> = cv_core::Result<T>;

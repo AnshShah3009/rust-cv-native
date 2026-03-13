@@ -6,18 +6,9 @@
 //! - Global Registration (RANSAC, FGR)
 //! - GNC (Graduated Non-Convexity) robust registration
 
-#![allow(deprecated)]
-
 pub mod colored;
 pub mod global;
 pub mod gnc;
-
-/// Deprecated Result type alias - use cv_core::Result instead
-#[deprecated(
-    since = "0.1.0",
-    note = "Use cv_core::Result instead. This type alias exists only for backward compatibility."
-)]
-pub type RegistrationResult<T> = cv_core::Result<T>;
 
 pub use colored::{registration_colored_icp, ColoredICPResult};
 pub use cv_core::{Error, Result, RobustLoss};

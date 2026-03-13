@@ -1,5 +1,3 @@
-#![allow(deprecated)]
-
 use crate::Result;
 use cv_core::Error;
 use image::{GrayImage, Luma};

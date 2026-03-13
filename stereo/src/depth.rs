@@ -2,8 +2,6 @@
 //!
 //! Convert disparity values to 3D depth and point clouds.
 
-#![allow(deprecated)]
-
 use crate::{DisparityMap, StereoParams};
 use cv_core::{project_point, CameraIntrinsics, PointCloudf64 as PointCloud};
 use nalgebra::{Point2, Point3};

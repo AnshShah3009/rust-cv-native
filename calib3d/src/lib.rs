@@ -1,5 +1,4 @@
-pub type CalibError = cv_core::Error;
-pub type Result<T> = cv_core::Result<T>;
+pub use cv_core::{Error, Result};
 
 // Module declarations
 pub mod distortion;

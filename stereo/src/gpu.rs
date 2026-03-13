@@ -2,8 +2,6 @@
 //!
 //! Provides GPU implementations of stereo matching algorithms using wgpu.
 
-#![allow(deprecated)]
-
 use crate::{DisparityMap, Result, StereoError};
 use cv_core::Error;
 use cv_hal::gpu::GpuContext;

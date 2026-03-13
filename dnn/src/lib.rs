@@ -36,20 +36,6 @@ use tract_onnx::prelude::*;
 
 pub use cv_core::{Error, Result};
 
-/// Backward compatibility alias for deprecated custom error type
-#[deprecated(
-    since = "0.1.0",
-    note = "Use cv_core::Error instead. This type exists only for backward compatibility."
-)]
-pub type DnnError = cv_core::Error;
-
-/// Deprecated Result type alias - use cv_core::Result instead
-#[deprecated(
-    since = "0.1.0",
-    note = "Use cv_core::Result instead. This type alias exists only for backward compatibility."
-)]
-pub type DnnResult<T> = cv_core::Result<T>;
-
 type RunnableModel = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
 
 /// Neural network model for inference

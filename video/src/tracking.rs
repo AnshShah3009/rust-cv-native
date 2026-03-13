@@ -11,8 +11,6 @@
 //! The KCF and MOSSE trackers operate on [`CpuTensor`] frames via the [`ObjectTracker`] trait,
 //! while the legacy [`Tracker`] trait operates on [`GrayImage`] frames.
 
-#![allow(deprecated)]
-
 use crate::Result;
 use cv_core::{CpuTensor, Error, Float};
 use image::GrayImage;

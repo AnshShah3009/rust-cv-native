@@ -8,8 +8,6 @@
 //! The CPU candidate finder still runs on the host; only the grid sampling
 //! and bit decoding runs on the GPU.
 
-#![allow(deprecated)]
-
 use crate::Result;
 use bytemuck::{Pod, Zeroable};
 use cv_core::Error;

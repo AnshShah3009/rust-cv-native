@@ -3,8 +3,6 @@
 //! ORB combines the FAST keypoint detector with a modified BRIEF descriptor
 //! that includes orientation information for rotation invariance.
 
-#![allow(deprecated)]
-
 use crate::descriptor::{Descriptor, DescriptorExtractor, Descriptors};
 use crate::fast::fast_detect;
 use cv_core::{storage::Storage, Error, KeyPoint, KeyPoints, Tensor};
