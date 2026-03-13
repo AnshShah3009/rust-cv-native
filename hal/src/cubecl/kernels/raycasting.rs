@@ -36,6 +36,7 @@ use crate::cubecl::WgpuClient;
 // closest hit. Writes hit distance, hit point, and face normal to output
 // arrays.
 
+#[allow(clippy::manual_range_contains)]
 #[cube(launch)]
 fn moller_trumbore_kernel(
     origins: &Array<f32>,

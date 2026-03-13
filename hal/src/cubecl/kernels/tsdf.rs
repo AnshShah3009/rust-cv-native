@@ -115,6 +115,7 @@ fn tsdf_integrate_kernel(
 }
 
 /// Integrate a depth frame into the TSDF voxel grid.
+#[allow(clippy::too_many_arguments)]
 pub fn tsdf_integrate(
     client: &WgpuClient,
     voxels: &mut Vec<f32>,
@@ -276,6 +277,7 @@ fn tsdf_raycast_kernel(
 
 /// Raycast TSDF volume.
 /// Returns `Vec<f32>` of length `4 * img_w * img_h`: `[depth, nx, ny, nz]` per pixel.
+#[allow(clippy::too_many_arguments)]
 pub fn tsdf_raycast(
     client: &WgpuClient,
     voxels: &[f32],

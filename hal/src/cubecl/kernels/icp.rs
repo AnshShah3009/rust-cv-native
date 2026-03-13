@@ -232,6 +232,7 @@ fn dense_icp_jacobians_kernel(
 ///
 /// Jacobians computed on GPU; accumulation done on CPU (Tier 2 approach).
 /// For a fully GPU-accelerated path, use a parallel reduction in Tier 3.
+#[allow(clippy::too_many_arguments)]
 pub fn dense_icp_step(
     client: &WgpuClient,
     depth_prev: &[f32],

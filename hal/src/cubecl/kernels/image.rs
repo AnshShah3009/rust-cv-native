@@ -460,6 +460,7 @@ fn warp_affine_kernel(
 }
 
 /// Apply a 2×3 inverse affine warp (any channel count). Returns `Vec<u8>`.
+#[allow(clippy::too_many_arguments)]
 pub fn warp_affine(
     client: &WgpuClient,
     src: &[u8],
@@ -558,6 +559,7 @@ fn template_match_ssd_kernel(
 }
 
 /// Compute SSD template match scores for every valid position.
+#[allow(clippy::too_many_arguments)]
 pub fn template_match_ssd(
     client: &WgpuClient,
     image: &[u8],

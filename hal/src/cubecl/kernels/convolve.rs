@@ -176,6 +176,7 @@ fn convolve_tiled_kernel(
 ///
 /// Uses tiled `SharedMemory` for small kernels (kw,kh ≤ 15); falls back to
 /// the non-tiled path for larger kernels.
+#[allow(clippy::too_many_arguments)]
 pub fn convolve(
     client: &WgpuClient,
     image: &[f32],
