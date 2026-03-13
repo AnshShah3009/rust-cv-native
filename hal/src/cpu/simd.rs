@@ -54,6 +54,7 @@ pub fn rgb_to_gray_simd(rgb: &[u8], gray: &mut [u8]) {
 /// * `dst`: Destination row data
 /// * `kernel`: Convolution kernel
 /// * `radius`: Kernel radius (kernel size = 2 * radius + 1)
+#[allow(clippy::needless_range_loop)]
 pub fn convolve_row_1d(src: &[f32], dst: &mut [f32], kernel: &[f32], radius: usize) {
     let width = dst.len();
     let k_len = kernel.len();

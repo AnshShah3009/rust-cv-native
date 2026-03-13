@@ -72,6 +72,7 @@ pub fn sobel_ex(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn sobel_ex_ctx(
     src: &GrayImage,
     dx: i32,

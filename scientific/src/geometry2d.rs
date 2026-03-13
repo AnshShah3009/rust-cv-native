@@ -693,6 +693,7 @@ pub fn simplify(coords: &[Point2D], tolerance: f64) -> Vec<Point2D> {
     dp_simplify(coords, tolerance)
 }
 
+#[allow(clippy::needless_range_loop)]
 fn dp_simplify(coords: &[Point2D], tolerance: f64) -> Vec<Point2D> {
     let n = coords.len();
     if n <= 2 {

@@ -198,6 +198,7 @@ impl SfMState {
         DMatrix::from_vec(n_res, n_params, jacobian_data)
     }
 
+    #[allow(clippy::needless_range_loop)]
     pub fn numerical_jacobian_ctx(&self, group: &ResourceGroup) -> DMatrix<f64> {
         let params = self.to_parameters();
         let n_res = self.residuals().len();

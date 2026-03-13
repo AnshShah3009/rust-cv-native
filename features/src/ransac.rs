@@ -427,6 +427,12 @@ pub struct RansacMatcher {
     use_fundamental: bool,
 }
 
+impl Default for RansacMatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RansacMatcher {
     /// Create a new `RansacMatcher` using the default config and homography estimation.
     pub fn new() -> Self {

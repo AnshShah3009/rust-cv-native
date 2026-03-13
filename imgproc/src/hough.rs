@@ -268,6 +268,7 @@ fn hough_lines_gpu(
 }
 
 /// Progressive Probabilistic Hough Transform for line segment detection
+#[allow(clippy::needless_range_loop)]
 pub fn hough_lines_p(
     src: &GrayImage,
     rho_res: f32,

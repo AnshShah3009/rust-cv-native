@@ -20,11 +20,11 @@
 //!
 //! ## Plot Types
 //!
-//! - [`PlotType::Line`]: Line plot
-//! - [`PlotType::Scatter`]: Scatter plot
-//! - [`PlotType::Bar`]: Bar chart
-//! - [`PlotType::Histogram`]: Histogram
-//! - [`PlotType::Heatmap`]: 2D heatmap
+//! - [`PlotType::Line`] -- Line plot
+//! - [`PlotType::Scatter`] -- Scatter plot
+//! - [`PlotType::Bar`] -- Bar chart
+//! - [`PlotType::Histogram`] -- Histogram
+//! - `PlotType::Heatmap` -- 2D heatmap
 
 pub mod chart;
 pub mod export;

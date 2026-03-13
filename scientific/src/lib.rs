@@ -30,13 +30,13 @@
 //!
 //! ## Statistical Functions
 //!
-//! - [`mean`]: Arithmetic mean
-//! - [`std`]: Standard deviation
-//! - [`lerp`]: Linear interpolation
-//! - [`Interp1d`]: 1D linear interpolation
-//! - [`fft`]: FFT (1D/2D forward, inverse, real-valued, PSD)
-//! - [`interpolate`]: Interpolation (linear, cubic spline, Akima, 2D bilinear)
-//! - [`stats`]: Statistics (descriptive, correlation, t-tests, distributions, regression)
+//! - [`mean`] -- Arithmetic mean
+//! - [`std`] -- Standard deviation
+//! - [`lerp`] -- Linear interpolation
+//! - [`Interp1d`] -- 1D linear interpolation
+//! - `fft` -- FFT (1D/2D forward, inverse, real-valued, PSD)
+//! - `interpolate` -- Interpolation (linear, cubic spline, Akima, 2D bilinear)
+//! - `stats` -- Statistics (descriptive, correlation, t-tests, distributions, regression)
 
 pub mod fft;
 pub mod geometry;

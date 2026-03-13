@@ -79,9 +79,8 @@ pub fn read_ply_gaussian_cloud<P: AsRef<Path>>(path: P) -> Result<GaussianCloud,
             let mut sh = SphericalHarmonics::from_dc(dc);
 
             if values.len() > 17 {
-                for i in 0..(values.len() - 17).min(sh.coeffs.len()) {
-                    sh.coeffs[i + 3] = values[17 + i];
-                }
+                let copy_len = (values.len() - 17).min(sh.coeffs.len());
+                sh.coeffs[3..3 + copy_len].copy_from_slice(&values[17..17 + copy_len]);
             }
 
             let rotation = Vector4::new(rot_dc_a, rot_dc_b, rot_dc_c, rot_dc_d);

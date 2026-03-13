@@ -168,7 +168,7 @@ impl PySlam {
         let (pose, tracked) = self
             .inner
             .process_image(&gray)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
         let mat = pose.matrix();
         let flat_mat: Vec<f32> = mat.iter().map(|&v| v as f32).collect();
@@ -180,11 +180,13 @@ impl PySlam {
 // ============== Feature Detection Bindings ==============
 
 #[pyclass]
+#[allow(clippy::new_without_default)]
 pub struct PyKeyPoints {
     keypoints: Vec<KeyPoint>,
 }
 
 #[pymethods]
+#[allow(clippy::new_without_default)]
 impl PyKeyPoints {
     #[new]
     pub fn new() -> Self {
@@ -309,13 +311,13 @@ impl PyIsam2 {
     pub fn update(&self) -> PyResult<()> {
         self.inner
             .update()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
     pub fn optimize(&self) -> PyResult<()> {
         self.inner
             .optimize()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
     }
 
     pub fn get_pose(&self, id: usize) -> Option<(f64, f64, f64)> {
@@ -450,12 +452,14 @@ impl PyPointCloud {
 }
 
 #[pyclass]
+#[allow(clippy::new_without_default)]
 pub struct PyTriangleMesh {
     vertices: Vec<Point3<f32>>,
     faces: Vec<[usize; 3]>,
 }
 
 #[pymethods]
+#[allow(clippy::new_without_default)]
 impl PyTriangleMesh {
     #[new]
     pub fn new() -> Self {
@@ -830,6 +834,7 @@ fn estimate_normals_approx_cross_np<'py>(
 /// Returns:
 ///     (H*W, 3) float32 ndarray.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 fn estimate_normals_from_depth_np<'py>(
     py: Python<'py>,
     depth: PyReadonlyArray1<f32>,
@@ -931,7 +936,7 @@ impl PyFactorGraph {
         let result = self
             .inner
             .optimize_gn(&values, &config)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
         Ok(values_to_hashmap(&result))
     }
 
@@ -957,7 +962,7 @@ impl PyFactorGraph {
         let result = self
             .inner
             .optimize_lm(&values, &config)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
         Ok(values_to_hashmap(&result))
     }
 
@@ -1026,7 +1031,7 @@ fn hidden_point_removal(
     let vp = nalgebra::Point3::new(viewpoint.0, viewpoint.1, viewpoint.2);
 
     let result = cv_point_cloud::hidden_point_removal::hidden_point_removal(&pts, &vp, radius)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+        .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
     Ok(result.visible_indices)
 }
@@ -1190,7 +1195,7 @@ fn minimize_nelder_mead(
 #[pyfunction]
 fn linear_regression(x: Vec<f64>, y: Vec<f64>) -> PyResult<(f64, f64, f64)> {
     let result = cv_scientific::stats::linregress(&x, &y)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e))?;
+        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
     Ok((result.slope, result.intercept, result.r_squared))
 }
 

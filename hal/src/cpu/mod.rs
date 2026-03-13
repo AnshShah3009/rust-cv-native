@@ -35,6 +35,7 @@ impl CpuBackend {
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn gaussian_kernel_1d<T: Float>(sigma: T, size: usize) -> Vec<T> {
     let mut kernel = vec![T::ZERO; size];
     let radius = size / 2;
@@ -83,6 +84,7 @@ impl ComputeBackend for CpuBackend {
 }
 
 impl CpuBackend {
+    #[allow(clippy::needless_range_loop)]
     fn convolve_separable<T: Float + bytemuck::Pod + std::fmt::Debug>(
         &self,
         src: &[T],
@@ -162,6 +164,7 @@ impl ComputeContext for CpuBackend {
         crate::SubmissionIndex(0)
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn convolve_2d<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
         input: &Tensor<T, S>,
@@ -808,6 +811,7 @@ impl ComputeContext for CpuBackend {
         ))
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn stereo_match<
         T: Float + 'static,
         S: Storage<T> + 'static,
@@ -1080,6 +1084,7 @@ impl ComputeContext for CpuBackend {
         })
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn morphology<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
         &self,
         input: &Tensor<u8, S>,
@@ -1191,6 +1196,7 @@ impl ComputeContext for CpuBackend {
         Ok(result)
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn warp<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
         input: &Tensor<T, S>,
@@ -1315,6 +1321,7 @@ impl ComputeContext for CpuBackend {
         })
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn nms_boxes<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
         input: &Tensor<T, S>,
@@ -1381,6 +1388,7 @@ impl ComputeContext for CpuBackend {
         Ok(kept)
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn nms_rotated_boxes<
         T: Float + 'static,
         S: Storage<T> + cv_core::StorageFactory<T> + 'static,
@@ -1450,6 +1458,7 @@ impl ComputeContext for CpuBackend {
         Ok(kept)
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn nms_polygons<T: Float + 'static>(
         &self,
         polygons: &[cv_core::Polygon],
@@ -2175,6 +2184,7 @@ impl ComputeContext for CpuBackend {
         Ok((jtj, jtr_out))
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn cvt_color<T: Float + 'static, S: Storage<T> + cv_core::StorageFactory<T> + 'static>(
         &self,
         input: &Tensor<T, S>,
@@ -2496,6 +2506,7 @@ impl ComputeContext for CpuBackend {
         })
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn gaussian_blur<
         T: Float + bytemuck::Pod + 'static,
         S: Storage<T> + cv_core::StorageFactory<T> + 'static,
@@ -3418,6 +3429,7 @@ fn get_val_cpu<T: Float>(src: &[T], w: usize, h: usize, x: i32, y: i32) -> T {
     src[cy * w + cx]
 }
 
+#[allow(clippy::needless_range_loop)]
 fn has_9_contiguous_generic<T: Float>(vals: &[T; 16], high: T, low: T) -> bool {
     let mut b_mask = 0u32;
     let mut d_mask = 0u32;

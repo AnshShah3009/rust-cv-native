@@ -371,21 +371,21 @@ impl<T: Float> Matrix3x3<T> for Matrix3Wrapper<T> {
 
     fn mul_vector(&self, v: &[T; 3]) -> [T; 3] {
         let mut res = [T::ZERO; 3];
-        for i in 0..3 {
-            res[i] = self.data[i][0] * v[0] + self.data[i][1] * v[1] + self.data[i][2] * v[2];
+        for (i, res_i) in res.iter_mut().enumerate() {
+            *res_i = self.data[i][0] * v[0] + self.data[i][1] * v[1] + self.data[i][2] * v[2];
         }
         res
     }
 
     fn mul_matrix(&self, other: &Self) -> Self {
         let mut res = [[T::ZERO; 3]; 3];
-        for i in 0..3 {
-            for j in 0..3 {
+        for (i, res_row) in res.iter_mut().enumerate() {
+            for (j, res_ij) in res_row.iter_mut().enumerate() {
                 let mut sum = T::ZERO;
                 for k in 0..3 {
                     sum += self.data[i][k] * other.data[k][j];
                 }
-                res[i][j] = sum;
+                *res_ij = sum;
             }
         }
         Self { data: res }
@@ -485,8 +485,8 @@ impl<T: Float> Matrix4x4<T> for Matrix4Wrapper<T> {
 
     fn mul_vector(&self, v: &[T; 4]) -> [T; 4] {
         let mut res = [T::ZERO; 4];
-        for i in 0..4 {
-            res[i] = self.data[i][0] * v[0]
+        for (i, res_i) in res.iter_mut().enumerate() {
+            *res_i = self.data[i][0] * v[0]
                 + self.data[i][1] * v[1]
                 + self.data[i][2] * v[2]
                 + self.data[i][3] * v[3];
@@ -496,13 +496,13 @@ impl<T: Float> Matrix4x4<T> for Matrix4Wrapper<T> {
 
     fn mul_matrix(&self, other: &Self) -> Self {
         let mut res = [[T::ZERO; 4]; 4];
-        for i in 0..4 {
-            for j in 0..4 {
+        for (i, res_row) in res.iter_mut().enumerate() {
+            for (j, res_ij) in res_row.iter_mut().enumerate() {
                 let mut sum = T::ZERO;
                 for k in 0..4 {
                     sum += self.data[i][k] * other.data[k][j];
                 }
-                res[i][j] = sum;
+                *res_ij = sum;
             }
         }
         Self { data: res }

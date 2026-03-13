@@ -45,6 +45,7 @@ pub struct ColoredICPResult {
 }
 
 /// Colored ICP registration
+#[allow(clippy::needless_range_loop)]
 pub fn registration_colored_icp(
     source: &PointCloud,
     target: &PointCloud,

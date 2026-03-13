@@ -26,6 +26,7 @@ pub enum OdometryMethod {
 }
 
 /// Compute RGBD odometry between two frames using best available runner
+#[allow(clippy::too_many_arguments)]
 pub fn compute_rgbd_odometry(
     source_depth: &[f32],
     target_depth: &[f32],
@@ -51,6 +52,7 @@ pub fn compute_rgbd_odometry(
 }
 
 /// Compute RGBD odometry between two frames with explicit context
+#[allow(clippy::too_many_arguments)]
 pub fn compute_rgbd_odometry_ctx(
     source_depth: &[f32],
     target_depth: &[f32],
@@ -283,6 +285,7 @@ fn compute_point_to_plane_ctx(
 }
 
 /// Intensity-based odometry (uses color)
+#[allow(clippy::too_many_arguments)]
 fn compute_intensity(
     _source_depth: &[f32],
     _target_depth: &[f32],
@@ -298,6 +301,7 @@ fn compute_intensity(
 }
 
 /// Hybrid odometry (combines depth and intensity)
+#[allow(clippy::too_many_arguments)]
 fn compute_hybrid(
     _source_depth: &[f32],
     _target_depth: &[f32],
@@ -317,6 +321,7 @@ fn compute_hybrid(
 }
 
 /// Downsample depth image
+#[allow(clippy::needless_range_loop)]
 fn downsample_depth(input: &[f32], width: usize, height: usize, scale: f32) -> Vec<f32> {
     let new_width = (width as f32 * scale) as usize;
     let new_height = (height as f32 * scale) as usize;

@@ -454,6 +454,7 @@ pub fn welch(
 ///
 /// Returns `(times, frequencies, complex_spectrogram)` where each element
 /// of the spectrogram is `(real, imag)`.
+#[allow(clippy::type_complexity)]
 pub fn stft(
     x: &[f64],
     nperseg: usize,
@@ -641,17 +642,14 @@ pub fn resample(x: &[f64], num: usize) -> Vec<f64> {
     if num > n {
         // Zero-pad: copy positive freqs, then negative freqs
         let half = n.div_ceil(2); // positive freq bins including DC
-                                // Copy positive frequencies
-        for i in 0..half {
-            new_spectrum[i] = spectrum[i];
-        }
+                                  // Copy positive frequencies
+        new_spectrum[..half].copy_from_slice(&spectrum[..half]);
         // Copy negative frequencies at the end
         let neg_start_src = half;
         let neg_count = n - half;
         let neg_start_dst = num - neg_count;
-        for i in 0..neg_count {
-            new_spectrum[neg_start_dst + i] = spectrum[neg_start_src + i];
-        }
+        new_spectrum[neg_start_dst..neg_start_dst + neg_count]
+            .copy_from_slice(&spectrum[neg_start_src..neg_start_src + neg_count]);
         // If n is even, split the Nyquist bin
         if n.is_multiple_of(2) {
             let nyq = n / 2;
@@ -661,13 +659,9 @@ pub fn resample(x: &[f64], num: usize) -> Vec<f64> {
     } else {
         // Truncate
         let half = num.div_ceil(2);
-        for i in 0..half {
-            new_spectrum[i] = spectrum[i];
-        }
+        new_spectrum[..half].copy_from_slice(&spectrum[..half]);
         let neg_count = num - half;
-        for i in 0..neg_count {
-            new_spectrum[half + i] = spectrum[n - neg_count + i];
-        }
+        new_spectrum[half..half + neg_count].copy_from_slice(&spectrum[n - neg_count..n]);
     }
 
     let result = ifft(&new_spectrum);
@@ -685,11 +679,11 @@ pub fn decimate(x: &[f64], factor: usize) -> Vec<f64> {
         return x.to_vec();
     }
     // 8th order Butterworth is standard (like scipy default)
-    let order = 8.min(x.len() / 3).max(1);
+    let order = (8.min(x.len() / 3)).max(1);
     // Cutoff at 0.8 * Nyquist/factor to allow some transition band
     // Using normalised sample_rate = 1.0
     let cutoff = 0.8 / (2.0 * factor as f64);
-    let cutoff = cutoff.max(0.001).min(0.499); // clamp to valid range
+    let cutoff = cutoff.clamp(0.001, 0.499);
     let (b, a) = butter(order, cutoff, 1.0);
 
     let filtered = filtfilt(&b, &a, x);

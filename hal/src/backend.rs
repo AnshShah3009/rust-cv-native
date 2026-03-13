@@ -53,6 +53,8 @@ pub struct QueueId(pub u32);
 pub struct SubmissionIndex(pub u64);
 
 impl SubmissionIndex {
+    /// Increment and return the new submission index.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Self {
         self.0 += 1;
         *self

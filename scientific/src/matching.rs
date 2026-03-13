@@ -5,7 +5,7 @@
 
 /// Solves the assignment problem for a square or rectangular cost matrix.
 /// Returns a list of (row, col) assignments.
-pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
+pub fn hungarian_matching(cost_matrix: &[Vec<f64>]) -> Vec<(usize, usize)> {
     if cost_matrix.is_empty() || cost_matrix[0].is_empty() {
         return Vec::new();
     }
@@ -19,9 +19,8 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
     let mut max_val = 0.0;
 
     // Find max value for padding
-    for r in 0..rows {
-        for c in 0..cols {
-            let val = cost_matrix[r][c];
+    for row in cost_matrix.iter().take(rows) {
+        for &val in row.iter().take(cols) {
             if val > max_val {
                 max_val = val;
             }
@@ -85,8 +84,8 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
                         }
                     }
                 }
-                for c in 0..n {
-                    if col_covered[c] {
+                for &covered in &col_covered {
+                    if covered {
                         count += 1;
                     }
                 }
@@ -122,17 +121,12 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
 
                 let mut curr_c = prime_rc.1;
 
-                loop {
-                    // Find starred zero in current column
-                    if let Some(r) = find_star_in_col(&mask, curr_c, n) {
-                        path.push((r, curr_c));
-                        // Find primed zero in this row
-                        if let Some(c) = find_prime_in_row(&mask, r, n) {
-                            path.push((r, c));
-                            curr_c = c;
-                        } else {
-                            break;
-                        }
+                while let Some(r) = find_star_in_col(&mask, curr_c, n) {
+                    path.push((r, curr_c));
+                    // Find primed zero in this row
+                    if let Some(c) = find_prime_in_row(&mask, r, n) {
+                        path.push((r, c));
+                        curr_c = c;
                     } else {
                         break;
                     }
@@ -150,9 +144,9 @@ pub fn hungarian_matching(cost_matrix: &Vec<Vec<f64>>) -> Vec<(usize, usize)> {
                 // Clear covers and primes
                 row_covered.fill(false);
                 col_covered.fill(false);
-                for i in 0..mask.len() {
-                    if mask[i] == 2 {
-                        mask[i] = 0;
+                for m in &mut mask {
+                    if *m == 2 {
+                        *m = 0;
                     }
                 }
 
@@ -211,30 +205,15 @@ fn find_uncovered_zero(m: &[f64], rc: &[bool], cc: &[bool], n: usize) -> Option<
 }
 
 fn find_star_in_row(mask: &[u8], r: usize, n: usize) -> Option<usize> {
-    for c in 0..n {
-        if mask[r * n + c] == 1 {
-            return Some(c);
-        }
-    }
-    None
+    (0..n).find(|&c| mask[r * n + c] == 1)
 }
 
 fn find_star_in_col(mask: &[u8], c: usize, n: usize) -> Option<usize> {
-    for r in 0..n {
-        if mask[r * n + c] == 1 {
-            return Some(r);
-        }
-    }
-    None
+    (0..n).find(|&r| mask[r * n + c] == 1)
 }
 
 fn find_prime_in_row(mask: &[u8], r: usize, n: usize) -> Option<usize> {
-    for c in 0..n {
-        if mask[r * n + c] == 2 {
-            return Some(c);
-        }
-    }
-    None
+    (0..n).find(|&c| mask[r * n + c] == 2)
 }
 
 #[cfg(test)]

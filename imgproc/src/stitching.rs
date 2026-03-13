@@ -309,7 +309,7 @@ pub fn warp_perspective<T: Float + Default + 'static>(
 /// * `img1`    - First (reference) image.
 /// * `img2`    - Second image to warp.
 /// * `matches` - Correspondences as `(x1, y1, x2, y2)` where `(x1,y1)` is in `img1`
-///               and `(x2,y2)` is in `img2`.
+///   and `(x2,y2)` is in `img2`.
 ///
 /// # Returns
 /// A stitched panorama tensor.

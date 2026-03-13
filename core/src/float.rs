@@ -214,8 +214,8 @@ macro_rules! impl_float {
     };
 }
 
-impl_float!(f32, std::f32::consts::PI, std::f32::EPSILON);
-impl_float!(f64, std::f64::consts::PI, std::f64::EPSILON);
+impl_float!(f32, std::f32::consts::PI, f32::EPSILON);
+impl_float!(f64, std::f64::consts::PI, f64::EPSILON);
 
 macro_rules! impl_half_float {
     ($t:ty) => {

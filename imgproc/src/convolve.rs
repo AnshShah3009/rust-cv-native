@@ -358,6 +358,7 @@ fn convolve_gpu(
         .ok_or_else(|| cv_hal::Error::MemoryError("Failed to create image from tensor".into()))
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn convolve_with_border_into_ctx(
     image: &GrayImage,
     output: &mut GrayImage,
@@ -439,6 +440,7 @@ pub fn separable_convolve_into(
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 pub fn separable_convolve_into_ctx(
     image: &GrayImage,
     out: &mut GrayImage,

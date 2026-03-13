@@ -70,6 +70,7 @@ pub fn bilateral_filter_depth(
     bilateral_filter_depth_ctx(depth, width, height, params, &runner)
 }
 
+#[allow(clippy::needless_range_loop)]
 fn bilateral_filter_depth_internal(
     depth: &[f32],
     output: &mut [f32],
@@ -295,6 +296,7 @@ pub fn joint_bilateral_filter(
     joint_bilateral_filter_ctx(depth, guidance, width, height, params, &runner)
 }
 
+#[allow(clippy::needless_range_loop)]
 fn joint_bilateral_filter_internal(
     depth: &[f32],
     guidance: &[u8],

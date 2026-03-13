@@ -192,6 +192,7 @@ pub fn draw_charuco_board(board: &CharucoBoard, pixel_per_square: u32) -> Result
 /// First detects ArUco markers to estimate a homography, then projects all
 /// interior chessboard corners into the image. Returns an empty list if fewer
 /// than 4 marker correspondences are found.
+#[allow(clippy::needless_range_loop)]
 pub fn detect_charuco_corners(
     image: &GrayImage,
     board: &CharucoBoard,

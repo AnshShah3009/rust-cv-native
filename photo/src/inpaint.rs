@@ -62,6 +62,7 @@ impl Ord for FmmEntry {
 ///
 /// # Returns
 /// A new tensor with the masked region filled in.
+#[allow(clippy::needless_range_loop)]
 pub fn inpaint_telea<T: Float + Default + 'static>(
     image: &CpuTensor<T>,
     mask: &CpuTensor<u8>,
@@ -266,6 +267,7 @@ pub fn inpaint_telea<T: Float + Default + 'static>(
 ///
 /// # Returns
 /// A new tensor with the masked region filled by PDE diffusion.
+#[allow(clippy::needless_range_loop)]
 pub fn inpaint_ns<T: Float + Default + 'static>(
     image: &CpuTensor<T>,
     mask: &CpuTensor<u8>,

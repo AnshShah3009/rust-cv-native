@@ -192,6 +192,7 @@ pub fn black_hat(image: &GrayImage, kernel_size: usize) -> GrayImage {
 ///
 /// The result pixel is 255 where the pattern matches, 0 otherwise.
 /// `kernel` should be a flat row-major slice with dimensions `kw x kh`.
+#[allow(clippy::needless_range_loop)]
 pub fn hit_or_miss(image: &GrayImage, kernel: &[i8], kw: usize, kh: usize) -> GrayImage {
     let width = image.width() as usize;
     let height = image.height() as usize;

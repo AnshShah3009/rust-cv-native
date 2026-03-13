@@ -151,6 +151,7 @@ impl PointCloud3D {
     }
 
     /// Add colored points with normals
+    #[allow(clippy::too_many_arguments)]
     pub fn add_points_with_all(
         &mut self,
         x: &[f64],
