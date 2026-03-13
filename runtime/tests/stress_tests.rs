@@ -27,7 +27,7 @@ fn stress_test_concurrent_group_churn() {
                     // Use a loop to retry if name collision happens (though names are unique here)
                     if let Ok(group) = s_inner.create_group(&name, 1, None, policy) {
                         // Submit some work
-                        group.spawn(|| {
+                        let _ = group.spawn(|| {
                             let _ = 2 + 2;
                         });
 
@@ -72,31 +72,41 @@ fn stress_test_heavy_load_mixing() {
     let (tx, rx) = std::sync::mpsc::channel();
     let tx = Arc::new(std::sync::Mutex::new(tx));
 
-    // Submit heavy tasks
+    // Submit heavy tasks, retrying on backpressure
     if let Some(g_heavy) = s.get_group("heavy-iso").unwrap() {
         for _ in 0..heavy_count {
             let tx = tx.clone();
-            g_heavy.spawn(move || {
-                // Simulate work (busy wait or sleep)
-                std::thread::sleep(Duration::from_millis(2));
-                if let Ok(guard) = tx.lock() {
-                    let _ = guard.send(1);
+            loop {
+                let tx2 = tx.clone();
+                match g_heavy.spawn(move || {
+                    std::thread::sleep(Duration::from_millis(2));
+                    if let Ok(guard) = tx2.lock() {
+                        let _ = guard.send(1);
+                    }
+                }) {
+                    Ok(()) => break,
+                    Err(_) => std::thread::sleep(Duration::from_millis(5)),
                 }
-            });
+            }
         }
     }
 
-    // Submit light tasks
+    // Submit light tasks, retrying on backpressure
     if let Some(g_light) = s.get_group("light-shared").unwrap() {
         for _ in 0..light_count {
             let tx = tx.clone();
-            g_light.spawn(move || {
-                // Trivial work
-                let _ = 1 * 1;
-                if let Ok(guard) = tx.lock() {
-                    let _ = guard.send(1);
+            loop {
+                let tx2 = tx.clone();
+                match g_light.spawn(move || {
+                    let _ = 1 * 1;
+                    if let Ok(guard) = tx2.lock() {
+                        let _ = guard.send(1);
+                    }
+                }) {
+                    Ok(()) => break,
+                    Err(_) => std::thread::sleep(Duration::from_millis(1)),
                 }
-            });
+            }
         }
     }
 
