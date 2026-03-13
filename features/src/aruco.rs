@@ -338,7 +338,7 @@ pub fn draw_marker(dictionary: ArucoDictionary, id: usize, size: usize) -> Resul
 fn float_to_u8<T: Float>(v: T) -> u8 {
     let f = v.to_f64();
     // Heuristic: if max plausible value <= 1.0, treat as normalised.
-    if f <= 1.0 && f >= 0.0 {
+    if (0.0..=1.0).contains(&f) {
         (f * 255.0).round().clamp(0.0, 255.0) as u8
     } else {
         f.clamp(0.0, 255.0).round() as u8
@@ -346,14 +346,8 @@ fn float_to_u8<T: Float>(v: T) -> u8 {
 }
 
 /// Simple adaptive mean threshold. Output: 1 = foreground (dark), 0 = background.
-fn adaptive_threshold(
-    gray: &[u8],
-    w: usize,
-    h: usize,
-    win: usize,
-    constant: f64,
-) -> Vec<u8> {
-    let win = if win % 2 == 0 { win + 1 } else { win };
+fn adaptive_threshold(gray: &[u8], w: usize, h: usize, win: usize, constant: f64) -> Vec<u8> {
+    let win = if win.is_multiple_of(2) { win + 1 } else { win };
     let half = (win / 2) as i32;
     // Integral image for fast mean computation.
     let mut integral = vec![0i64; (w + 1) * (h + 1)];
@@ -596,9 +590,7 @@ fn generate_codes(bits: usize, count: usize, seed: u64) -> Vec<u64> {
     let mut out = Vec::with_capacity(count);
     let mut state = seed;
     while out.len() < count {
-        state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1);
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
         let mut code = state & mask;
         if code == 0 || code == mask {
             continue;
@@ -623,12 +615,7 @@ fn generate_codes(bits: usize, count: usize, seed: u64) -> Vec<u64> {
 // Minimal PnP solver (DLT)
 // ---------------------------------------------------------------------------
 
-fn undistort_point(
-    px: f64,
-    py: f64,
-    cam: &[[f64; 3]; 3],
-    dist: &[f64; 5],
-) -> [f64; 2] {
+fn undistort_point(px: f64, py: f64, cam: &[[f64; 3]; 3], dist: &[f64; 5]) -> [f64; 2] {
     let fx = cam[0][0];
     let fy = cam[1][1];
     let cx = cam[0][2];
@@ -725,11 +712,7 @@ fn solve_pnp_dlt(
     }
 
     let scale = r_mat.column(0).norm();
-    let t_vec = nalgebra::Vector3::new(
-        p[0][3] / scale,
-        p[1][3] / scale,
-        p[2][3] / scale,
-    );
+    let t_vec = nalgebra::Vector3::new(p[0][3] / scale, p[1][3] / scale, p[2][3] / scale);
 
     // Convert rotation matrix to Rodrigues vector.
     let rvec = rotation_matrix_to_rodrigues(&r_orth);
@@ -948,8 +931,7 @@ mod tests {
     #[test]
     fn detect_empty_image_no_crash() {
         let tensor =
-            CpuTensor::<u8>::from_vec(vec![255u8; 100 * 80], TensorShape::new(1, 80, 100))
-                .unwrap();
+            CpuTensor::<u8>::from_vec(vec![255u8; 100 * 80], TensorShape::new(1, 80, 100)).unwrap();
         let detector = ArucoDetector::new(ArucoDictionary::Dict4x4_50);
         let det = detector.detect_u8(&tensor).unwrap();
         assert!(det.is_empty());

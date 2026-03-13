@@ -80,6 +80,7 @@ pub mod odometry;
 pub mod raycasting;
 pub mod spatial;
 pub mod tsdf;
+pub mod visibility;
 
 pub use async_ops::{
     mesh as async_mesh, pipeline as async_pipeline, point_cloud as async_point_cloud,

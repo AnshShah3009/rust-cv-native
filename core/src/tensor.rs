@@ -1,5 +1,5 @@
-use crate::storage::{CpuStorage, Storage};
 use crate::float::Float;
+use crate::storage::{CpuStorage, Storage};
 use std::default::Default;
 use std::fmt;
 use std::marker::PhantomData;
@@ -62,13 +62,12 @@ impl DataType {
             {
                 if t == TypeId::of::<half::f16>() {
                     return Ok(DataType::F16);
-                }
-                if t == TypeId::of::<half::bf16>() {
+                } else if t == TypeId::of::<half::bf16>() {
                     return Ok(DataType::BF16);
                 }
             }
             Err(crate::Error::InvalidInput(format!(
-                "Unsupported type: {}",
+                "Unsupported tensor data type: {}",
                 std::any::type_name::<T>()
             )))
         }
@@ -146,6 +145,19 @@ pub struct Tensor<T: Clone + Copy + 'static, S: Storage<T> = CpuStorage<T>> {
 }
 
 pub type CpuTensor<T> = Tensor<T, CpuStorage<T>>;
+
+impl<T: Float + 'static, S: crate::storage::StorageFactory<T>> Tensor<T, S> {
+    /// Convert this tensor to a different floating-point precision.
+    ///
+    /// This allows converting between any supported float types (e.g., `f32` -> `f64`, `f32` -> `f16`).
+    pub fn convert_precision<U: Float + 'static, S2: crate::storage::StorageFactory<U>>(
+        &self,
+    ) -> crate::Result<Tensor<U, S2>> {
+        let src_data = self.as_slice()?;
+        let dst_data: Vec<U> = src_data.iter().map(|&x| U::from_f64(x.to_f64())).collect();
+        Tensor::<U, S2>::from_vec(dst_data, self.shape)
+    }
+}
 
 impl<T: Clone + Copy + fmt::Debug + 'static> CpuTensor<T> {
     /// Extract a sub-tensor from this tensor.
@@ -276,7 +288,12 @@ impl<T: Clone + Copy + fmt::Debug + 'static> CpuTensor<T> {
                     }
                 }
             }
-            _ => unreachable!(),
+            _ => {
+                return Err(crate::Error::DimensionMismatch(format!(
+                    "Unsupported concatenation dimension: {}",
+                    dim
+                )));
+            }
         }
 
         Self::from_vec(new_data, new_shape)
@@ -292,15 +309,7 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: crate::storage::StorageFactory<T
                 shape.len()
             )));
         }
-        let dtype = match std::any::type_name::<T>() {
-            "u8" => DataType::U8,
-            "u16" => DataType::U16,
-            "u32" => DataType::U32,
-            "i32" => DataType::I32,
-            "f32" => DataType::F32,
-            "f64" => DataType::F64,
-            _ => DataType::F32,
-        };
+        let dtype = DataType::from_type::<T>()?;
         Ok(Self {
             storage: S::from_vec(data).map_err(crate::Error::MemoryError)?,
             shape,
@@ -398,21 +407,14 @@ impl<T: Clone + Copy + fmt::Debug + 'static, S: crate::storage::StorageFactory<T
     }
 }
 
-impl<T: Clone + Copy + Default + fmt::Debug + 'static> Tensor<T> {
+impl<T: Clone + Copy + Default + fmt::Debug + 'static, S: crate::storage::StorageFactory<T>>
+    Tensor<T, S>
+{
     pub fn new(shape: TensorShape) -> crate::Result<Self> {
-        let dtype = match std::any::type_name::<T>() {
-            "u8" => DataType::U8,
-            "u16" => DataType::U16,
-            "u32" => DataType::U32,
-            "i32" => DataType::I32,
-            "f32" => DataType::F32,
-            "f64" => DataType::F64,
-            _ => DataType::F32,
-        };
+        let dtype = DataType::from_type::<T>()?;
 
         Ok(Self {
-            storage: CpuStorage::new(shape.len(), T::default())
-                .map_err(crate::Error::RuntimeError)?,
+            storage: S::create(shape, T::default()).map_err(crate::Error::RuntimeError)?,
             shape,
             dtype,
             _phantom: PhantomData,
@@ -420,7 +422,14 @@ impl<T: Clone + Copy + Default + fmt::Debug + 'static> Tensor<T> {
     }
 
     pub fn zeros(shape: TensorShape) -> crate::Result<Self> {
-        Self::new(shape)
+        let dtype = DataType::from_type::<T>()?;
+
+        Ok(Self {
+            storage: S::create_zeros(shape).map_err(crate::Error::RuntimeError)?,
+            shape,
+            dtype,
+            _phantom: PhantomData,
+        })
     }
 
     pub fn ones(shape: TensorShape) -> crate::Result<Self>
@@ -637,11 +646,11 @@ impl<T: Clone + Copy + Default + fmt::Debug + 'static> Tensor<T, CpuStorage<T>> 
     }
 }
 
-impl Tensor<f32> {
+impl<T: Float + 'static, S: crate::storage::StorageFactory<T>> Tensor<T, S> {
     pub fn from_image_gray(data: &[u8], width: usize, height: usize) -> crate::Result<Self> {
         let mut float_data = Vec::with_capacity(width * height);
         for &pixel in data {
-            float_data.push(pixel as f32 / 255.0);
+            float_data.push(T::from_f32(pixel as f32 / 255.0));
         }
         Self::from_vec(float_data, TensorShape::new(1, height, width))
     }
@@ -649,9 +658,9 @@ impl Tensor<f32> {
     pub fn from_image_rgb(data: &[u8], width: usize, height: usize) -> crate::Result<Self> {
         let mut float_data = Vec::with_capacity(3 * width * height);
         for chunk in data.chunks(3) {
-            float_data.push(chunk[0] as f32 / 255.0);
-            float_data.push(chunk[1] as f32 / 255.0);
-            float_data.push(chunk[2] as f32 / 255.0);
+            float_data.push(T::from_f32(chunk[0] as f32 / 255.0));
+            float_data.push(T::from_f32(chunk[1] as f32 / 255.0));
+            float_data.push(T::from_f32(chunk[2] as f32 / 255.0));
         }
         Self::from_vec(float_data, TensorShape::new(3, height, width))
     }
@@ -665,7 +674,7 @@ impl Tensor<f32> {
         Ok(self
             .as_slice()?
             .iter()
-            .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
+            .map(|&v| (v.to_f32().clamp(0.0, 1.0) * 255.0) as u8)
             .collect())
     }
 }
@@ -1117,6 +1126,43 @@ mod tests {
 
             assert_eq!(reshaped.shape, shape2);
             assert_eq!(reshaped.as_slice().unwrap(), &data[..]);
+        }
+
+        #[test]
+        fn test_data_type_is_float() {
+            assert!(DataType::F32.is_float());
+            assert!(DataType::F64.is_float());
+            assert!(!DataType::U8.is_float());
+            assert!(!DataType::I32.is_float());
+
+            #[cfg(feature = "half-precision")]
+            {
+                assert!(DataType::F16.is_float());
+                assert!(DataType::BF16.is_float());
+            }
+        }
+
+        #[test]
+        fn test_tensor_convert_precision() {
+            let data = vec![1.0f32, 2.0, 3.0, 4.0];
+            let shape = TensorShape::new(1, 2, 2);
+            let tensor_f32: CpuTensor<f32> = CpuTensor::from_vec(data, shape).unwrap();
+
+            let tensor_f64: CpuTensor<f64> = tensor_f32.convert_precision::<f64, _>().unwrap();
+
+            assert_eq!(tensor_f64.shape, shape);
+            assert_eq!(tensor_f64.dtype, DataType::F64);
+            let slice_f64 = tensor_f64.as_slice().unwrap();
+            assert!((slice_f64[0] - 1.0).abs() < 1e-10);
+            assert!((slice_f64[3] - 4.0).abs() < 1e-10);
+
+            #[cfg(feature = "half-precision")]
+            {
+                let tensor_f16: CpuTensor<half::f16> =
+                    tensor_f32.convert_precision::<half::f16, _>().unwrap();
+                assert_eq!(tensor_f16.dtype, DataType::F16);
+                assert!((tensor_f16.as_slice().unwrap()[0].to_f32() - 1.0).abs() < 1e-3);
+            }
         }
 
         #[test]

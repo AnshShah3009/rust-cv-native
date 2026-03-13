@@ -23,9 +23,6 @@ Cargo.lock
 # Rerun
 *.rrd
 
-# Git worktrees
-.worktrees/
-
 # Python build artifacts
 python/cv_native/__pycache__/
 python/cv_native/*.so
@@ -35,3 +32,4 @@ python/cv_native/*.egg-info/
 examples/target/
 ci_artifacts/
 reference/
+.worktrees/

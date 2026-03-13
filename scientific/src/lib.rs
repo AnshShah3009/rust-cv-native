@@ -5,6 +5,7 @@
 //! - [`special`]: Special functions (erf, gamma, bessel)
 //! - [`geometry`]: Geometric operations (Shapely equivalents)
 //! - [`point_cloud`]: Point cloud utilities
+//! - [`signal`]: Signal processing (windows, filters, spectral analysis, resampling)
 //! - [`jit`]: JIT vectorization helpers
 //!
 //! ## Example: Numerical Integration
@@ -39,13 +40,16 @@
 
 pub mod fft;
 pub mod geometry;
+pub mod geometry2d;
 pub mod integrate;
 pub mod interpolate;
 pub mod jit;
+pub mod linalg;
 pub mod matching;
 pub mod multiview;
 pub mod optimize;
 pub mod point_cloud;
+pub mod signal;
 pub mod special;
 pub mod stats;
 
