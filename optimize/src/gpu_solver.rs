@@ -117,8 +117,8 @@ impl LinearSolver for GpuCgSolver {
         if let ComputeDevice::Gpu(gpu) = ctx {
             // Convert to f32 for GPU
             let b_f32: Vec<f32> = b.iter().map(|&v| v as f32).collect();
-            let row_ptr_u32: Vec<u32> = a.row_ptr.iter().copied().collect();
-            let col_indices_u32: Vec<u32> = a.col_indices.iter().copied().collect();
+            let row_ptr_u32: Vec<u32> = a.row_ptr.to_vec();
+            let col_indices_u32: Vec<u32> = a.col_indices.to_vec();
             let values_f32: Vec<f32> = a.values.iter().map(|&v| v as f32).collect();
 
             use cv_core::{DataType, Tensor, TensorShape};

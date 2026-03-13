@@ -143,7 +143,7 @@ impl Orb {
 
                 let cpu_u8 = resized.to_cpu().unwrap();
                 let img_h_w = cpu_u8.shape;
-                let data: Vec<f32> = cpu_u8.storage.as_slice().unwrap().iter().copied().collect();
+                let data: Vec<f32> = cpu_u8.storage.as_slice().unwrap().to_vec();
                 let tensor_f32: Tensor<f32, cv_core::storage::CpuStorage<f32>> =
                     Tensor::from_vec(data, img_h_w).unwrap();
                 tensor_f32
