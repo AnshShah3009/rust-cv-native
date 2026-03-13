@@ -1871,10 +1871,7 @@ impl ComputeContext for GpuContext {
                         .iter()
                         .map(|&v| (v * 512.0).min(255.0) as u8)
                         .collect();
-                    descs.push(cv_core::Descriptor::new(
-                        data,
-                        keypoints.keypoints[i],
-                    ));
+                    descs.push(cv_core::Descriptor::new(data, keypoints.keypoints[i]));
                 }
 
                 Ok(cv_core::Descriptors { descriptors: descs })

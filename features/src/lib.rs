@@ -33,6 +33,8 @@
 
 /// AKAZE (Accelerated-KAZE) feature detector and descriptor
 pub mod akaze;
+/// ArUco marker detection, generation, and pose estimation (tensor-based API)
+pub mod aruco;
 /// BRIEF (Binary Robust Independent Elementary Features) descriptor
 pub mod brief;
 /// Feature descriptor types and trait implementations

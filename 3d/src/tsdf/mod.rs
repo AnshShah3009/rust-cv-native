@@ -173,7 +173,9 @@ impl TSDFVolume {
                 &mut gpu_vol,
                 self.voxel_size,
                 self.truncation_distance,
-            ).is_ok() {
+            )
+            .is_ok()
+            {
                 // In a full implementation, we'd read back and merge into sparse blocks.
                 // For now, we just demonstrate the dispatch.
                 return;

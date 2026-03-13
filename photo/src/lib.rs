@@ -41,11 +41,17 @@ pub type PhotoResult<T> = cv_core::Result<T>;
 
 /// Edge-preserving bilateral filtering
 pub mod bilateral;
+/// Image denoising (Non-Local Means, Gaussian)
+pub mod denoise;
+/// HDR merging and tone mapping (Debevec, Mertens, Reinhard, Drago, Mantiuk)
+pub mod hdr;
 /// Image inpainting (Telea FMM and Navier-Stokes diffusion)
 pub mod inpaint;
 /// Panoramic image stitching
 pub mod stitcher;
 
 pub use bilateral::*;
+pub use denoise::{denoise_gaussian, fast_nl_means_denoising, fast_nl_means_denoising_colored};
+pub use hdr::{merge_debevec, merge_mertens, tonemap_drago, tonemap_mantiuk, tonemap_reinhard};
 pub use inpaint::{inpaint_ns, inpaint_telea};
 pub use stitcher::*;

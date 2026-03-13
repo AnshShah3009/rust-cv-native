@@ -43,6 +43,7 @@
 
 pub mod cpu;
 pub mod gpu;
+pub mod hidden_point_removal;
 
 use nalgebra::{Point3, Vector3};
 

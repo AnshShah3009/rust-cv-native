@@ -114,7 +114,9 @@ impl Isam2Solver {
         let mut affected: HashSet<Key> = new_keys.into_iter().collect();
 
         if self.config.enable_partial_relinearization
-            && self.update_count.is_multiple_of(self.config.relinearize_skip)
+            && self
+                .update_count
+                .is_multiple_of(self.config.relinearize_skip)
         {
             affected.extend(self.needs_relinearization());
         }

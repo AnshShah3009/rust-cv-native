@@ -60,7 +60,7 @@ pub fn find_homography(
 
         // Row 2i+1:  sx sy 1  0 0 0  -dx*sx -dx*sy -dx
         let r1 = 2 * i + 1;
-        a_data[(r1 * 9)] = sx;
+        a_data[r1 * 9] = sx;
         a_data[r1 * 9 + 1] = sy;
         a_data[r1 * 9 + 2] = 1.0;
         a_data[r1 * 9 + 6] = -dx * sx;

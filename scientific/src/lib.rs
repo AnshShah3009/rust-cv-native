@@ -43,6 +43,7 @@ pub mod geometry2d;
 pub mod integrate;
 pub mod interpolate;
 pub mod jit;
+pub mod linalg;
 pub mod matching;
 pub mod multiview;
 pub mod optimize;
