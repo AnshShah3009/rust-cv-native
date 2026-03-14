@@ -1,7 +1,7 @@
 use cv_calib3d::*;
 use cv_core::{CameraIntrinsics, Distortion, Pose};
 use image::{GrayImage, Luma};
-use nalgebra::{Matrix3, Point2, Point3, Rotation3, UnitQuaternion, Vector3};
+use nalgebra::{Matrix3, Point2, Point3, Vector3};
 
 #[test]
 fn test_corner_subpix_basic() {

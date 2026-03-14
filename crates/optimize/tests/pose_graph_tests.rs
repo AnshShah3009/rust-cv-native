@@ -1,4 +1,4 @@
-use cv_optimize::pose_graph::{Edge, PoseGraph};
+use cv_optimize::pose_graph::PoseGraph;
 use nalgebra::{Isometry3, Matrix6, Vector3};
 
 #[test]

@@ -6,10 +6,6 @@
 //! 3. Match descriptors using brute-force with ratio test
 //! 4. Filter matches
 
-use cv_core::{KeyPoints, Matches};
-use cv_features::{brief, fast, matcher, Descriptors};
-use image::GrayImage;
-
 fn main() {
     println!("Feature Matching Pipeline Example\n");
 

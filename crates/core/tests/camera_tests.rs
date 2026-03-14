@@ -1,5 +1,5 @@
 use cv_core::geometry::{CameraIntrinsics, CameraModel, Distortion, PinholeModel};
-use nalgebra::{Point2, Point3};
+use nalgebra::Point3;
 
 #[test]
 fn test_pinhole_projection_no_distortion() {
