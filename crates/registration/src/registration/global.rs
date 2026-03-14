@@ -606,7 +606,7 @@ pub fn registration_fgr_based_on_feature_matching(
         mu /= div_factor;
 
         // Early exit if mu is tiny
-        if mu < (max_corr_dist * max_corr_dist * 1e-6) as f64 {
+        if mu < max_corr_dist * max_corr_dist * 1e-6 {
             break;
         }
     }
