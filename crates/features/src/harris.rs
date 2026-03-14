@@ -286,6 +286,33 @@ mod tests {
             !kps.keypoints.is_empty(),
             "Should detect corners in image with corners"
         );
+
+        // The four white blocks are at corners (0-4,0-4), (15-19,0-4),
+        // (0-4,15-19), (15-19,15-19). The block junctions where all four
+        // quadrants meet are approximately at (5, 5), (14, 5), (5, 14), (14, 14).
+        let expected_corners: [(f64, f64); 4] =
+            [(5.0, 5.0), (14.0, 5.0), (5.0, 14.0), (14.0, 14.0)];
+        let tolerance = 3.0;
+
+        for &(ex, ey) in &expected_corners {
+            let has_nearby = kps.keypoints.iter().any(|kp| {
+                let dx = kp.x - ex;
+                let dy = kp.y - ey;
+                (dx * dx + dy * dy).sqrt() <= tolerance
+            });
+            assert!(
+                has_nearby,
+                "Expected a Harris keypoint within {}px of ({}, {}), but none found. \
+                 Detected keypoints: {:?}",
+                tolerance,
+                ex,
+                ey,
+                kps.keypoints
+                    .iter()
+                    .map(|kp| (kp.x, kp.y))
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

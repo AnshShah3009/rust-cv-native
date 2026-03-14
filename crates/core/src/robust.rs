@@ -547,6 +547,65 @@ mod tests {
             assert_eq!(config.confidence, 0.99);
             assert_eq!(config.max_iterations, 1000);
         }
+
+        #[test]
+        fn test_ransac_recovers_line_model() {
+            // Generate points on y = 2x (i.e., -2x + y = 0, or line a=2, b=-1, c=0)
+            // with a few outliers.
+            let mut points: Vec<Point2<f64>> = (0..50)
+                .map(|i| {
+                    let x = i as f64 * 0.2;
+                    Point2::new(x, 2.0 * x)
+                })
+                .collect();
+            // Add outliers far from the line
+            points.push(Point2::new(1.0, 20.0));
+            points.push(Point2::new(3.0, -15.0));
+            points.push(Point2::new(5.0, 25.0));
+
+            let ransac = Ransac::new(RobustConfig {
+                threshold: 0.5,
+                confidence: 0.99,
+                max_iterations: 2000,
+            });
+
+            let estimator = LineEstimator;
+            let result = ransac.run(&estimator, &points);
+
+            let model = result.model.expect("RANSAC should find a model");
+
+            // Check that the recovered line is close to the true line y=2x
+            // for inlier points: the residual (distance to model) should be < 0.5
+            let mut max_inlier_residual = 0.0f64;
+            for (j, p) in points.iter().enumerate() {
+                if result.inliers[j] {
+                    let dist = LineEstimator::distance(&model, p);
+                    if dist > max_inlier_residual {
+                        max_inlier_residual = dist;
+                    }
+                }
+            }
+            assert!(
+                max_inlier_residual < 0.5,
+                "All inlier residuals should be < 0.5, but max was {}",
+                max_inlier_residual
+            );
+
+            // Also verify that the model is close to the true line y=2x by
+            // evaluating at two well-separated points
+            let d1 = LineEstimator::distance(&model, &Point2::new(0.0, 0.0));
+            let d5 = LineEstimator::distance(&model, &Point2::new(5.0, 10.0));
+            assert!(
+                d1 < 0.5,
+                "Origin (0,0) should be close to the recovered line, distance = {}",
+                d1
+            );
+            assert!(
+                d5 < 0.5,
+                "Point (5,10) should be close to the recovered line, distance = {}",
+                d5
+            );
+        }
     }
 
     mod lmeds_tests {

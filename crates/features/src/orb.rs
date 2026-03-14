@@ -859,21 +859,100 @@ fn convert_to_f32_cpu<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::descriptor::DescriptorExtractor;
     use image::{GrayImage, Luma};
 
-    #[allow(dead_code)]
-    fn create_test_image() -> GrayImage {
-        let size = 128u32;
+    fn create_checkerboard(size: u32, square_size: u32) -> GrayImage {
         let mut img = GrayImage::new(size, size);
-
-        let square_size = 16;
         for y in 0..size {
             for x in 0..size {
                 let is_white = ((x / square_size) + (y / square_size)) % 2 == 0;
                 img.put_pixel(x, y, if is_white { Luma([255]) } else { Luma([0]) });
             }
         }
-
         img
+    }
+
+    #[test]
+    fn test_orb_detect_finds_keypoints() {
+        let img = create_checkerboard(100, 16);
+        let n_features = 200;
+        let orb = Orb::new().with_n_features(n_features);
+        let kps = orb.detect(&img);
+        assert!(
+            !kps.keypoints.is_empty(),
+            "ORB should detect keypoints on a checkerboard image"
+        );
+        assert!(
+            kps.keypoints.len() <= n_features,
+            "ORB should not return more than n_features ({}) keypoints, got {}",
+            n_features,
+            kps.keypoints.len()
+        );
+    }
+
+    #[test]
+    fn test_orb_detect_and_compute() {
+        // Use a larger image so most keypoints are far enough from edges
+        // to get a valid descriptor.
+        let img = create_checkerboard(200, 16);
+        let n_features = 100;
+        let (kps, descs) = orb_detect_and_compute(&img, n_features);
+        assert!(
+            !kps.keypoints.is_empty(),
+            "ORB should detect keypoints on a checkerboard"
+        );
+        // Descriptors can be fewer than keypoints (edge keypoints are
+        // skipped when the patch extends outside the image), but every
+        // descriptor that is returned must be 32 bytes.
+        assert!(
+            !descs.descriptors.is_empty(),
+            "ORB should produce at least some descriptors"
+        );
+        assert!(
+            descs.descriptors.len() <= kps.keypoints.len(),
+            "Number of descriptors ({}) must not exceed number of keypoints ({})",
+            descs.descriptors.len(),
+            kps.keypoints.len()
+        );
+        for (i, desc) in descs.descriptors.iter().enumerate() {
+            assert_eq!(
+                desc.data.len(),
+                32,
+                "Descriptor {} should be 32 bytes (256 bits), got {}",
+                i,
+                desc.data.len()
+            );
+        }
+    }
+
+    #[test]
+    fn test_orb_descriptor_deterministic() {
+        let img = create_checkerboard(100, 16);
+        let (kps1, descs1) = orb_detect_and_compute(&img, 200);
+        let (kps2, descs2) = orb_detect_and_compute(&img, 200);
+        assert_eq!(
+            kps1.keypoints.len(),
+            kps2.keypoints.len(),
+            "Two ORB runs on the same image should find the same number of keypoints"
+        );
+        assert_eq!(
+            descs1.descriptors.len(),
+            descs2.descriptors.len(),
+            "Two ORB runs on the same image should produce the same number of descriptors"
+        );
+        for (i, (d1, d2)) in descs1
+            .descriptors
+            .iter()
+            .zip(descs2.descriptors.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                d1.data, d2.data,
+                "Descriptor {} differs between two identical runs",
+                i
+            );
+        }
     }
 }

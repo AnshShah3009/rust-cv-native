@@ -342,3 +342,39 @@ pub fn point_inside_mesh(query: &Point3<f32>, mesh: &TriangleMesh) -> bool {
     // Odd number of intersections = inside
     intersection_count % 2 == 1
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ray_triangle_hit() {
+        // Ray from (0,0,-1) in direction (0,0,1) at a triangle on the XY-plane
+        let ray = Ray::new(Point3::new(0.0, 0.0, -1.0), Vector3::new(0.0, 0.0, 1.0));
+        let v0 = Point3::new(-1.0, -1.0, 0.0);
+        let v1 = Point3::new(1.0, -1.0, 0.0);
+        let v2 = Point3::new(0.0, 1.0, 0.0);
+
+        let hit = ray_triangle_intersection(&ray, v0, v1, v2);
+        assert!(hit.is_some(), "Ray should hit the triangle");
+
+        let hit = hit.unwrap();
+        assert!(
+            (hit.distance - 1.0).abs() < 1e-5,
+            "Expected hit distance ~1.0, got {}",
+            hit.distance
+        );
+    }
+
+    #[test]
+    fn test_ray_triangle_miss() {
+        // Ray that misses the triangle (offset in X so it passes beside the triangle)
+        let ray = Ray::new(Point3::new(5.0, 5.0, -1.0), Vector3::new(0.0, 0.0, 1.0));
+        let v0 = Point3::new(-1.0, -1.0, 0.0);
+        let v1 = Point3::new(1.0, -1.0, 0.0);
+        let v2 = Point3::new(0.0, 1.0, 0.0);
+
+        let hit = ray_triangle_intersection(&ray, v0, v1, v2);
+        assert!(hit.is_none(), "Ray should miss the triangle");
+    }
+}

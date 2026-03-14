@@ -282,4 +282,56 @@ mod tests {
         assert!((std_dev[0] - 2.0).abs() < 1e-6);
         assert!((std_dev[1] - 3.0).abs() < 1e-6);
     }
+
+    #[test]
+    fn test_kalman_correct_analytical() {
+        // With identity H, identity P_pre, identity R:
+        //   S = H * P_pre * H^T + R = I + I = 2I
+        //   K = P_pre * H^T * S^{-1} = I * I * (2I)^{-1} = 0.5 * I
+        //   x_post = x_pre + K * (z - H * x_pre) = 0 + 0.5 * (z - 0) = 0.5 * z
+        //
+        // For z = (2, 4): x_post = (1, 2)
+        let mut kf = DynamicKalmanFilter::new(2, 2, 0);
+        kf.meas_matrix = DMatrix::identity(2, 2);
+        kf.state_pre = DVector::from_vec(vec![0.0, 0.0]);
+        kf.error_cov_pre = DMatrix::identity(2, 2);
+        kf.meas_noise_cov = DMatrix::identity(2, 2);
+
+        let z = DVector::from_vec(vec![2.0, 4.0]);
+        kf.correct(&z);
+
+        // Kalman gain should be 0.5 * I
+        assert!(
+            (kf.gain[(0, 0)] - 0.5).abs() < 1e-9,
+            "K[0,0] should be 0.5, got {}",
+            kf.gain[(0, 0)]
+        );
+        assert!(
+            (kf.gain[(1, 1)] - 0.5).abs() < 1e-9,
+            "K[1,1] should be 0.5, got {}",
+            kf.gain[(1, 1)]
+        );
+        assert!(
+            (kf.gain[(0, 1)]).abs() < 1e-9,
+            "K[0,1] should be 0, got {}",
+            kf.gain[(0, 1)]
+        );
+        assert!(
+            (kf.gain[(1, 0)]).abs() < 1e-9,
+            "K[1,0] should be 0, got {}",
+            kf.gain[(1, 0)]
+        );
+
+        // State should move from (0,0) to (1,2)
+        assert!(
+            (kf.state_post[0] - 1.0).abs() < 1e-9,
+            "state_post[0] should be 1.0, got {}",
+            kf.state_post[0]
+        );
+        assert!(
+            (kf.state_post[1] - 2.0).abs() < 1e-9,
+            "state_post[1] should be 2.0, got {}",
+            kf.state_post[1]
+        );
+    }
 }

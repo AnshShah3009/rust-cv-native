@@ -137,6 +137,81 @@ pub struct CgSolver {
     pub tolerance: f64,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cg_solves_simple_system() {
+        // 3x3 SPD tridiagonal matrix: [2,-1,0; -1,2,-1; 0,-1,2]
+        // Solve Ax = b with b = [1, 0, 1]
+        // Known solution: x = [1, 1, 1] (verify: A*[1,1,1] = [2-1, -1+2-1, -1+2] = [1,0,1])
+        let triplets = vec![
+            Triplet {
+                row: 0,
+                col: 0,
+                val: 2.0,
+            },
+            Triplet {
+                row: 0,
+                col: 1,
+                val: -1.0,
+            },
+            Triplet {
+                row: 1,
+                col: 0,
+                val: -1.0,
+            },
+            Triplet {
+                row: 1,
+                col: 1,
+                val: 2.0,
+            },
+            Triplet {
+                row: 1,
+                col: 2,
+                val: -1.0,
+            },
+            Triplet {
+                row: 2,
+                col: 1,
+                val: -1.0,
+            },
+            Triplet {
+                row: 2,
+                col: 2,
+                val: 2.0,
+            },
+        ];
+
+        let a = SparseMatrix::from_triplets(3, 3, &triplets);
+        let b = DVector::from_vec(vec![1.0, 0.0, 1.0]);
+
+        let cpu = cv_hal::cpu::CpuBackend::new().unwrap();
+        let device = ComputeDevice::Cpu(&cpu);
+
+        let solver = CgSolver {
+            max_iters: 100,
+            tolerance: 1e-10,
+        };
+
+        let x = solver
+            .solve(&device, &a, &b)
+            .expect("CG solver should converge");
+
+        let expected = vec![1.0, 1.0, 1.0];
+        for i in 0..3 {
+            assert!(
+                (x[i] - expected[i]).abs() < 1e-6,
+                "x[{}] = {}, expected {}",
+                i,
+                x[i],
+                expected[i]
+            );
+        }
+    }
+}
+
 impl LinearSolver for CgSolver {
     fn solve(
         &self,

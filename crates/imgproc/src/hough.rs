@@ -539,3 +539,68 @@ pub fn hough_lines_p(
 
     line_segments
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{GrayImage, Luma};
+
+    #[test]
+    fn test_hough_lines_detects_horizontal() {
+        // Draw a white horizontal line at row 32 in a 64x64 black image
+        let mut img = GrayImage::new(64, 64);
+        for x in 0..64 {
+            img.put_pixel(x, 32, Luma([255]));
+        }
+        let lines = hough_lines(&img, 1.0, std::f32::consts::PI / 180.0, 10);
+        assert!(!lines.is_empty(), "Hough should detect the horizontal line");
+        // A horizontal line y=32 has theta near PI/2 (90 degrees)
+        let half_pi = std::f32::consts::FRAC_PI_2;
+        let has_horizontal = lines.iter().any(|l| (l.theta - half_pi).abs() < 0.15); // within ~8.6 degrees
+        assert!(
+            has_horizontal,
+            "At least one detected line should have theta near PI/2 (horizontal). \
+             Detected thetas: {:?}",
+            lines.iter().map(|l| l.theta).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_hough_circles_detects_circle() {
+        // Draw a filled white circle (radius 20, center 50,50) in a 100x100
+        // black image. The Canny detector inside hough_circles will find the
+        // sharp boundary between the filled disk and the black background.
+        let size = 100u32;
+        let mut img = GrayImage::new(size, size);
+        let cx = 50.0f32;
+        let cy = 50.0f32;
+        let radius = 20.0f32;
+        for y in 0..size {
+            for x in 0..size {
+                let dx = x as f32 - cx;
+                let dy = y as f32 - cy;
+                if (dx * dx + dy * dy).sqrt() <= radius {
+                    img.put_pixel(x, y, Luma([255]));
+                }
+            }
+        }
+        // Use a low threshold so that even moderate accumulator peaks are
+        // picked up.  The radius search range brackets the true radius.
+        let circles = hough_circles(&img, 15.0, 25.0, 8);
+        assert!(!circles.is_empty(), "Hough should detect the drawn circle");
+        let close_circle = circles.iter().any(|c| {
+            let dx = c.cx - cx;
+            let dy = c.cy - cy;
+            (dx * dx + dy * dy).sqrt() < 5.0
+        });
+        assert!(
+            close_circle,
+            "Detected circle center should be within 5px of (50, 50). \
+             Detected: {:?}",
+            circles
+                .iter()
+                .map(|c| (c.cx, c.cy, c.r))
+                .collect::<Vec<_>>()
+        );
+    }
+}

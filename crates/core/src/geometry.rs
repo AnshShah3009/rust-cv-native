@@ -1418,6 +1418,74 @@ mod tests {
             assert!(r.is_identity(1e-10));
             assert!(t.norm() < 1e-10);
         }
+
+        #[test]
+        fn test_twist_to_se3_rotation_90deg_z() {
+            // Pure rotation of PI/2 about the Z axis.
+            // twist = [omega_x, omega_y, omega_z, v_x, v_y, v_z]
+            //       = [0, 0, PI/2, 0, 0, 0]
+            let half_pi = std::f64::consts::FRAC_PI_2;
+            let twist = Vector6::<f64>::new(0.0, 0.0, half_pi, 0.0, 0.0, 0.0);
+            let (r, t) = twist_to_se3(&twist);
+
+            // Expected rotation matrix for 90-degree rotation about Z:
+            //   [ cos(90)  -sin(90)  0 ]     [ 0  -1  0 ]
+            //   [ sin(90)   cos(90)  0 ]  =  [ 1   0  0 ]
+            //   [    0         0     1 ]     [ 0   0  1 ]
+            let eps = 1e-9;
+            assert!(
+                (r[(0, 0)] - 0.0).abs() < eps,
+                "R[0,0] should be ~0, got {}",
+                r[(0, 0)]
+            );
+            assert!(
+                (r[(0, 1)] - (-1.0)).abs() < eps,
+                "R[0,1] should be ~-1, got {}",
+                r[(0, 1)]
+            );
+            assert!(
+                (r[(0, 2)]).abs() < eps,
+                "R[0,2] should be ~0, got {}",
+                r[(0, 2)]
+            );
+            assert!(
+                (r[(1, 0)] - 1.0).abs() < eps,
+                "R[1,0] should be ~1, got {}",
+                r[(1, 0)]
+            );
+            assert!(
+                (r[(1, 1)] - 0.0).abs() < eps,
+                "R[1,1] should be ~0, got {}",
+                r[(1, 1)]
+            );
+            assert!(
+                (r[(1, 2)]).abs() < eps,
+                "R[1,2] should be ~0, got {}",
+                r[(1, 2)]
+            );
+            assert!(
+                (r[(2, 0)]).abs() < eps,
+                "R[2,0] should be ~0, got {}",
+                r[(2, 0)]
+            );
+            assert!(
+                (r[(2, 1)]).abs() < eps,
+                "R[2,1] should be ~0, got {}",
+                r[(2, 1)]
+            );
+            assert!(
+                (r[(2, 2)] - 1.0).abs() < eps,
+                "R[2,2] should be ~1, got {}",
+                r[(2, 2)]
+            );
+
+            // Pure rotation: translation should be zero
+            assert!(
+                t.norm() < eps,
+                "Translation should be zero for pure rotation, got {:?}",
+                t
+            );
+        }
     }
 
     mod rotated_rect_tests {

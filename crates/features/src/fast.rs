@@ -258,6 +258,33 @@ mod tests {
             "Expected at least 4 corners, found {}",
             kps.len()
         );
+
+        // The white square spans (15,15) to (34,34).  The 4 corners are
+        // approximately (15,15), (34,15), (15,34), (34,34).  Verify at
+        // least one keypoint is near each expected corner.
+        let expected_corners: [(f64, f64); 4] =
+            [(15.0, 15.0), (34.0, 15.0), (15.0, 34.0), (34.0, 34.0)];
+        let tolerance = 5.0;
+
+        for &(ex, ey) in &expected_corners {
+            let has_nearby = kps.keypoints.iter().any(|kp| {
+                let dx = kp.x - ex;
+                let dy = kp.y - ey;
+                (dx * dx + dy * dy).sqrt() <= tolerance
+            });
+            assert!(
+                has_nearby,
+                "Expected a FAST keypoint within {}px of ({}, {}), but none found. \
+                 Detected keypoints: {:?}",
+                tolerance,
+                ex,
+                ey,
+                kps.keypoints
+                    .iter()
+                    .map(|kp| (kp.x, kp.y))
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

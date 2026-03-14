@@ -825,8 +825,13 @@ fn marching_cubes_cell(
     for edge in 0..12 {
         if edge_bits & (1 << edge) != 0 {
             let [c0, c1] = EDGE_VERTICES[edge];
-            vert_list[edge] =
-                vertex_interp(iso_level, &positions[c0], &positions[c1], corners[c0], corners[c1]);
+            vert_list[edge] = vertex_interp(
+                iso_level,
+                &positions[c0],
+                &positions[c1],
+                corners[c0],
+                corners[c1],
+            );
         }
     }
 
@@ -866,4 +871,112 @@ fn marching_cubes_cell(
     }
 
     triangles
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tsdf_integrate_flat_plane() {
+        // Create a TsdfVolume with small voxels
+        let voxel_size = 0.02; // 2cm voxels
+        let truncation = 0.06; // 6cm truncation
+        let mut volume = TSDFVolume::new(voxel_size, truncation);
+        // Depth values already in meters (scale = 1.0)
+        volume = volume.with_depth_scale(1.0);
+
+        // Camera intrinsics (simple pinhole)
+        let intrinsics = CameraIntrinsics {
+            fx: 500.0,
+            fy: 500.0,
+            cx: 32.0,
+            cy: 32.0,
+        };
+
+        // Camera at origin looking down +Z
+        let extrinsics = Matrix4::identity();
+
+        let width: usize = 64;
+        let height: usize = 64;
+
+        // Synthetic depth image: flat plane at z = 1.0m
+        let depth_image: Vec<f32> = vec![1.0; width * height];
+
+        // Build a RuntimeRunner for CPU fallback
+        let runner = cv_runtime::best_runner()
+            .unwrap_or_else(|_| cv_runtime::orchestrator::RuntimeRunner::Sync(cv_hal::DeviceId(0)));
+
+        volume.integrate_ctx(
+            &depth_image,
+            None,
+            &intrinsics,
+            &extrinsics,
+            width,
+            height,
+            &runner,
+        );
+
+        // The TSDF formula in integrate_ctx is: sdf = voxel_camera.z - depth
+        // So: voxels IN FRONT of the surface (z < depth) => negative TSDF
+        //     voxels BEHIND the surface (z > depth) => positive TSDF
+        //     voxels AT the surface (z == depth)    => TSDF near 0
+        //
+        // Ray marching covers [depth - trunc, depth + trunc] along each ray,
+        // which for the center pixel means z in ~[0.94, 1.06].
+
+        let mut near_surface_ok = false;
+        let mut front_negative = false;
+        let mut behind_positive = false;
+
+        for (block_coords, block) in &volume.blocks {
+            for z in 0..VoxelBlock::BLOCK_SIZE {
+                for y in 0..VoxelBlock::BLOCK_SIZE {
+                    for x in 0..VoxelBlock::BLOCK_SIZE {
+                        let local = (x, y, z);
+                        let idx = VoxelBlock::voxel_index(local);
+                        let weight = block.weights[idx];
+                        if weight <= 0.0 {
+                            continue;
+                        }
+                        let tsdf = block.tsdf[idx];
+                        let world = volume.voxel_to_world(*block_coords, local);
+                        let wz = world.z;
+
+                        // Voxels near z=1.0 should have TSDF near 0
+                        if (wz - 1.0).abs() < voxel_size {
+                            if tsdf.abs() < 0.3 {
+                                near_surface_ok = true;
+                            }
+                        }
+                        // Just in front of surface: sdf = z_vox - 1.0 < 0 => negative
+                        if wz > 0.95 && wz < 0.99 {
+                            if tsdf < 0.0 {
+                                front_negative = true;
+                            }
+                        }
+                        // Just behind surface: sdf = z_vox - 1.0 > 0 => positive
+                        if wz > 1.01 && wz < 1.05 {
+                            if tsdf > 0.0 {
+                                behind_positive = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            near_surface_ok,
+            "Expected voxels near z=1.0 to have TSDF near 0"
+        );
+        assert!(
+            front_negative,
+            "Expected voxels in front of z=1.0 surface to have negative TSDF (sdf = z_vox - depth < 0)"
+        );
+        assert!(
+            behind_positive,
+            "Expected voxels behind z=1.0 surface to have positive TSDF (sdf = z_vox - depth > 0)"
+        );
+    }
 }

@@ -365,4 +365,46 @@ mod tests {
             assert!(res.num_iterations > 0);
         }
     }
+
+    #[test]
+    fn test_icp_recovers_known_translation() {
+        // Point-to-plane ICP can only recover translation components that
+        // align with surface normals. Use a bowl shape (z = x^2 + y^2) so
+        // that normals have X, Y, and Z components, enabling recovery of an
+        // X-axis translation.
+        let translation = Vector3::new(0.05, 0.0, 0.0);
+
+        let mut source = PointCloud::new(Vec::new());
+        let mut target = PointCloud::new(Vec::new());
+        let mut target_normals = Vec::new();
+
+        for iy in -10..=10 {
+            for ix in -10..=10 {
+                let x = ix as f32 * 0.05;
+                let y = iy as f32 * 0.05;
+                let z = x * x + y * y; // paraboloid
+                let p = Point3::new(x, y, z);
+
+                source.points.push(p);
+                target.points.push(p + translation);
+
+                // Analytic normal of z = x^2 + y^2: n = normalize(-2x, -2y, 1)
+                let n = Vector3::new(-2.0 * (x + translation.x), -2.0 * (y + translation.y), 1.0)
+                    .normalize();
+                target_normals.push(n);
+            }
+        }
+        target.normals = Some(target_normals);
+
+        let init = Matrix4::identity();
+        let result = registration_icp_point_to_plane(&source, &target, 0.5, &init, 100);
+
+        let res = result.expect("ICP should converge for a simple translation");
+        let recovered_tx = res.transformation[(0, 3)];
+        assert!(
+            (recovered_tx - 0.05).abs() < 0.01,
+            "Expected recovered translation.x ~0.05, got {}",
+            recovered_tx
+        );
+    }
 }
