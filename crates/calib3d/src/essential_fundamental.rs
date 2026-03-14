@@ -110,7 +110,6 @@ pub fn find_essential_mat_ransac(
         threshold: thresh_norm * thresh_norm,
         max_iterations: max_iters,
         confidence: 0.99,
-        min_sample_size: 8,
     };
 
     let ransac = Ransac::new(config);
@@ -136,7 +135,6 @@ pub fn find_fundamental_mat_ransac(
         threshold: threshold_px * threshold_px,
         max_iterations: max_iters,
         confidence: 0.99,
-        min_sample_size: 8,
     };
 
     let ransac = Ransac::new(config);
@@ -369,4 +367,21 @@ fn sampson_error(e: &Matrix3<f64>, p1: &Point2<f64>, p2: &Point2<f64>) -> f64 {
     } else {
         (x2tex1 * x2tex1) / denom
     }
+}
+
+/// Sample unique random indices for RANSAC.
+#[allow(dead_code)]
+fn sample_unique_indices(n: usize, k: usize, seed: u64) -> Vec<usize> {
+    let mut out = Vec::with_capacity(k);
+    let mut used = vec![false; n];
+    let mut state = seed ^ 0x9E3779B97F4A7C15;
+    while out.len() < k {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let idx = (state as usize) % n;
+        if !used[idx] {
+            used[idx] = true;
+            out.push(idx);
+        }
+    }
+    out
 }
