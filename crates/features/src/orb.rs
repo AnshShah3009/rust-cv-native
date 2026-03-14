@@ -510,6 +510,8 @@ pub fn detect_and_compute_ctx<S: Storage<u8> + cv_core::StorageFactory<u8> + 'st
             )
             .unwrap();
             for (i, &angle) in angles.iter().enumerate() {
+                // GPU orientation shader returns radians; keep as radians
+                // for the GPU brief shader (WGSL cos/sin expect radians)
                 kps_f32[i].angle = angle;
                 kps_f32[i].octave = level as i32;
             }
@@ -526,7 +528,7 @@ pub fn detect_and_compute_ctx<S: Storage<u8> + cv_core::StorageFactory<u8> + 'st
                     kp_f32.y as f64 * scale as f64,
                 )
                 .with_size(orb.patch_size as f64 * scale as f64)
-                .with_angle(kp_f32.angle as f64)
+                .with_angle((kp_f32.angle as f64).to_degrees())
                 .with_response(kp_f32.response as f64)
                 .with_octave(level as i32);
 
@@ -731,7 +733,7 @@ fn compute_orb_descriptor(
             let val2 = image.get_pixel(px2 as u32, py2 as u32)[0];
 
             if val1 < val2 {
-                descriptor_data[byte_idx] |= 1 << (7 - bit_idx);
+                descriptor_data[byte_idx] |= 1 << bit_idx;
             }
         }
         // Always advance bit position to keep alignment consistent across keypoints
