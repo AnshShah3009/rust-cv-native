@@ -64,35 +64,66 @@ struct ShmHeader {
     slot_size: AtomicU32,
 }
 
-/// Shared-memory based [`LoadCoordinator`](super::LoadCoordinator).
-///
-/// Uses a memory-mapped file with fixed-size slots (one per process) for
-/// lock-free load reporting. Suitable for low-latency coordination on a
-/// single machine.
 pub struct ShmCoordinator {
     mmap: memmap2::MmapMut,
     slot_index: usize,
+    #[allow(dead_code)]
+    pid: u32,
     path: std::path::PathBuf,
 }
 
 impl ShmCoordinator {
-    /// Open or create shared memory region `name` with the given byte `size`.
     pub fn new(name: &str, size: usize) -> io::Result<Self> {
         let path = Self::get_shm_path(name);
+        let magic: u32 = 0x43565254;
 
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)?;
+        // Check if an existing file has the correct magic header before truncating.
+        // This avoids wiping other processes' data in the shared memory region.
+        let needs_init = if path.exists() {
+            let existing = std::fs::OpenOptions::new().read(true).open(&path);
+            match existing {
+                Ok(f) => {
+                    let meta = f.metadata()?;
+                    if meta.len() >= size as u64 {
+                        let mmap = unsafe { memmap2::MmapOptions::new().map(&f)? };
+                        if mmap.len() >= std::mem::size_of::<ShmHeader>() {
+                            let hdr = unsafe { &*(mmap.as_ptr() as *const ShmHeader) };
+                            hdr.magic.load(Ordering::Relaxed) != magic
+                        } else {
+                            true
+                        }
+                    } else {
+                        true
+                    }
+                }
+                Err(_) => true,
+            }
+        } else {
+            true
+        };
 
-        file.set_len(size as u64)?;
+        let file = if needs_init {
+            let f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&path)?;
+            f.set_len(size as u64)?;
+            f
+        } else {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)?
+        };
 
         let mut mmap = unsafe { memmap2::MmapOptions::new().map_mut(&file)? };
 
-        for byte in mmap.iter_mut() {
-            *byte = 0;
+        if needs_init {
+            for byte in mmap.iter_mut() {
+                *byte = 0;
+            }
         }
 
         let header = Self::header_mut(&mut mmap).ok_or_else(|| {
@@ -101,7 +132,6 @@ impl ShmCoordinator {
                 "Mmap too small for shared memory header",
             )
         })?;
-        let magic = 0x43565254;
 
         if header.magic.load(Ordering::Relaxed) != magic {
             header.magic.store(magic, Ordering::Relaxed);
@@ -114,11 +144,13 @@ impl ShmCoordinator {
                 .store(std::mem::size_of::<LoadSlot>() as u32, Ordering::Relaxed);
         }
 
-        let slot_index = Self::find_or_allocate_slot(&mut mmap, std::process::id())?;
+        let pid = std::process::id();
+        let slot_index = Self::find_or_allocate_slot(&mut mmap, pid)?;
 
         Ok(Self {
             mmap,
             slot_index,
+            pid,
             path,
         })
     }
@@ -202,7 +234,7 @@ impl ShmCoordinator {
         let slot_size = std::mem::size_of::<LoadSlot>();
         let offset = header_size + self.slot_index * slot_size;
 
-        debug_assert!(
+        assert!(
             offset + slot_size <= self.mmap.len(),
             "Slot offset out of bounds: {} + {} > {}",
             offset,
