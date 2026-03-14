@@ -56,10 +56,9 @@ harness = false
 path = "benches/normals.rs"
 
 [[bench]]
-name = "cubecl_vs_wgsl"
+name = "cubecl_vs_wgpu"
 harness = false
-path = "benches/cubecl_vs_wgsl.rs"
-required-features = ["cubecl"]
+path = "benches/cubecl_vs_wgpu.rs"
 
 [workspace]
 resolver = "2"
