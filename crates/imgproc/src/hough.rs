@@ -528,12 +528,10 @@ pub fn hough_lines_p(
                 }
             }
         } else {
-            // No line found: unvote this seed point's contributions to keep
-            // the accumulator reflecting only unprocessed edge points.
+            // No line found for this seed: keep its votes in the accumulator
+            // so future seeds can accumulate to the threshold.  Only mark
+            // the point as processed so it won't be picked as seed again.
             active[y * width + x] = false;
-            ppht_unvote(
-                x, y, &mut acc, num_rho, num_theta, rho_res, theta_res, max_rho,
-            );
         }
     }
 
@@ -601,6 +599,48 @@ mod tests {
                 .iter()
                 .map(|c| (c.cx, c.cy, c.r))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_hough_lines_p_detects_segment() {
+        // Draw a white rectangle on a black background. Canny (called
+        // internally) will produce edges at the rectangle boundary.
+        let mut img = GrayImage::new(200, 200);
+        for y in 80..120 {
+            for x in 20..180 {
+                img.put_pixel(x, y, Luma([255]));
+            }
+        }
+
+        let segments = hough_lines_p(
+            &img,
+            1.0,                          // rho_res
+            std::f32::consts::PI / 180.0, // theta_res (1 degree)
+            3,                            // threshold
+            10.0,                         // min_line_length
+            20.0,                         // max_line_gap
+        );
+
+        assert!(
+            !segments.is_empty(),
+            "PPHT should detect at least one segment on the rectangle edges"
+        );
+
+        // Verify the longest segment has reasonable length
+        let longest = segments
+            .iter()
+            .max_by(|a, b| {
+                let la = (a.x2 - a.x1).hypot(a.y2 - a.y1);
+                let lb = (b.x2 - b.x1).hypot(b.y2 - b.y1);
+                la.partial_cmp(&lb).unwrap()
+            })
+            .unwrap();
+        let seg_len = (longest.x2 - longest.x1).hypot(longest.y2 - longest.y1);
+        assert!(
+            seg_len >= 10.0,
+            "Longest segment length {:.1} should be >= 10px",
+            seg_len
         );
     }
 }

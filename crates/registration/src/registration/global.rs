@@ -54,97 +54,324 @@ pub struct FPFHFeature {
     pub histogram: [f32; 33], // 33-dimensional histogram
 }
 
-/// Compute FPFH features for point cloud
-pub fn compute_fpfh_features(_cloud: &PointCloud, _radius: f32) -> Result<Vec<FPFHFeature>> {
-    Err(Error::RuntimeError(
-        "FPFH features are currently stubbed".to_string(),
-    ))
-}
-
-/// Compute Simple Point Feature Histogram
-#[allow(dead_code)]
-fn compute_spfh(
-    _point: &Point3<f32>,
-    normal: Option<&Vector3<f32>>,
-    neighbors: &[(Point3<f32>, usize, f32)],
-    _points: &[Point3<f32>],
-) -> [f32; 33] {
-    let mut histogram = [0.0f32; 33];
-
-    if neighbors.len() < 2 {
-        return histogram;
+/// Compute FPFH features for a point cloud.
+///
+/// Implements the full FPFH pipeline from Rusu (ICRA 2009):
+/// 1. Estimate normals if not already present (via PCA over kNN).
+/// 2. Build a voxel-grid spatial index for radius search.
+/// 3. Compute SPFH (Simplified Point Feature Histograms) for every point.
+/// 4. Weight neighbour SPFHs to produce FPFH for every point.
+///
+/// Returns one 33-bin feature vector per point.
+pub fn compute_fpfh_features(cloud: &PointCloud, radius: f32) -> Result<Vec<FPFHFeature>> {
+    let n = cloud.points.len();
+    if n == 0 {
+        return Ok(Vec::new());
     }
 
-    let normal = normal.copied().unwrap_or_else(Vector3::z);
+    // --- normals ---
+    // If the cloud already has normals, use them; otherwise estimate via PCA.
+    let normals: Vec<Vector3<f32>> = if let Some(ref normals) = cloud.normals {
+        normals.clone()
+    } else {
+        estimate_normals_pca(&cloud.points, radius)
+    };
 
-    for (_neighbor_point, neighbor_idx, _dist) in neighbors {
-        if *neighbor_idx >= _points.len() {
+    if normals.len() != n {
+        return Err(Error::RuntimeError(
+            "Normal count does not match point count".to_string(),
+        ));
+    }
+
+    let points = &cloud.points;
+    let radius_sq = radius * radius;
+
+    // --- voxel-grid spatial index for radius search ---
+    let voxel_size = radius;
+    let mut voxel_grid: std::collections::HashMap<(i32, i32, i32), Vec<usize>> =
+        std::collections::HashMap::with_capacity(n / 4 + 1);
+
+    for (i, p) in points.iter().enumerate() {
+        let vx = (p.x / voxel_size).floor() as i32;
+        let vy = (p.y / voxel_size).floor() as i32;
+        let vz = (p.z / voxel_size).floor() as i32;
+        voxel_grid.entry((vx, vy, vz)).or_default().push(i);
+    }
+
+    // Helper: collect all neighbours within `radius` of `center` (excluding self).
+    let radius_search = |center: &Point3<f32>, self_idx: usize| -> Vec<usize> {
+        let vx = (center.x / voxel_size).floor() as i32;
+        let vy = (center.y / voxel_size).floor() as i32;
+        let vz = (center.z / voxel_size).floor() as i32;
+
+        let mut result = Vec::new();
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(indices) = voxel_grid.get(&(vx + dx, vy + dy, vz + dz)) {
+                        for &idx in indices {
+                            if idx != self_idx {
+                                let p = &points[idx];
+                                let dist_sq = (center.x - p.x).powi(2)
+                                    + (center.y - p.y).powi(2)
+                                    + (center.z - p.z).powi(2);
+                                if dist_sq <= radius_sq {
+                                    result.push(idx);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        result
+    };
+
+    // --- Step 1: Compute SPFH for every point ---
+    let all_spfh: Vec<[f32; 33]> = (0..n)
+        .map(|i| {
+            let neighbors = radius_search(&points[i], i);
+            compute_spfh(&points[i], &normals[i], &neighbors, points, &normals)
+        })
+        .collect();
+
+    // --- Step 2: Weight SPFHs to produce FPFH ---
+    let fpfh_features: Vec<FPFHFeature> = (0..n)
+        .map(|i| {
+            let neighbors = radius_search(&points[i], i);
+            let histogram = weight_spfh(&points[i], &all_spfh[i], &neighbors, points, &all_spfh);
+            FPFHFeature { histogram }
+        })
+        .collect();
+
+    Ok(fpfh_features)
+}
+
+/// Estimate normals via PCA over radius-based neighbours.
+///
+/// This is a self-contained fallback so the registration crate does not
+/// depend on `cv-point-cloud` or `cv-3d`.
+fn estimate_normals_pca(points: &[Point3<f32>], radius: f32) -> Vec<Vector3<f32>> {
+    let n = points.len();
+    let mut normals = vec![Vector3::z(); n];
+
+    if n == 0 {
+        return normals;
+    }
+
+    let voxel_size = radius;
+    let radius_sq = radius * radius;
+
+    let mut voxel_grid: std::collections::HashMap<(i32, i32, i32), Vec<usize>> =
+        std::collections::HashMap::with_capacity(n / 4 + 1);
+
+    for (i, p) in points.iter().enumerate() {
+        let vx = (p.x / voxel_size).floor() as i32;
+        let vy = (p.y / voxel_size).floor() as i32;
+        let vz = (p.z / voxel_size).floor() as i32;
+        voxel_grid.entry((vx, vy, vz)).or_default().push(i);
+    }
+
+    for (i, center) in points.iter().enumerate() {
+        let vx = (center.x / voxel_size).floor() as i32;
+        let vy = (center.y / voxel_size).floor() as i32;
+        let vz = (center.z / voxel_size).floor() as i32;
+
+        let mut cov = nalgebra::Matrix3::<f32>::zeros();
+        let mut centroid = Vector3::zeros();
+        let mut count = 0u32;
+
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(indices) = voxel_grid.get(&(vx + dx, vy + dy, vz + dz)) {
+                        for &idx in indices {
+                            let p = &points[idx];
+                            let dist_sq = (center.x - p.x).powi(2)
+                                + (center.y - p.y).powi(2)
+                                + (center.z - p.z).powi(2);
+                            if dist_sq <= radius_sq {
+                                centroid += p.coords;
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if count < 3 {
+            continue; // keep default (0,0,1)
+        }
+
+        centroid /= count as f32;
+
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(indices) = voxel_grid.get(&(vx + dx, vy + dy, vz + dz)) {
+                        for &idx in indices {
+                            let p = &points[idx];
+                            let dist_sq = (center.x - p.x).powi(2)
+                                + (center.y - p.y).powi(2)
+                                + (center.z - p.z).powi(2);
+                            if dist_sq <= radius_sq {
+                                let diff = p.coords - centroid;
+                                cov += diff * diff.transpose();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // The normal is the eigenvector corresponding to the smallest eigenvalue.
+        let eig = cov.symmetric_eigen();
+        let mut min_idx = 0;
+        let mut min_val = eig.eigenvalues[0].abs();
+        for k in 1..3 {
+            if eig.eigenvalues[k].abs() < min_val {
+                min_val = eig.eigenvalues[k].abs();
+                min_idx = k;
+            }
+        }
+
+        let mut normal = eig.eigenvectors.column(min_idx).into_owned();
+        let norm = normal.norm();
+        if norm > 1e-6 {
+            normal /= norm;
+        } else {
+            normal = Vector3::z();
+        }
+
+        // Orient towards positive-z half-space (convention)
+        if normal.z < 0.0 {
+            normal = -normal;
+        }
+
+        normals[i] = normal;
+    }
+
+    normals
+}
+
+/// Compute Simple Point Feature Histogram for a single point.
+///
+/// Implements the SPFH computation from Rusu (ICRA 2009) using the Darboux
+/// frame to compute three angular features (alpha, phi, theta) for each
+/// pair (source_point, neighbor), then bins them into an 11-bin histogram
+/// per feature (33 bins total).
+fn compute_spfh(
+    point: &Point3<f32>,
+    normal: &Vector3<f32>,
+    neighbors: &[usize],
+    points: &[Point3<f32>],
+    normals: &[Vector3<f32>],
+) -> [f32; 33] {
+    let mut histogram = [0.0f32; 33];
+    let mut count = 0u32;
+
+    for &neighbor_idx in neighbors {
+        if neighbor_idx >= points.len() {
             continue;
         }
 
-        let neighbor = &_points[*neighbor_idx];
-        let diff = neighbor - _point;
-        let dist = diff.norm();
+        let neighbor = &points[neighbor_idx];
+        let d = neighbor - point;
+        let dist = d.norm();
 
         if dist < 1e-6 {
             continue;
         }
 
-        // Compute Darboux frame features
-        let u = normal;
-        let v = diff.cross(&u).normalize();
+        let n_target = &normals[neighbor_idx];
+
+        // Darboux frame (Rusu ICRA 2009):
+        //   u = n_source
+        //   v = u x (p_target - p_source) / ||p_target - p_source||
+        //   w = u x v
+        let u = *normal;
+        let v_raw = u.cross(&d);
+        let v_norm = v_raw.norm();
+        if v_norm < 1e-6 {
+            continue;
+        }
+        let v = v_raw / v_norm;
         let w = u.cross(&v);
 
-        // Compute angles
-        let diff_vec = neighbor.coords - _point.coords;
-        let alpha = v.dot(&diff_vec) / dist;
-        let phi = u.dot(&diff_vec) / dist;
-        let theta = (u.dot(&diff_vec) / dist).atan2(w.dot(&diff_vec));
+        // Angular features:
+        //   alpha = v . n_target
+        //   phi   = u . d / ||d||
+        //   theta = atan2(w . n_target, u . n_target)
+        let alpha = v.dot(n_target);
+        let phi = u.dot(&d) / dist;
+        let theta = (w.dot(n_target)).atan2(u.dot(n_target));
 
-        // Bin the features (simplified - 11 bins per feature)
-        let alpha_bin = ((alpha + 1.0) * 5.5).clamp(0.0, 10.0) as usize;
-        let phi_bin = ((phi + 1.0) * 5.5).clamp(0.0, 10.0) as usize;
-        let theta_bin = ((theta + std::f32::consts::PI) * 11.0 / (2.0 * std::f32::consts::PI))
+        // Bin into 11 bins per feature
+        // alpha in [-1, 1], phi in [-1, 1], theta in [-PI, PI]
+        let alpha_bin = ((alpha + 1.0) * 5.5).floor().clamp(0.0, 10.0) as usize;
+        let phi_bin = ((phi + 1.0) * 5.5).floor().clamp(0.0, 10.0) as usize;
+        let theta_bin = ((theta + std::f32::consts::PI) * (11.0 / (2.0 * std::f32::consts::PI)))
+            .floor()
             .clamp(0.0, 10.0) as usize;
 
         histogram[alpha_bin] += 1.0;
         histogram[11 + phi_bin] += 1.0;
         histogram[22 + theta_bin] += 1.0;
+        count += 1;
     }
 
-    // Normalize
-    let sum: f32 = histogram.iter().sum();
-    if sum > 0.0 {
+    // Normalize by count (each bin becomes a fraction)
+    if count > 0 {
+        let inv_k = 1.0 / count as f32;
         for h in &mut histogram {
-            *h /= sum;
+            *h *= inv_k;
         }
     }
 
     histogram
 }
 
-/// Weight SPFH with neighbors to get FPFH
-#[allow(dead_code)]
+/// Weight SPFH with neighbors to produce FPFH (Rusu ICRA 2009).
+///
+/// FPFH(p) = SPFH(p) + (1/k) * sum_{i=1}^{k} (1/||p - p_i||) * SPFH(p_i)
+///
+/// where k is the number of neighbors and p_i are the neighbor points.
 fn weight_spfh(
-    _point_idx: usize,
-    spfh: &[f32; 33],
-    neighbors: &[(Point3<f32>, usize, f32)],
-    _points: &[Point3<f32>],
-    _radius: f32,
+    point: &Point3<f32>,
+    own_spfh: &[f32; 33],
+    neighbors: &[usize],
+    points: &[Point3<f32>],
+    all_spfh: &[[f32; 33]],
 ) -> [f32; 33] {
-    let mut fpfh = *spfh;
+    let mut fpfh = *own_spfh;
 
-    // Weight by inverse distance (simplified)
-    for (_p, _idx, _dist) in neighbors {
-        // In full implementation, would query neighbor's SPFH and weight
-        // For now, just use the local SPFH
+    let k = neighbors.len();
+    if k == 0 {
+        return fpfh;
     }
 
-    // Renormalize
+    let inv_k = 1.0 / k as f32;
+
+    for &neighbor_idx in neighbors {
+        let dist = (points[neighbor_idx] - point).norm();
+        if dist < 1e-6 {
+            continue;
+        }
+
+        let w = inv_k / dist;
+        let neighbor_spfh = &all_spfh[neighbor_idx];
+        for bin in 0..33 {
+            fpfh[bin] += neighbor_spfh[bin] * w;
+        }
+    }
+
+    // Normalize to sum to 100 (standard FPFH convention)
     let sum: f32 = fpfh.iter().sum();
-    if sum > 0.0 {
+    if sum > 1e-6 {
+        let scale = 100.0 / sum;
         for h in &mut fpfh {
-            *h /= sum;
+            *h *= scale;
         }
     }
 
@@ -254,25 +481,228 @@ pub fn registration_ransac_based_on_feature_matching(
     })
 }
 
-/// Fast Global Registration (FGR) - alternative to RANSAC
+/// Fast Global Registration (FGR) using graduated non-convexity.
+///
+/// Implements Zhou, Park & Koltun (ECCV 2016):
+/// 1. Find feature correspondences via nearest-neighbour in FPFH space.
+/// 2. Graduated optimisation with a scaled Geman-McClure kernel:
+///    - Start with a large `mu` (convex surrogate of the robust cost).
+///    - At each iteration compute line-process weights
+///      `l_ij = mu / (mu + r_ij^2)` and solve a weighted least-squares
+///      rigid transform via SVD.
+///    - Shrink `mu` by a factor (div_factor) each outer iteration,
+///      gradually sharpening outlier rejection.
 pub fn registration_fgr_based_on_feature_matching(
     source: &PointCloud,
     target: &PointCloud,
     source_features: &[FPFHFeature],
     target_features: &[FPFHFeature],
-    _option: FastGlobalRegistrationOption,
+    option: FastGlobalRegistrationOption,
 ) -> Result<GlobalRegistrationResult> {
-    // FGR uses line process optimization instead of RANSAC
-    // Placeholder - full implementation would optimize line process weights
-    registration_ransac_based_on_feature_matching(
-        source,
-        target,
-        source_features,
-        target_features,
-        0.05,
-        3,
-        1000,
-    )
+    // --- 1. Feature matching: nearest neighbour in feature space ---
+    let mut correspondences: Vec<(usize, usize)> = Vec::new();
+
+    for (i, sf) in source_features.iter().enumerate() {
+        let mut min_dist = f32::MAX;
+        let mut min_idx = 0;
+        for (j, tf) in target_features.iter().enumerate() {
+            let dist: f32 = sf
+                .histogram
+                .iter()
+                .zip(tf.histogram.iter())
+                .map(|(a, b)| (a - b).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            if dist < min_dist {
+                min_dist = dist;
+                min_idx = j;
+            }
+        }
+        correspondences.push((i, min_idx));
+    }
+
+    if correspondences.len() < 3 {
+        return Err(Error::RuntimeError(
+            "Insufficient feature correspondences for FGR".to_string(),
+        ));
+    }
+
+    // Limit to top correspondences by feature distance to keep it tractable
+    let max_corr = option.maximum_tuple_count.min(correspondences.len());
+    // Re-sort by feature distance to trim
+    let mut scored: Vec<(usize, usize, f32)> = correspondences
+        .iter()
+        .map(|&(si, ti)| {
+            let dist: f32 = source_features[si]
+                .histogram
+                .iter()
+                .zip(target_features[ti].histogram.iter())
+                .map(|(a, b)| (a - b).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            (si, ti, dist)
+        })
+        .collect();
+    scored.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(max_corr);
+
+    let corr_pairs: Vec<(usize, usize)> = scored.iter().map(|&(s, t, _)| (s, t)).collect();
+
+    // --- 2. Graduated optimisation ---
+    let mut transformation = Matrix4::<f32>::identity();
+    let div_factor = 1.4_f64; // mu shrink factor per outer iteration
+    let max_corr_dist = option.maximum_correspondence_distance;
+
+    // Initialise mu: start large so the surrogate is nearly convex.
+    // Use the max pairwise distance squared as the initial scale.
+    let mut mu: f64 = {
+        let mut max_sq: f64 = 0.0;
+        for &(si, ti) in &corr_pairs {
+            let sp = source.points[si];
+            let tp = target.points[ti];
+            let d = ((sp.x - tp.x).powi(2) + (sp.y - tp.y).powi(2) + (sp.z - tp.z).powi(2)) as f64;
+            if d > max_sq {
+                max_sq = d;
+            }
+        }
+        max_sq.max(1.0)
+    };
+
+    let outer_iterations = option.iteration_number;
+
+    for _outer in 0..outer_iterations {
+        // Compute residuals and line-process weights
+        let mut weighted_correspondences: Vec<(usize, usize, f32)> = Vec::new();
+
+        for &(si, ti) in &corr_pairs {
+            let sp = transformation.transform_point(&source.points[si]);
+            let tp = target.points[ti];
+            let r_sq =
+                ((sp.x - tp.x).powi(2) + (sp.y - tp.y).powi(2) + (sp.z - tp.z).powi(2)) as f64;
+
+            // Line process weight: l_ij = mu / (mu + r_ij^2)
+            let weight = (mu / (mu + r_sq)) as f32;
+
+            if weight > 1e-4 {
+                weighted_correspondences.push((si, ti, weight));
+            }
+        }
+
+        if weighted_correspondences.len() < 3 {
+            break;
+        }
+
+        // Solve weighted least squares for the rigid transform
+        if let Some(new_transform) = compute_weighted_transformation(
+            source,
+            target,
+            &weighted_correspondences,
+            &transformation,
+        ) {
+            transformation = new_transform;
+        }
+
+        // Shrink mu
+        mu /= div_factor;
+
+        // Early exit if mu is tiny
+        if mu < (max_corr_dist * max_corr_dist * 1e-6) as f64 {
+            break;
+        }
+    }
+
+    // --- 3. Evaluate final result ---
+    let (fitness, rmse) =
+        evaluate_registration(source, target, &transformation, max_corr_dist as f32);
+
+    // Collect inlier correspondences
+    let inlier_correspondences: Vec<(usize, usize)> = corr_pairs
+        .iter()
+        .filter(|&&(si, ti)| {
+            let sp = transformation.transform_point(&source.points[si]);
+            let tp = target.points[ti];
+            (sp - tp).norm() < max_corr_dist as f32
+        })
+        .copied()
+        .collect();
+
+    Ok(GlobalRegistrationResult {
+        transformation,
+        fitness,
+        inlier_rmse: rmse,
+        correspondences: inlier_correspondences,
+    })
+}
+
+/// Compute a rigid transform from weighted correspondences via SVD.
+///
+/// Each correspondence `(src_idx, tgt_idx, weight)` contributes to the
+/// covariance matrix with the given weight. The source points are first
+/// transformed by `current_transform` so that incremental updates work.
+fn compute_weighted_transformation(
+    source: &PointCloud,
+    target: &PointCloud,
+    correspondences: &[(usize, usize, f32)],
+    current_transform: &Matrix4<f32>,
+) -> Option<Matrix4<f32>> {
+    if correspondences.len() < 3 {
+        return None;
+    }
+
+    let mut total_weight: f32 = 0.0;
+    let mut source_centroid = Vector3::<f32>::zeros();
+    let mut target_centroid = Vector3::<f32>::zeros();
+
+    for &(src_idx, tgt_idx, w) in correspondences {
+        let sp = current_transform
+            .transform_point(&source.points[src_idx])
+            .coords;
+        let tp = target.points[tgt_idx].coords;
+        source_centroid += sp * w;
+        target_centroid += tp * w;
+        total_weight += w;
+    }
+
+    if total_weight < 1e-6 {
+        return None;
+    }
+
+    source_centroid /= total_weight;
+    target_centroid /= total_weight;
+
+    // Weighted covariance
+    let mut covariance = nalgebra::Matrix3::<f32>::zeros();
+    for &(src_idx, tgt_idx, w) in correspondences {
+        let sp = current_transform
+            .transform_point(&source.points[src_idx])
+            .coords
+            - source_centroid;
+        let tp = target.points[tgt_idx].coords - target_centroid;
+        covariance += (tp * sp.transpose()) * w;
+    }
+
+    // SVD to find rotation
+    let svd = covariance.svd(true, true);
+    let u = svd.u?;
+    let vt = svd.v_t?;
+
+    let mut rotation = u * vt;
+    if rotation.determinant() < 0.0 {
+        let mut u_corrected = u;
+        u_corrected.set_column(2, &(u.column(2) * -1.0));
+        rotation = u_corrected * vt;
+    }
+
+    let translation = target_centroid - rotation * source_centroid;
+
+    // Build the full 4x4 transformation.
+    // Since source points were already transformed by `current_transform`, the
+    // returned matrix maps the *original* source directly to the target frame.
+    let mut delta = Matrix4::identity();
+    delta.fixed_view_mut::<3, 3>(0, 0).copy_from(&rotation);
+    delta.fixed_view_mut::<3, 1>(0, 3).copy_from(&translation);
+
+    Some(delta * current_transform)
 }
 
 /// Options for Fast Global Registration

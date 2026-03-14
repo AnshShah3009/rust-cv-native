@@ -768,4 +768,108 @@ mod tests {
         // Should detect rightward motion
         assert!(u > 0.0, "Expected positive horizontal flow");
     }
+
+    #[test]
+    fn test_optical_flow_lk_accuracy() {
+        // Create a textured patch and shift it by (5, 0) pixels.
+        // Track a point in the center and verify displacement is ~5px.
+        let width = 120u32;
+        let height = 120u32;
+        let shift = 5i32;
+
+        // Build a checkerboard-like texture so gradients are well-defined.
+        let mut prev = GrayImage::new(width, height);
+        let mut next = GrayImage::new(width, height);
+
+        for y in 0..height {
+            for x in 0..width {
+                // 8x8 checkerboard pattern
+                let cx = (x / 8) % 2;
+                let cy = (y / 8) % 2;
+                let val = if cx ^ cy == 1 { 200u8 } else { 55u8 };
+                prev.put_pixel(x, y, Luma([val]));
+            }
+        }
+
+        // Shift entire texture rightward by `shift` pixels
+        for y in 0..height {
+            for x in 0..width {
+                let sx = (x as i32 - shift).clamp(0, width as i32 - 1) as u32;
+                let val = prev.get_pixel(sx, y)[0];
+                next.put_pixel(x, y, Luma([val]));
+            }
+        }
+
+        let lk = LucasKanade::new()
+            .with_window_size(21)
+            .with_pyramid_levels(3);
+        let point = (60.0f32, 60.0f32);
+        let tracked = lk.track_point(&prev, &next, point);
+
+        assert!(tracked.is_some(), "LK should successfully track the point");
+        let (nx, _ny) = tracked.unwrap();
+        let dx = nx - point.0;
+        println!(
+            "LK tracked ({:.1},{:.1}) -> ({:.1},{:.1}), dx={:.2}",
+            point.0, point.1, nx, _ny, dx
+        );
+        assert!(
+            (dx - shift as f32).abs() < 2.0,
+            "Tracked horizontal displacement {:.2} should be within 2px of {}",
+            dx,
+            shift
+        );
+    }
+
+    #[test]
+    fn test_farneback_flow_magnitude() {
+        // Shift a square rightward by 10px and verify the Farneback dense
+        // flow field detects positive horizontal motion. We sample the
+        // overlapping interior of the square in both frames and check that
+        // mean flow is positive and that the max flow magnitude exceeds 1px.
+        let shift = 10u32;
+        let (prev, next) = create_moving_square((30, 40), (30 + shift, 40));
+
+        let fb = Farneback::new().with_pyramid_levels(2).with_window_size(11);
+        let flow = fb.compute(&prev, &next).unwrap();
+
+        // Sample a strip in the overlap region of the two square positions
+        let mut sum_u = 0.0f64;
+        let mut count = 0u32;
+        for y in 45..55 {
+            for x in (30 + shift)..50 {
+                let (u, _v) = flow.get_motion(x, y);
+                sum_u += u as f64;
+                count += 1;
+            }
+        }
+        let mean_u = sum_u / count as f64;
+
+        // Collect magnitudes only for pixels that have finite, moderate flow
+        let mag = flow.magnitude();
+        let valid_mags: Vec<f32> = mag
+            .iter()
+            .copied()
+            .filter(|m| m.is_finite() && *m < 1e6)
+            .collect();
+        let max_valid_mag = valid_mags.iter().cloned().fold(0.0f32, f32::max);
+
+        println!(
+            "Farneback mean horizontal flow in shifted region: {:.2}, max valid magnitude: {:.2}",
+            mean_u, max_valid_mag
+        );
+        // The dense flow should detect positive horizontal motion in the shifted region
+        assert!(
+            mean_u > 0.0,
+            "Mean horizontal flow {:.2} in shifted region should be positive",
+            mean_u,
+        );
+        // The maximum valid flow magnitude should be substantial (> 1px)
+        assert!(
+            max_valid_mag > 1.0,
+            "Max valid flow magnitude {:.2} should be > 1.0 for a {}-px shift",
+            max_valid_mag,
+            shift
+        );
+    }
 }
