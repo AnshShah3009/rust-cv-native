@@ -11,6 +11,8 @@
 //! The KCF and MOSSE trackers operate on [`CpuTensor`] frames via the [`ObjectTracker`] trait,
 //! while the legacy [`Tracker`] trait operates on [`GrayImage`] frames.
 
+#![allow(deprecated)]
+
 use crate::Result;
 use cv_core::{CpuTensor, Error, Float};
 use image::GrayImage;
@@ -340,9 +342,100 @@ fn complex_div(a: Complex, b: Complex) -> Complex {
     )
 }
 
-/// 1-D DFT (not in-place, O(n^2) -- fine for small n).
+/// Returns the next power of two >= n.
+fn next_power_of_two(n: usize) -> usize {
+    if n == 0 {
+        return 1;
+    }
+    n.next_power_of_two()
+}
+
+/// Cooley-Tukey radix-2 FFT (in-place, O(n log n)).
+///
+/// `buf` must have a power-of-two length.  When `inverse` is true the inverse
+/// DFT is computed (including the 1/N scaling).
+fn fft_radix2(buf: &mut [Complex], inverse: bool) {
+    let n = buf.len();
+    debug_assert!(
+        n.is_power_of_two(),
+        "fft_radix2 requires power-of-two length"
+    );
+    if n <= 1 {
+        return;
+    }
+
+    // Bit-reversal permutation
+    let mut j: usize = 0;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j ^= bit;
+        if i < j {
+            buf.swap(i, j);
+        }
+    }
+
+    // Butterfly stages
+    let sign = if inverse { 1.0 } else { -1.0 };
+    let mut len = 2;
+    while len <= n {
+        let half = len / 2;
+        let angle_step = sign * 2.0 * std::f64::consts::PI / len as f64;
+        // Principal twiddle factor for this stage
+        let wn = (angle_step.cos(), angle_step.sin());
+
+        let mut start = 0;
+        while start < n {
+            let mut w: Complex = (1.0, 0.0);
+            for k in 0..half {
+                let u = buf[start + k];
+                let t = complex_mul(w, buf[start + k + half]);
+                buf[start + k] = (u.0 + t.0, u.1 + t.1);
+                buf[start + k + half] = (u.0 - t.0, u.1 - t.1);
+                w = complex_mul(w, wn);
+            }
+            start += len;
+        }
+        len <<= 1;
+    }
+
+    // Scale for inverse
+    if inverse {
+        let scale = 1.0 / n as f64;
+        for v in buf.iter_mut() {
+            v.0 *= scale;
+            v.1 *= scale;
+        }
+    }
+}
+
+/// 1-D DFT that uses Cooley-Tukey radix-2 FFT when the length is a power of
+/// two, and falls back to O(n^2) DFT otherwise.
 #[allow(clippy::needless_range_loop)]
 fn dft_1d(input: &[Complex], inverse: bool) -> Vec<Complex> {
+    let n = input.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let n2 = next_power_of_two(n);
+    if n == n2 {
+        // Fast path: radix-2 FFT
+        let mut buf = input.to_vec();
+        fft_radix2(&mut buf, inverse);
+        buf
+    } else {
+        // Fallback O(n^2) DFT for non-power-of-2 sizes
+        dft_1d_naive(input, inverse)
+    }
+}
+
+/// O(n^2) DFT fallback for non-power-of-two sizes.
+#[allow(clippy::needless_range_loop)]
+fn dft_1d_naive(input: &[Complex], inverse: bool) -> Vec<Complex> {
     let n = input.len();
     let sign = if inverse { 1.0 } else { -1.0 };
     let mut out = vec![(0.0, 0.0); n];
@@ -360,7 +453,10 @@ fn dft_1d(input: &[Complex], inverse: bool) -> Vec<Complex> {
     out
 }
 
-/// 2-D DFT via row-then-column 1-D DFTs.
+/// 2-D DFT via row-then-column 1-D transforms.
+///
+/// When both `rows` and `cols` are powers of two the Cooley-Tukey FFT is used
+/// automatically; otherwise the O(n^2) DFT fallback handles each dimension.
 fn dft_2d(data: &[Complex], rows: usize, cols: usize, inverse: bool) -> Vec<Complex> {
     // Row transforms
     let mut buf = vec![(0.0, 0.0); rows * cols];

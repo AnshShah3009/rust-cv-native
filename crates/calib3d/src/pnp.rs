@@ -240,6 +240,215 @@ pub fn solve_pnp_refine(
     )
 }
 
+/// Compute the Rodrigues rotation Jacobian: returns (R, dR/dr).
+///
+/// Given a 3-vector `r` (axis-angle / Rodrigues), returns the 3x3 rotation
+/// matrix `R` and the 9x3 Jacobian `dR/dr` where `dR` is stored column-major
+/// as a 9-vector (i.e., `dR/dr_k` = k-th column reshaped from R's column-major
+/// layout).
+///
+/// This is the standard formulation used in OpenCV's `Rodrigues()`.
+fn rodrigues_jacobian(rvec: &Vector3<f64>) -> (Matrix3<f64>, [[f64; 9]; 3]) {
+    let theta = rvec.norm();
+    if theta < 1e-15 {
+        // Small angle: R ≈ I + [r]×
+        let r = Matrix3::new(
+            1.0, -rvec[2], rvec[1], rvec[2], 1.0, -rvec[0], -rvec[1], rvec[0], 1.0,
+        );
+        // dR/dr_k ≈ d[r]×/dr_k (the k-th generator of so(3))
+        // [e1]× = [[0,0,0],[0,0,-1],[0,1,0]]
+        // [e2]× = [[0,0,1],[0,0,0],[-1,0,0]]
+        // [e3]× = [[0,-1,0],[1,0,0],[0,0,0]]
+        // Stored column-major: col0, col1, col2 of the 3×3 matrix.
+        let dr0 = [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0]; // d/dr_x
+        let dr1 = [0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]; // d/dr_y
+        let dr2 = [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // d/dr_z
+        return (r, [dr0, dr1, dr2]);
+    }
+
+    let inv_theta = 1.0 / theta;
+    let inv_theta2 = inv_theta * inv_theta;
+    let ct = theta.cos();
+    let st = theta.sin();
+    let alpha = st * inv_theta; // sin(θ)/θ
+
+    // R = I + alpha * [r]× + ((1-cos(θ))/θ²) * [r]×²
+    // Using the identity [r]×² = r*rᵀ − ||r||² I
+    let kx = Matrix3::new(
+        0.0, -rvec[2], rvec[1], rvec[2], 0.0, -rvec[0], -rvec[1], rvec[0], 0.0,
+    );
+    let kx2 = rvec * rvec.transpose() - Matrix3::identity() * (theta * theta);
+
+    let rot = Matrix3::identity() + kx * alpha + kx2 * inv_theta2 * (1.0 - ct);
+
+    // For derivatives, we differentiate:
+    //   R = I + (sin θ / θ) [r]× + ((1-cos θ) / θ²) [r]×²
+    // w.r.t. each component r_k.
+    //
+    // d_alpha/dr_k = (θ cos θ − sin θ) / θ² · (r_k/θ) = r_k (cos θ − alpha) / θ²
+    // d_beta/dr_k  = (θ sin θ − 2(1−cos θ)) / θ³ · (r_k/θ) = ... (computed below)
+    //
+    // d[r]×/dr_k = [e_k]×  (generator matrix)
+    // d([r]×²)/dr_k = [e_k]× [r]× + [r]× [e_k]×  = e_k rᵀ + r e_kᵀ − 2 r_k I
+
+    let d_alpha_dtheta = (theta * ct - st) * inv_theta2; // d(sinθ/θ)/dθ
+    let d_beta_dtheta = (theta * st - 2.0 * (1.0 - ct)) / (theta * theta * theta); // d((1-cosθ)/θ²)/dθ
+
+    // Generator matrices [e_k]× stored column-major
+    let gen: [Matrix3<f64>; 3] = [
+        Matrix3::new(0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0),
+        Matrix3::new(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0),
+        Matrix3::new(0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    ];
+
+    let mut dr_all = [[0.0f64; 9]; 3];
+    let coeff = (1.0 - ct) * inv_theta2; // (1-cos(θ))/θ²
+
+    for ki in 0..3 {
+        let rk = rvec[ki];
+        let dtheta_drk = rk * inv_theta;
+
+        let dalpha = d_alpha_dtheta * dtheta_drk;
+        let dcoeff = d_beta_dtheta * dtheta_drk;
+
+        // d([r]×²)/dr_k = e_k rᵀ + r e_kᵀ − 2 r_k I
+        let mut ek = Vector3::zeros();
+        ek[ki] = 1.0;
+        let dkx2 = ek * rvec.transpose() + rvec * ek.transpose() - Matrix3::identity() * (2.0 * rk);
+
+        // dR/dr_k = dalpha * [r]× + alpha * [e_k]×
+        //         + dcoeff * ([r]×²) + coeff * d([r]×²)/dr_k
+        let dr_mat = kx * dalpha + gen[ki] * alpha + kx2 * dcoeff + dkx2 * coeff;
+
+        // Store column-major: dr_all[ki][col*3 + row]
+        for col in 0..3 {
+            for row in 0..3 {
+                dr_all[ki][col * 3 + row] = dr_mat[(row, col)];
+            }
+        }
+    }
+
+    (rot, dr_all)
+}
+
+/// Compute the analytical 2x6 Jacobian of the projection of a 3D point
+/// w.r.t. pose parameters [r0, r1, r2, tx, ty, tz].
+///
+/// The pose parameterisation is: params[0..3] = Rodrigues rotation vector,
+/// params[3..6] = translation.  Projection: pc = R*X + t, then
+/// u = fx * pc.x/pc.z + cx,  v = fy * pc.y/pc.z + cy.
+///
+/// When `distortion` is `Some(...)`, falls back to numerical (central)
+/// differences because the distortion chain rule is model-dependent.
+fn analytical_jacobian(
+    params: &[f64; 6],
+    intrinsics: &CameraIntrinsics,
+    distortion: Option<&cv_core::Distortion>,
+    point: &Point3<f64>,
+) -> nalgebra::Matrix2x6<f64> {
+    // Distortion present: fall back to numerical Jacobian (central differences).
+    if distortion.is_some() {
+        return numerical_jacobian(params, intrinsics, distortion, point);
+    }
+
+    let rvec = Vector3::new(params[0], params[1], params[2]);
+    let t = Vector3::new(params[3], params[4], params[5]);
+
+    let (rot, dr_dr) = rodrigues_jacobian(&rvec);
+
+    let x = point.coords; // 3-vector
+    let pc = rot * x + t; // camera-space point
+
+    let z_inv = if pc[2].abs() <= 1e-12 {
+        return nalgebra::Matrix2x6::zeros();
+    } else {
+        1.0 / pc[2]
+    };
+    let z_inv2 = z_inv * z_inv;
+
+    let fx = intrinsics.fx;
+    let fy = intrinsics.fy;
+
+    // d(u,v)/d(pc) -- 2x3 Jacobian of the pinhole projection
+    //   u = fx * pc[0]/pc[2] + cx
+    //   v = fy * pc[1]/pc[2] + cy
+    let duv_dpc = nalgebra::Matrix2x3::new(
+        fx * z_inv,
+        0.0,
+        -fx * pc[0] * z_inv2,
+        0.0,
+        fy * z_inv,
+        -fy * pc[1] * z_inv2,
+    );
+
+    // --- Translation part: d(pc)/dt = I₃ ---
+    // J_t = duv_dpc * I = duv_dpc  (2×3)
+
+    // --- Rotation part: d(pc)/dr_k = dR/dr_k * X ---
+    // For each k in 0..3, dR/dr_k is a 3×3 matrix (stored column-major in dr_dr[k]).
+    // d(pc)/dr_k = dR/dr_k * X  (3-vector)
+    let mut dpc_dr = nalgebra::Matrix3::zeros(); // columns = d(pc)/dr_k
+    for ki in 0..3 {
+        // Reconstruct dR/dr_k from column-major storage
+        let dr = &dr_dr[ki];
+        // dR * X: row i = sum_j dR(i,j) * X[j]
+        for row in 0..3 {
+            let mut val = 0.0;
+            for col in 0..3 {
+                val += dr[col * 3 + row] * x[col];
+            }
+            dpc_dr[(row, ki)] = val;
+        }
+    }
+
+    // J_r = duv_dpc * dpc_dr  (2×3)
+    let j_r = duv_dpc * dpc_dr;
+    let j_t = duv_dpc; // 2×3
+
+    // Full Jacobian: [dr | dt] layout: columns [r0,r1,r2,tx,ty,tz]
+    nalgebra::Matrix2x6::from_row_slice(&[
+        j_r[(0, 0)],
+        j_r[(0, 1)],
+        j_r[(0, 2)],
+        j_t[(0, 0)],
+        j_t[(0, 1)],
+        j_t[(0, 2)],
+        j_r[(1, 0)],
+        j_r[(1, 1)],
+        j_r[(1, 2)],
+        j_t[(1, 0)],
+        j_t[(1, 1)],
+        j_t[(1, 2)],
+    ])
+}
+
+/// Numerical Jacobian via forward differences (fallback for distorted projection).
+fn numerical_jacobian(
+    params: &[f64; 6],
+    intrinsics: &CameraIntrinsics,
+    distortion: Option<&cv_core::Distortion>,
+    point: &Point3<f64>,
+) -> nalgebra::Matrix2x6<f64> {
+    let eps = 1e-7;
+    let base = params_to_extrinsics(params);
+    let pred0 = project_point_dist(intrinsics, distortion, &base, point);
+
+    let mut j = [[0.0f64; 6]; 2];
+    for k in 0..6 {
+        let mut p = *params;
+        p[k] += eps;
+        let ext = params_to_extrinsics(&p);
+        let pred1 = project_point_dist(intrinsics, distortion, &ext, point);
+        j[0][k] = (pred1.x - pred0.x) / eps;
+        j[1][k] = (pred1.y - pred0.y) / eps;
+    }
+
+    nalgebra::Matrix2x6::from_row_slice(&[
+        j[0][0], j[0][1], j[0][2], j[0][3], j[0][4], j[0][5], j[1][0], j[1][1], j[1][2], j[1][3],
+        j[1][4], j[1][5],
+    ])
+}
+
 /// Context-aware PnP refinement using Levenberg-Marquardt
 pub fn solve_pnp_refine_ctx(
     initial: &Pose,
@@ -275,11 +484,8 @@ pub fn solve_pnp_refine_ctx(
     for _ in 0..max_iters {
         let base = params_to_extrinsics(&params);
 
-        // Parallel Jacobian and Residual calculation
+        // Parallel analytical Jacobian and residual accumulation
         let (jtj, jtr) = group.run(|| {
-            let eps = 1e-7;
-
-            // Compute Jacobians point-wise
             let results: Vec<(nalgebra::Matrix6<f64>, nalgebra::Vector6<f64>)> = (0..n_pts)
                 .into_par_iter()
                 .map(|i| {
@@ -287,30 +493,7 @@ pub fn solve_pnp_refine_ctx(
                     let p2 = &image_points[i];
                     let pred0 = project_point_dist(intrinsics, distortion, &base, p3);
 
-                    let mut j_point = [[0.0f64; 6]; 2];
-                    for k in 0..6 {
-                        let mut p_perturbed = params;
-                        p_perturbed[k] += eps;
-                        let ext_p = params_to_extrinsics(&p_perturbed);
-                        let pred1 = project_point_dist(intrinsics, distortion, &ext_p, p3);
-                        j_point[0][k] = (pred1.x - pred0.x) / eps;
-                        j_point[1][k] = (pred1.y - pred0.y) / eps;
-                    }
-
-                    let j = nalgebra::Matrix2x6::from_row_slice(&[
-                        j_point[0][0],
-                        j_point[0][1],
-                        j_point[0][2],
-                        j_point[0][3],
-                        j_point[0][4],
-                        j_point[0][5],
-                        j_point[1][0],
-                        j_point[1][1],
-                        j_point[1][2],
-                        j_point[1][3],
-                        j_point[1][4],
-                        j_point[1][5],
-                    ]);
+                    let j = analytical_jacobian(&params, intrinsics, distortion, p3);
                     let r = nalgebra::Vector2::new(pred0.x - p2.x, pred0.y - p2.y);
 
                     (j.transpose() * j, j.transpose() * r)
@@ -423,4 +606,150 @@ fn sample_unique_indices(n: usize, k: usize, seed: u64) -> Vec<usize> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nalgebra::{Point3, Vector3};
+
+    /// Compute a central-difference numerical Jacobian for comparison.
+    fn central_difference_jacobian(
+        params: &[f64; 6],
+        intrinsics: &CameraIntrinsics,
+        point: &Point3<f64>,
+    ) -> nalgebra::Matrix2x6<f64> {
+        let eps = 1e-7;
+        let mut j = [[0.0f64; 6]; 2];
+        for k in 0..6 {
+            let mut p_plus = *params;
+            let mut p_minus = *params;
+            p_plus[k] += eps;
+            p_minus[k] -= eps;
+            let ext_plus = params_to_extrinsics(&p_plus);
+            let ext_minus = params_to_extrinsics(&p_minus);
+            let pred_plus = project_point_dist(intrinsics, None, &ext_plus, point);
+            let pred_minus = project_point_dist(intrinsics, None, &ext_minus, point);
+            j[0][k] = (pred_plus.x - pred_minus.x) / (2.0 * eps);
+            j[1][k] = (pred_plus.y - pred_minus.y) / (2.0 * eps);
+        }
+        nalgebra::Matrix2x6::from_row_slice(&[
+            j[0][0], j[0][1], j[0][2], j[0][3], j[0][4], j[0][5], j[1][0], j[1][1], j[1][2],
+            j[1][3], j[1][4], j[1][5],
+        ])
+    }
+
+    #[test]
+    fn test_analytical_jacobian_matches_numerical() {
+        let intrinsics = CameraIntrinsics::new(500.0, 500.0, 320.0, 240.0, 640, 480);
+
+        // Test several combinations of rotation, translation, and 3D point
+        let test_cases: Vec<([f64; 6], Point3<f64>)> = vec![
+            // Near-identity rotation, point in front of camera
+            (
+                [0.01, -0.02, 0.03, 0.0, 0.0, 5.0],
+                Point3::new(1.0, 2.0, 0.5),
+            ),
+            // Moderate rotation around Y axis
+            ([0.0, 0.5, 0.0, 1.0, -0.5, 8.0], Point3::new(-1.0, 0.5, 3.0)),
+            // Large rotation (close to pi)
+            ([1.0, 0.8, -0.6, 0.2, 0.3, 10.0], Point3::new(0.0, 0.0, 2.0)),
+            // Near-zero rotation (small angle regime)
+            (
+                [1e-10, 1e-10, 1e-10, 0.0, 0.0, 3.0],
+                Point3::new(0.5, -0.5, 1.0),
+            ),
+            // Rotation around X with off-center point
+            ([0.3, 0.0, 0.0, -2.0, 1.0, 6.0], Point3::new(2.0, -1.0, 0.0)),
+            // Mixed rotation and translation
+            (
+                [-0.2, 0.4, -0.1, 0.5, -0.3, 4.0],
+                Point3::new(0.1, 0.2, 0.3),
+            ),
+        ];
+
+        for (case_idx, (params, point)) in test_cases.iter().enumerate() {
+            let j_analytical = analytical_jacobian(params, &intrinsics, None, point);
+            let j_numerical = central_difference_jacobian(params, &intrinsics, point);
+
+            let diff = j_analytical - j_numerical;
+            let max_err = diff.abs().max();
+
+            assert!(
+                max_err < 1e-4,
+                "Case {}: analytical Jacobian differs from numerical by {:.2e} (threshold 1e-4)\n\
+                 params: {:?}\n\
+                 point: {:?}\n\
+                 analytical:\n{:.6}\n\
+                 numerical:\n{:.6}\n\
+                 diff:\n{:.2e}",
+                case_idx,
+                max_err,
+                params,
+                point,
+                j_analytical,
+                j_numerical,
+                diff,
+            );
+        }
+    }
+
+    #[test]
+    fn test_rodrigues_jacobian_small_angle() {
+        // Near-zero rotation should produce R ≈ I and sensible derivatives
+        let rvec = Vector3::new(1e-12, 1e-12, 1e-12);
+        let (rot, _dr) = rodrigues_jacobian(&rvec);
+
+        // R should be very close to identity
+        let diff = rot - Matrix3::identity();
+        assert!(
+            diff.norm() < 1e-8,
+            "Small angle Rodrigues should give near-identity rotation"
+        );
+    }
+
+    #[test]
+    fn test_rodrigues_jacobian_consistency() {
+        // Verify that the Jacobian is consistent with finite differences of R(r)*X
+        let rvec = Vector3::new(0.3, -0.5, 0.2);
+        let x = Vector3::new(1.0, 2.0, 3.0);
+        let (rot, dr) = rodrigues_jacobian(&rvec);
+
+        let eps = 1e-7;
+        for ki in 0..3 {
+            let mut rv_plus = rvec;
+            let mut rv_minus = rvec;
+            rv_plus[ki] += eps;
+            rv_minus[ki] -= eps;
+
+            let r_plus = Rotation3::new(rv_plus).into_inner();
+            let r_minus = Rotation3::new(rv_minus).into_inner();
+            let fd = (r_plus * x - r_minus * x) / (2.0 * eps);
+
+            // Reconstruct dR/dr_k * X from our Jacobian
+            let mut analytical = Vector3::zeros();
+            for row in 0..3 {
+                for col in 0..3 {
+                    analytical[row] += dr[ki][col * 3 + row] * x[col];
+                }
+            }
+
+            let err = (analytical - fd).norm();
+            assert!(
+                err < 1e-4,
+                "Rodrigues Jacobian column {} differs from FD by {:.2e}",
+                ki,
+                err
+            );
+        }
+
+        // Also verify R matches nalgebra's Rotation3
+        let expected = Rotation3::new(rvec).into_inner();
+        let diff = (rot - expected).norm();
+        assert!(
+            diff < 1e-12,
+            "Rodrigues rotation differs from nalgebra by {:.2e}",
+            diff
+        );
+    }
 }

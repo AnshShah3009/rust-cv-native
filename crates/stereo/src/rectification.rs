@@ -99,24 +99,32 @@ fn compute_rectification_transforms(
         left_intrinsics.height,
     );
 
-    let left_rect = intrinsics_matrix(left_intrinsics) * rect_rotation;
-    let right_rect =
-        intrinsics_matrix(right_intrinsics) * rect_rotation * relative_rotation.transpose();
+    // Bouguet's half-rotation split:
+    //   R1 = rodrigues(r/2),  R2 = rodrigues(-r/2)
+    //   R_left  = R_rect * R1^T
+    //   R_right = R_rect * R2^T * R
+    // where r = rodrigues(R) is the axis-angle of the relative rotation.
+    let (r1, r2) = bouguet_half_rotations(&relative_rotation);
+
+    let left_rotation = rect_rotation * r1.transpose();
+    let right_rotation = rect_rotation * r2.transpose() * relative_rotation;
+
+    let left_rect = intrinsics_matrix(left_intrinsics) * left_rotation;
+    let right_rect = intrinsics_matrix(right_intrinsics) * right_rotation;
 
     Ok((left_rect, right_rect, new_intrinsics))
 }
 
-/// Compute rotation matrix for rectification
+/// Compute the rectification rotation R_rect that aligns epipolar lines
+/// horizontally.  This constructs a new coordinate frame from the baseline
+/// direction (translation vector).
 fn compute_rectification_rotation(
     _relative_rotation: &Matrix3<f64>,
     relative_translation: &Vector3<f64>,
 ) -> Matrix3<f64> {
-    // Simplified rectification - make epipole go to infinity
-    // Full implementation would use Bouguet's algorithm
-
     let t = relative_translation.normalize();
 
-    // New x-axis: translation direction
+    // New x-axis: baseline (translation) direction
     let e1 = t;
 
     // New y-axis: orthogonal to x and old z (with fallback for degenerate case)
@@ -133,6 +141,84 @@ fn compute_rectification_rotation(
     let e3 = e1.cross(&e2);
 
     Matrix3::from_columns(&[e1, e2, e3])
+}
+
+/// Compute the Bouguet half-rotation matrices.
+///
+/// Given the relative rotation R between two cameras, compute R1 and R2 such
+/// that R = R1^T * R2 and each camera is rotated by half the relative rotation:
+///   r = axis-angle(R)
+///   R1 = rodrigues(r/2)
+///   R2 = rodrigues(-r/2)
+///
+/// This distributes the rectification distortion equally between both cameras.
+fn bouguet_half_rotations(relative_rotation: &Matrix3<f64>) -> (Matrix3<f64>, Matrix3<f64>) {
+    // Extract axis-angle from R using Rodrigues' formula inverse.
+    let axis_angle = rotation_to_axis_angle(relative_rotation);
+
+    // Half rotation for each camera
+    let half = axis_angle * 0.5;
+    let r1 = axis_angle_to_rotation(&half);
+    let r2 = axis_angle_to_rotation(&(-half));
+
+    (r1, r2)
+}
+
+/// Convert a rotation matrix to its axis-angle (Rodrigues) representation.
+/// Returns the axis-angle vector whose direction is the rotation axis and
+/// whose magnitude is the rotation angle.
+fn rotation_to_axis_angle(r: &Matrix3<f64>) -> Vector3<f64> {
+    // angle = arccos((trace(R) - 1) / 2)
+    let trace = r[(0, 0)] + r[(1, 1)] + r[(2, 2)];
+    let cos_angle = ((trace - 1.0) / 2.0).clamp(-1.0, 1.0);
+    let angle = cos_angle.acos();
+
+    if angle.abs() < 1e-10 {
+        // Identity rotation — zero axis-angle
+        return Vector3::zeros();
+    }
+
+    if (std::f64::consts::PI - angle).abs() < 1e-10 {
+        // angle ≈ π: use the eigenvector method.
+        // For R symmetric part: axis is eigenvector of R with eigenvalue 1.
+        // From (R + I), pick the column with the largest norm.
+        let rpi = r + Matrix3::identity();
+        let mut best_col = 0;
+        let mut best_norm = 0.0;
+        for c in 0..3 {
+            let col = rpi.column(c);
+            let n = col.norm();
+            if n > best_norm {
+                best_norm = n;
+                best_col = c;
+            }
+        }
+        let axis = rpi.column(best_col).normalize();
+        return axis * angle;
+    }
+
+    // General case: axis = [R32-R23, R13-R31, R21-R12] / (2 sin(angle))
+    let s = 2.0 * angle.sin();
+    let axis = Vector3::new(
+        r[(2, 1)] - r[(1, 2)],
+        r[(0, 2)] - r[(2, 0)],
+        r[(1, 0)] - r[(0, 1)],
+    ) / s;
+
+    axis * angle
+}
+
+/// Convert an axis-angle vector to a rotation matrix via Rodrigues' formula.
+fn axis_angle_to_rotation(v: &Vector3<f64>) -> Matrix3<f64> {
+    let theta = v.norm();
+    if theta < 1e-10 {
+        return Matrix3::identity();
+    }
+
+    let k = v / theta;
+    let k_cross = Matrix3::new(0.0, -k.z, k.y, k.z, 0.0, -k.x, -k.y, k.x, 0.0);
+
+    Matrix3::identity() + k_cross * theta.sin() + k_cross * k_cross * (1.0 - theta.cos())
 }
 
 /// Convert intrinsics to matrix form

@@ -198,4 +198,5 @@ impl Default for TriangleMesh {
 }
 
 pub mod processing;
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 pub mod reconstruction;
