@@ -1814,6 +1814,7 @@ name = "cv-registration"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "cv-3d",
  "cv-core",
  "cv-hal",
  "nalgebra",
@@ -6017,6 +6018,7 @@ dependencies = [
  "cv-hal",
  "cv-imgproc",
  "cv-optimize",
+ "cv-registration",
  "cv-runtime",
  "cv-scientific",
  "cv-sfm",
