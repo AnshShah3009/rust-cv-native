@@ -46,16 +46,168 @@ impl LucasKanade {
         self
     }
 
-    /// Track a single point from prev_frame to next_frame
+    /// Track a single point using pyramidal iterative Lucas-Kanade (Bouguet's algorithm).
     ///
-    /// TODO: `pyramid_levels` is not yet implemented - tracking is performed at
-    ///       a single scale. Multi-scale pyramid processing would improve large
-    ///       motion estimation.
-    /// TODO: `max_iterations` is not yet implemented - the solver runs a single
-    ///       pass instead of iteratively refining the flow estimate.
-    /// TODO: `epsilon` convergence criterion is not yet implemented - related to
-    ///       iterative refinement above.
+    /// Builds Gaussian image pyramids for both frames and performs coarse-to-fine
+    /// tracking with iterative refinement at each pyramid level.
     pub fn track_point(
+        &self,
+        prev_frame: &GrayImage,
+        next_frame: &GrayImage,
+        point: (f32, f32),
+    ) -> Option<(f32, f32)> {
+        let (px, py) = point;
+        let half_window = (self.window_size / 2) as i32;
+
+        // Basic bounds check at the finest level
+        if px < half_window as f32
+            || px >= (prev_frame.width() as i32 - half_window) as f32
+            || py < half_window as f32
+            || py >= (prev_frame.height() as i32 - half_window) as f32
+        {
+            return None;
+        }
+
+        // Build image pyramids (level 0 = finest)
+        let prev_pyramid = build_pyramid(prev_frame, self.pyramid_levels);
+        let next_pyramid = build_pyramid(next_frame, self.pyramid_levels);
+
+        // Initial guess at the coarsest level
+        let mut flow = Vector2::<f64>::zeros();
+
+        // Coarse-to-fine: iterate from coarsest (last) to finest (0)
+        for level in (0..self.pyramid_levels).rev() {
+            let scale = 1.0 / (1u32 << level) as f64;
+            let prev_img = &prev_pyramid[level];
+            let next_img = &next_pyramid[level];
+
+            // Point location at this pyramid level
+            let lx = px as f64 * scale;
+            let ly = py as f64 * scale;
+
+            let hw = half_window;
+            let w = prev_img.width() as i32;
+            let h = prev_img.height() as i32;
+
+            // Check bounds at this level
+            if (lx as i32) < hw
+                || (lx as i32) >= w - hw
+                || (ly as i32) < hw
+                || (ly as i32) >= h - hw
+            {
+                // Cannot track at this level; propagate current guess down
+                if level > 0 {
+                    flow *= 2.0;
+                }
+                continue;
+            }
+
+            // Compute spatial gradients and structure tensor G once per level
+            // G = sum over window of [Ix*Ix  Ix*Iy; Ix*Iy  Iy*Iy]
+            let mut g: Matrix2<f64> = Matrix2::zeros();
+            let mut grad_patch: Vec<(f64, f64)> =
+                Vec::with_capacity(self.window_size * self.window_size);
+
+            for dy in -hw..=hw {
+                for dx in -hw..=hw {
+                    let sx = lx as i32 + dx;
+                    let sy = ly as i32 + dy;
+
+                    let ix = compute_gradient_x(prev_img, sx as u32, sy as u32) as f64;
+                    let iy = compute_gradient_y(prev_img, sx as u32, sy as u32) as f64;
+
+                    g[(0, 0)] += ix * ix;
+                    g[(0, 1)] += ix * iy;
+                    g[(1, 0)] += ix * iy;
+                    g[(1, 1)] += iy * iy;
+
+                    grad_patch.push((ix, iy));
+                }
+            }
+
+            // Singularity check via eigenvalues of G
+            // For a 2x2 symmetric matrix: eigenvalues = (trace +/- sqrt(trace^2 - 4*det)) / 2
+            let trace = g[(0, 0)] + g[(1, 1)];
+            let det = g[(0, 0)] * g[(1, 1)] - g[(0, 1)] * g[(1, 0)];
+            let discriminant = trace * trace - 4.0 * det;
+            if discriminant < 0.0 || det < 1e-7 {
+                // Structure tensor is degenerate; point not trackable
+                return None;
+            }
+            let sqrt_disc = discriminant.sqrt();
+            let min_eigenvalue = (trace - sqrt_disc) / 2.0;
+            if min_eigenvalue < 1e-4 {
+                return None;
+            }
+
+            let g_inv = g.try_inverse()?;
+
+            // Iterative refinement at this level
+            // flow already contains the guess propagated from the coarser level
+            for _iter in 0..self.max_iterations {
+                // Compute temporal gradient using warped second image
+                let mut b_vec: Vector2<f64> = Vector2::zeros();
+                let mut idx = 0;
+
+                for dy in -hw..=hw {
+                    for dx in -hw..=hw {
+                        let sx = lx as i32 + dx;
+                        let sy = ly as i32 + dy;
+
+                        // Warped position in next image
+                        let wx = lx + flow[0] + dx as f64;
+                        let wy = ly + flow[1] + dy as f64;
+
+                        let i1 = prev_img.get_pixel(sx as u32, sy as u32)[0] as f64;
+                        let i2 = bilinear_sample(next_img, wx, wy);
+
+                        let it = i2 - i1;
+
+                        let (ix, iy) = grad_patch[idx];
+                        b_vec[0] += -ix * it;
+                        b_vec[1] += -iy * it;
+
+                        idx += 1;
+                    }
+                }
+
+                let delta = g_inv * b_vec;
+                flow += delta;
+
+                // Convergence check
+                if delta[0] * delta[0] + delta[1] * delta[1]
+                    < (self.epsilon as f64) * (self.epsilon as f64)
+                {
+                    break;
+                }
+            }
+
+            // Scale flow up for the next finer level (unless we are already at level 0)
+            if level > 0 {
+                flow *= 2.0;
+            }
+        }
+
+        let new_x = px as f64 + flow[0];
+        let new_y = py as f64 + flow[1];
+
+        // Reject if the tracked point falls outside the image
+        if new_x < 0.0
+            || new_x >= next_frame.width() as f64
+            || new_y < 0.0
+            || new_y >= next_frame.height() as f64
+        {
+            return None;
+        }
+
+        Some((new_x as f32, new_y as f32))
+    }
+
+    /// Single-pass (non-iterative, non-pyramidal) Lucas-Kanade tracking.
+    ///
+    /// This is the original simple implementation kept as a fallback.
+    /// It computes a single gradient solve with no pyramid and no iteration.
+    pub fn track_point_single_pass(
         &self,
         prev_frame: &GrayImage,
         next_frame: &GrayImage,
@@ -161,6 +313,56 @@ fn compute_gradient_y(img: &GrayImage, x: u32, y: u32) -> f32 {
 /// Compute temporal gradient (frame difference)
 fn compute_temporal_gradient(prev: &GrayImage, next: &GrayImage, x: u32, y: u32) -> f32 {
     next.get_pixel(x, y)[0] as f32 - prev.get_pixel(x, y)[0] as f32
+}
+
+/// Build a Gaussian image pyramid.
+///
+/// Returns a vector of images from finest (level 0) to coarsest.
+/// Each subsequent level is Gaussian-blurred and downsampled by 2x.
+fn build_pyramid(img: &GrayImage, levels: usize) -> Vec<GrayImage> {
+    let mut pyramid = Vec::with_capacity(levels);
+    pyramid.push(img.clone());
+
+    for _ in 1..levels {
+        let prev = pyramid.last().unwrap();
+        // Apply Gaussian blur before downsampling to avoid aliasing
+        let blurred = image::imageops::blur(prev, 1.0);
+        let new_w = (blurred.width() / 2).max(1);
+        let new_h = (blurred.height() / 2).max(1);
+        let downsampled =
+            image::imageops::resize(&blurred, new_w, new_h, image::imageops::FilterType::Nearest);
+        pyramid.push(downsampled);
+    }
+
+    pyramid
+}
+
+/// Bilinear interpolation sampling of a grayscale image.
+///
+/// Returns the interpolated pixel intensity at sub-pixel coordinates (x, y).
+/// Out-of-bounds coordinates are clamped to the nearest valid pixel.
+fn bilinear_sample(img: &GrayImage, x: f64, y: f64) -> f64 {
+    let w = img.width() as f64;
+    let h = img.height() as f64;
+
+    // Clamp to valid range
+    let x = x.clamp(0.0, w - 1.001);
+    let y = y.clamp(0.0, h - 1.001);
+
+    let x0 = x.floor() as u32;
+    let y0 = y.floor() as u32;
+    let x1 = (x0 + 1).min(img.width() - 1);
+    let y1 = (y0 + 1).min(img.height() - 1);
+
+    let fx = x - x0 as f64;
+    let fy = y - y0 as f64;
+
+    let p00 = img.get_pixel(x0, y0)[0] as f64;
+    let p10 = img.get_pixel(x1, y0)[0] as f64;
+    let p01 = img.get_pixel(x0, y1)[0] as f64;
+    let p11 = img.get_pixel(x1, y1)[0] as f64;
+
+    p00 * (1.0 - fx) * (1.0 - fy) + p10 * fx * (1.0 - fy) + p01 * (1.0 - fx) * fy + p11 * fx * fy
 }
 
 /// Farneback dense optical flow
