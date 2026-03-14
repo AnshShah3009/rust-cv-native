@@ -13,26 +13,20 @@ use wgpu::{Backends, Device, Instance, PowerPreference, Queue, RequestAdapterOpt
 
 static GLOBAL_CONTEXT: OnceLock<crate::Result<GpuContext>> = OnceLock::new();
 
-/// Shared GPU context holding a wgpu `Device`, `Queue`, and a pipeline cache.
-///
-/// All GPU kernel dispatches flow through this struct. Obtain a global
-/// singleton via [`GpuContext::global`] or [`GpuContext::init_global`].
+/// Shared GPU Context containing Device and Queue.
 #[derive(Debug, Clone)]
 pub struct GpuContext {
-    /// The wgpu logical device used for buffer and pipeline creation.
     pub device: Arc<Device>,
-    /// The wgpu command queue used for submitting work.
     pub queue: Arc<Queue>,
-    /// Cache of compiled compute pipelines keyed by shader source + entry point.
-    pipeline_cache: Arc<std::sync::Mutex<std::collections::HashMap<u64, wgpu::ComputePipeline>>>,
-    /// Monotonically increasing counter for tracking GPU submissions.
+    pipeline_cache: Arc<std::sync::Mutex<std::collections::HashMap<String, wgpu::ComputePipeline>>>,
     last_submission: Arc<AtomicU64>,
 }
 
 impl GpuContext {
     /// Safely downcasts a GpuStorage result to the requested generic storage S.
     /// Uses TypeId checks to avoid allocations when S is GpuStorage.
-    pub(crate) fn _downcast_storage<
+    #[allow(dead_code)]
+    pub(crate) fn downcast_storage<
         T: Clone + Copy + std::fmt::Debug + bytemuck::Pod + 'static,
         S: Storage<T> + 'static,
     >(
@@ -118,10 +112,8 @@ impl ComputeContext for GpuContext {
                     }
                     crate::context::BorderMode::Replicate => crate::context::BorderMode::Replicate,
                     crate::context::BorderMode::Reflect => crate::context::BorderMode::Reflect,
-                    crate::context::BorderMode::Reflect101 => {
-                        crate::context::BorderMode::Reflect101
-                    }
                     crate::context::BorderMode::Wrap => crate::context::BorderMode::Wrap,
+                    crate::context::BorderMode::Reflect101 => crate::context::BorderMode::Reflect101,
                 };
                 let result_gpu = crate::gpu_kernels::convolve::convolve_2d(
                     self,
@@ -1306,13 +1298,7 @@ impl ComputeContext for GpuContext {
                 }
             }
 
-            // T == f32 verified above; points slice is &[T] = &[f32]
-            assert!(
-                points.len().is_multiple_of(2),
-                "optical_flow_lk: points length must be even"
-            );
-            // SAFETY: T == f32 verified by TypeId check. &[f32] reinterpreted as &[[f32;2]]
-            // is valid because [f32;2] has same alignment as f32 and length is verified even.
+            // Safety: T == f32 verified above; points slice is &[T] = &[f32]
             let points_f32: &[[f32; 2]] = unsafe {
                 std::slice::from_raw_parts(points.as_ptr() as *const [f32; 2], points.len() / 2)
             };
@@ -1325,21 +1311,8 @@ impl ComputeContext for GpuContext {
                 max_iters,
             )?;
 
-            // Reconstruct Vec<[T;2]> from Vec<[f32;2]> without transmute.
-            assert_eq!(
-                std::mem::size_of::<[f32; 2]>(),
-                std::mem::size_of::<[T; 2]>()
-            );
-            assert_eq!(
-                std::mem::align_of::<[f32; 2]>(),
-                std::mem::align_of::<[T; 2]>()
-            );
-            let results_t: Vec<[T; 2]> = {
-                let mut r = std::mem::ManuallyDrop::new(results);
-                // SAFETY: T == f32 verified by TypeId. Size and alignment asserted above.
-                // ManuallyDrop prevents double-free.
-                unsafe { Vec::from_raw_parts(r.as_mut_ptr() as *mut [T; 2], r.len(), r.capacity()) }
-            };
+            // Safety: we verified T == f32, so Vec<[f32;2]> and Vec<[T;2]> have identical layout.
+            let results_t: Vec<[T; 2]> = unsafe { std::mem::transmute(results) };
             Ok(results_t)
         } else {
             Err(crate::Error::NotSupported(
@@ -2418,21 +2391,9 @@ impl ComputeContext for GpuContext {
                     _phantom: PhantomData::<f32>,
                 };
 
-                // Copy transform to f32 array through bytes to avoid aliasing violation.
-                assert_eq!(
-                    std::mem::size_of::<[[T; 4]; 4]>(),
-                    std::mem::size_of::<[[f32; 4]; 4]>()
-                );
-                let transform_f32: [[f32; 4]; 4] = unsafe {
-                    let mut out = std::mem::MaybeUninit::<[[f32; 4]; 4]>::uninit();
-                    std::ptr::copy_nonoverlapping(
-                        transform as *const [[T; 4]; 4] as *const u8,
-                        out.as_mut_ptr() as *mut u8,
-                        std::mem::size_of::<[[f32; 4]; 4]>(),
-                    );
-                    out.assume_init()
-                };
-                let transform_f32 = &transform_f32;
+                // Safe: we verified T is f32 via TypeId check above
+                let transform_f32: &[[f32; 4]; 4] =
+                    unsafe { &*(transform as *const [[T; 4]; 4] as *const [[f32; 4]; 4]) };
 
                 let result_gpu = crate::gpu_kernels::pointcloud_transform::pointcloud_transform(
                     self,
@@ -2467,6 +2428,110 @@ impl ComputeContext for GpuContext {
 }
 
 impl GpuContext {
+    /// Compute dominant orientations for SIFT keypoints on GPU.
+    ///
+    /// Returns a Vec<f32> of orientation angles in degrees [0, 360) for each keypoint.
+    pub fn compute_sift_orientations(
+        &self,
+        image: &Tensor<f32, crate::storage::GpuStorage<f32>>,
+        keypoints: &[cv_core::KeyPoint],
+    ) -> crate::Result<Vec<f32>> {
+        if keypoints.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let num_kps = keypoints.len();
+
+        // Upload keypoints as vec4<f32> [x, y, size, octave]
+        let kp_data: Vec<[f32; 4]> = keypoints
+            .iter()
+            .map(|kp| [kp.x as f32, kp.y as f32, kp.size as f32, kp.octave as f32])
+            .collect();
+
+        let kp_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("SIFT Orientation Keypoints"),
+                contents: bytemuck::cast_slice(&kp_data),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+
+        // Output buffer: one f32 per keypoint
+        let out_byte_size = (num_kps * 4) as u64;
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("SIFT Orientation Output"),
+            size: out_byte_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let params = [
+            image.shape.width as u32,
+            image.shape.height as u32,
+            num_kps as u32,
+            0u32,
+        ];
+        let params_buffer =
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("SIFT Orientation Params"),
+                    contents: bytemuck::cast_slice(&params),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+
+        let shader_source = include_str!("../shaders/sift_orientation.wgsl");
+        let pipeline = self.create_compute_pipeline(shader_source, "main");
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("SIFT Orientation Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: image.storage.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: kp_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: output_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: None,
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            let x = (num_kps as u32).div_ceil(64);
+            pass.dispatch_workgroups(x, 1, 1);
+        }
+        self.submit(encoder);
+
+        let orientations: Vec<f32> =
+            pollster::block_on(crate::gpu_kernels::buffer_utils::read_buffer(
+                self.device.clone(),
+                &self.queue,
+                &output_buffer,
+                0,
+                out_byte_size as usize,
+            ))?;
+
+        Ok(orientations)
+    }
+
     /// Get the global GPU context. Returns an error if not yet initialized.
     pub fn global() -> crate::Result<&'static GpuContext> {
         GLOBAL_CONTEXT
@@ -2511,7 +2576,6 @@ impl GpuContext {
         Self::new_with_policy(PowerPreference::HighPerformance).await
     }
 
-    /// Initialize a new GPU context with the given power preference.
     pub async fn new_with_policy(preference: PowerPreference) -> crate::Result<Self> {
         // Create instance with conservative flags to avoid driver panics on integrated GPUs
         let instance = Instance::new(&wgpu::InstanceDescriptor {
@@ -2536,7 +2600,6 @@ impl GpuContext {
         Self::from_adapter(adapter).await
     }
 
-    /// Create a context from an already-obtained wgpu adapter.
     pub async fn from_adapter(adapter: wgpu::Adapter) -> crate::Result<Self> {
         // Request device
         let (device, queue) = adapter
@@ -2600,16 +2663,6 @@ impl GpuContext {
         self.queue.clone()
     }
 
-    // -----------------------------------------------------------------------
-    // CubeCL integration — available when `cubecl` feature is enabled
-    // -----------------------------------------------------------------------
-
-    /// Return the process-global CubeCL WGPU compute client.
-    #[cfg(feature = "cubecl")]
-    pub fn cubecl_client(&self) -> Option<crate::cubecl::WgpuClient> {
-        crate::cubecl::get_client()
-    }
-
     /// Submit a command encoder (convenience method)
     pub fn submit(&self, encoder: wgpu::CommandEncoder) -> SubmissionIndex {
         let index = self.last_submission.fetch_add(1, Ordering::SeqCst) + 1;
@@ -2617,21 +2670,13 @@ impl GpuContext {
         SubmissionIndex(index)
     }
 
-    /// Create (or retrieve from cache) a compute pipeline for the given WGSL source.
-    ///
-    /// The cache key is a 64-bit hash of the shader source + entry point, avoiding
-    /// the cost of storing full shader source strings as keys.
+    /// Create a simplified compute pipeline.
     pub fn create_compute_pipeline(
         &self,
         shader_source: &str,
         entry_point: &str,
     ) -> wgpu::ComputePipeline {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        shader_source.hash(&mut hasher);
-        entry_point.hash(&mut hasher);
-        let cache_key = hasher.finish();
-
+        let cache_key = format!("{}:{}", shader_source, entry_point);
         if let Ok(cache) = self.pipeline_cache.lock() {
             if let Some(pipeline) = cache.get(&cache_key) {
                 return pipeline.clone();

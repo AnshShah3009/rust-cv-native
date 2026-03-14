@@ -1,5 +1,5 @@
 use crate::simd::convolve_row_1d;
-use cv_core::BorderMode as HalBorderMode;
+use cv_hal::context::BorderMode as HalBorderMode;
 use cv_core::{Tensor, TensorShape};
 use cv_hal::compute::ComputeDevice;
 use cv_hal::gpu::GpuContext;
