@@ -378,12 +378,7 @@ impl Plot3D {
             for point in &pc.points {
                 js_points.push_str(&format!("{{x:{},y:{},z:{}}},", point.x, point.y, point.z));
                 let c = &point.color;
-                js_colors.push_str(&format!(
-                    "[{},{},{}],",
-                    (c.r() * 255.0) as u8,
-                    (c.g() * 255.0) as u8,
-                    (c.b() * 255.0) as u8
-                ));
+                js_colors.push_str(&format!("[{},{},{}],", c.0, c.1, c.2));
             }
         }
 
@@ -491,7 +486,34 @@ impl Plot3D {
             return String::new();
         }
 
-        let (min_x, max_x, min_y, max_y, _min_z, _max_z) = self.bounding_box_all();
+        let (min_x, max_x, min_y, max_y, min_z, max_z) = self.bounding_box_all();
+
+        // Project all 8 corners of the 3D bounding box through the view rotation
+        // to get correct 2D bounds for the SVG viewport
+        let corners = [
+            (min_x, min_y, min_z),
+            (min_x, min_y, max_z),
+            (min_x, max_y, min_z),
+            (min_x, max_y, max_z),
+            (max_x, min_y, min_z),
+            (max_x, min_y, max_z),
+            (max_x, max_y, min_z),
+            (max_x, max_y, max_z),
+        ];
+        let mut proj_min_x = f64::INFINITY;
+        let mut proj_max_x = f64::NEG_INFINITY;
+        let mut proj_min_y = f64::INFINITY;
+        let mut proj_max_y = f64::NEG_INFINITY;
+        for &(cx, cy, cz) in &corners {
+            let (px, py) = self.project(cx, cy, cz);
+            proj_min_x = proj_min_x.min(px);
+            proj_max_x = proj_max_x.max(px);
+            proj_min_y = proj_min_y.min(py);
+            proj_max_y = proj_max_y.max(py);
+        }
+        let (min_x, max_x) = (proj_min_x, proj_max_x);
+        let (min_y, max_y) = (proj_min_y, proj_max_y);
+
         let range_x = (max_x - min_x).max(1.0);
         let range_y = (max_y - min_y).max(1.0);
         let scale = (self.width.min(self.height) * 0.8) / range_x.max(range_y);
@@ -551,8 +573,8 @@ impl Plot3D {
                 svg.push_str(&format!(
                     r#"  <circle cx="{:.1}" cy="{:.1}" r="{:.1}" fill="rgb({},{},{})" opacity="0.8"/>
 "#,
-                    screen_x, screen_y, point.size, (point.color.r() * 255.0) as u8,
-                    (point.color.g() * 255.0) as u8, (point.color.b() * 255.0) as u8
+                    screen_x, screen_y, point.size, point.color.0,
+                    point.color.1, point.color.2
                 ));
             }
         }
@@ -592,6 +614,31 @@ impl Plot3D {
         file.write_all(svg.as_bytes())?;
         Ok(())
     }
+}
+
+/// Get bounding box of combined point clouds
+#[allow(dead_code)]
+fn bounding_box_all(point_clouds: &[PointCloud3D]) -> (f64, f64, f64, f64, f64, f64) {
+    if point_clouds.is_empty() {
+        return (0.0, 1.0, 0.0, 1.0, 0.0, 1.0);
+    }
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    let mut min_z = f64::INFINITY;
+    let mut max_z = f64::NEG_INFINITY;
+
+    for pc in point_clouds {
+        let (x1, x2, y1, y2, z1, z2) = pc.bounding_box();
+        min_x = min_x.min(x1);
+        max_x = max_x.max(x2);
+        min_y = min_y.min(y1);
+        max_y = max_y.max(y2);
+        min_z = min_z.min(z1);
+        max_z = max_z.max(z2);
+    }
+    (min_x, max_x, min_y, max_y, min_z, max_z)
 }
 
 #[cfg(test)]
