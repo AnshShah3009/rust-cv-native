@@ -451,9 +451,7 @@ impl TaskScheduler {
                 .executors()
                 .lock()
                 .map_err(|_| {
-                    crate::Error::ConcurrencyError(
-                        "Device runtime executor pool lock poisoned".into(),
-                    )
+                    crate::Error::RuntimeError("Device runtime executor pool lock poisoned".into())
                 })?
                 .add_executor(group.executor.clone());
         }

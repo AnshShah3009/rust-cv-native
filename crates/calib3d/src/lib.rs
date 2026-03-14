@@ -35,6 +35,11 @@ pub use calibration::{
     CameraCalibrationOptions, CameraCalibrationResult,
 };
 
+pub mod multiview;
+pub use multiview::{
+    EssentialSolver, FundamentalSolver, HomographySolver, PnpSolver, Triangulator,
+};
+
 pub mod stereo;
 pub use stereo::{
     stereo_calibrate_from_chessboard_files, stereo_calibrate_from_chessboard_files_with_options,
@@ -42,6 +47,9 @@ pub use stereo::{
     stereo_calibrate_planar, stereo_calibrate_planar_with_options, stereo_rectify_matrices,
     StereoCalibrationFileReport, StereoCalibrationResult, StereoRectifyMatrices,
 };
+
+pub mod stereo_matching;
+pub use stereo_matching::*;
 
 #[cfg(test)]
 

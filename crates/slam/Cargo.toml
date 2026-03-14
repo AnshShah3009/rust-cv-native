@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 cv-core = { workspace = true }
 cv-features = { workspace = true }
+cv-video = { workspace = true }
 cv-calib3d = { workspace = true }
 cv-hal = { workspace = true }
 cv-runtime = { workspace = true }

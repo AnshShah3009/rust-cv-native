@@ -1,14 +1,16 @@
 pub mod mapping;
 pub mod pose_graph;
 pub mod tracking;
+pub mod types;
 
-pub use cv_core::kalman;
-pub use cv_core::kalman::{
+pub use cv_video::kalman;
+pub use cv_video::kalman::{
     DynamicKalmanFilter, ExtendedKalmanFilter, KalmanFilter, KalmanFilterState,
 };
+pub use types::{KeyFrame, MapPoint, WorldMap};
 
 use crate::tracking::Tracker;
-use cv_core::{slam::WorldMap, storage::CpuStorage, CameraIntrinsics, Pose, Tensor};
+use cv_core::{storage::CpuStorage, CameraIntrinsics, Pose, Tensor};
 
 pub struct Slam {
     pub map: WorldMap,

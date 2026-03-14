@@ -260,7 +260,7 @@ impl MarkerGpuContext {
 
         // Check GPU memory budget from environment
         let gpu_budget = gpu_utils::read_gpu_max_bytes_from_env()
-            .map_err(|e| Error::FeatureError(format!("GPU memory config error: {}", e)))?;
+            .map_err(|e| Error::AlgorithmError(format!("GPU memory config error: {}", e)))?;
 
         // Estimate memory usage for this operation
         // Image texture (f32): width * height * 4 bytes
@@ -277,7 +277,7 @@ impl MarkerGpuContext {
 
         // Check if operation fits in budget
         if !gpu_utils::fits_in_budget(total_memory, gpu_budget) {
-            return Err(Error::FeatureError(format!(
+            return Err(Error::AlgorithmError(format!(
                 "GPU marker detection requires {}MB but budget is {}MB (set RUSTCV_GPU_MAX_BYTES to increase)",
                 total_memory / 1024 / 1024,
                 gpu_budget.unwrap_or(0) / 1024 / 1024
@@ -436,8 +436,8 @@ impl MarkerGpuContext {
         });
 
         rx.recv()
-            .map_err(|e| Error::FeatureError(format!("GPU sync failed: {}", e)))?
-            .map_err(|e| Error::FeatureError(format!("GPU buffer map failed: {:?}", e)))?;
+            .map_err(|e| Error::AlgorithmError(format!("GPU sync failed: {}", e)))?
+            .map_err(|e| Error::AlgorithmError(format!("GPU buffer map failed: {:?}", e)))?;
 
         let data = buffer_slice.get_mapped_range();
         let results: Vec<GpuMarkerResult> = bytemuck::cast_slice(&data).to_vec();

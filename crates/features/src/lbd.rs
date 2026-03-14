@@ -42,7 +42,7 @@ impl Lbd {
     pub fn compute(
         &self,
         image: &GrayImage,
-        segments: &[crate::hough::LineSegment],
+        segments: &[cv_imgproc::hough::LineSegment],
     ) -> Vec<LineDescriptor> {
         // Simplified LBD implementation
         // For each segment, compute a descriptor based on orthogonal gradients

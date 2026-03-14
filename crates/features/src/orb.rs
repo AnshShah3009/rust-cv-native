@@ -344,14 +344,14 @@ fn extract_keypoints_from_score_map<S: Storage<f32> + cv_core::StorageFactory<f3
         let gpu_ctx = match ctx {
             ComputeDevice::Gpu(g) => g,
             _ => {
-                return Err(Error::FeatureError(
+                return Err(Error::AlgorithmError(
                     "GpuStorage requires GPU context".into(),
                 ))
             }
         };
         input_gpu
             .to_cpu_ctx(gpu_ctx)
-            .map_err(|e| Error::FeatureError(format!("GPU download failed: {}", e)))?
+            .map_err(|e| Error::AlgorithmError(format!("GPU download failed: {}", e)))?
     } else if let Some(cpu_storage) = score_map.storage.as_any().downcast_ref::<CpuStorage<f32>>() {
         let input_cpu = Tensor {
             storage: cpu_storage.clone(),
@@ -361,13 +361,13 @@ fn extract_keypoints_from_score_map<S: Storage<f32> + cv_core::StorageFactory<f3
         };
         input_cpu.clone()
     } else {
-        return Err(Error::FeatureError("Unsupported storage type".into()));
+        return Err(Error::AlgorithmError("Unsupported storage type".into()));
     };
 
     let slice = cpu_tensor
         .storage
         .as_slice()
-        .ok_or_else(|| Error::FeatureError("Failed to get CPU slice".into()))?;
+        .ok_or_else(|| Error::AlgorithmError("Failed to get CPU slice".into()))?;
     let (h, w) = cpu_tensor.shape.hw();
 
     let mut kps = Vec::new();
@@ -827,14 +827,14 @@ fn convert_to_f32_cpu<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
         let gpu_ctx = match ctx {
             ComputeDevice::Gpu(g) => g,
             _ => {
-                return Err(Error::FeatureError(
+                return Err(Error::AlgorithmError(
                     "GpuStorage requires GPU context".into(),
                 ))
             }
         };
         input_gpu
             .to_cpu_ctx(gpu_ctx)
-            .map_err(|e| Error::FeatureError(format!("GPU download failed: {}", e)))?
+            .map_err(|e| Error::AlgorithmError(format!("GPU download failed: {}", e)))?
     } else if let Some(cpu_storage) = input.storage.as_any().downcast_ref::<CpuStorage<u8>>() {
         let input_cpu = Tensor {
             storage: cpu_storage.clone(),
@@ -844,17 +844,17 @@ fn convert_to_f32_cpu<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
         };
         input_cpu.clone()
     } else {
-        return Err(Error::FeatureError("Unsupported storage type".into()));
+        return Err(Error::AlgorithmError("Unsupported storage type".into()));
     };
 
     let slice_u8 = cpu_u8
         .storage
         .as_slice()
-        .ok_or_else(|| Error::FeatureError("Failed to get u8 slice".into()))?;
+        .ok_or_else(|| Error::AlgorithmError("Failed to get u8 slice".into()))?;
     let data_f32: Vec<f32> = slice_u8.iter().map(|&v| v as f32 / 255.0).collect();
 
     Tensor::from_vec(data_f32, input.shape)
-        .map_err(|e| Error::FeatureError(format!("Failed to create f32 tensor: {}", e)))
+        .map_err(|e| Error::AlgorithmError(format!("Failed to create f32 tensor: {}", e)))
 }
 
 #[cfg(test)]

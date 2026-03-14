@@ -104,21 +104,21 @@ impl Sift {
             let mut sig = self.sigma;
             let base_layer = ctx
                 .gaussian_blur(&current_base, sig, 7)
-                .map_err(|e| Error::FeatureError(format!("Gaussian blur failed: {}", e)))?;
+                .map_err(|e| Error::AlgorithmError(format!("Gaussian blur failed: {}", e)))?;
             layers.push(base_layer);
 
             let k = 2.0f32.powf(1.0 / self.n_layers as f32);
             for _ in 1..(self.n_layers + 3) {
                 let prev = layers
                     .last()
-                    .ok_or_else(|| Error::FeatureError("Layer stack is empty".into()))?;
+                    .ok_or_else(|| Error::AlgorithmError("Layer stack is empty".into()))?;
                 let sig_prev = sig;
                 sig *= k;
                 let sig_total = (sig * sig - sig_prev * sig_prev).sqrt();
 
                 let blurred = ctx
                     .gaussian_blur(prev, sig_total, 7)
-                    .map_err(|e| Error::FeatureError(format!("Gaussian blur failed: {}", e)))?;
+                    .map_err(|e| Error::AlgorithmError(format!("Gaussian blur failed: {}", e)))?;
                 layers.push(blurred);
             }
             pyramid.push(layers);
@@ -128,7 +128,7 @@ impl Sift {
                 let (h, w) = to_sample.shape.hw();
                 current_base = ctx
                     .resize(to_sample, (w / 2, h / 2))
-                    .map_err(|e| Error::FeatureError(format!("Resize failed: {}", e)))?;
+                    .map_err(|e| Error::AlgorithmError(format!("Resize failed: {}", e)))?;
             }
         }
         Ok(pyramid)
@@ -170,7 +170,7 @@ impl Sift {
 
                 let diff = ctx
                     .subtract(a_f32, b_f32)
-                    .map_err(|e| Error::FeatureError(format!("Subtraction failed: {}", e)))?;
+                    .map_err(|e| Error::AlgorithmError(format!("Subtraction failed: {}", e)))?;
                 dog_layers.push(diff);
             }
             dog_pyramid.push(dog_layers);
@@ -245,7 +245,7 @@ impl Sift {
                         self.edge_threshold,
                     )
                     .map_err(|e| {
-                        Error::FeatureError(format!("SIFT extrema detection failed: {}", e))
+                        Error::AlgorithmError(format!("SIFT extrema detection failed: {}", e))
                     })?;
                 let cand_slice = match candidates.storage.as_slice() {
                     Some(slice) => slice,
@@ -356,7 +356,7 @@ impl Sift {
                     let src = octave_img
                         .storage
                         .as_slice()
-                        .ok_or_else(|| Error::FeatureError("Image not on CPU".into()))?;
+                        .ok_or_else(|| Error::AlgorithmError("Image not on CPU".into()))?;
                     let (h, w) = octave_img.shape.hw();
                     octave_kps
                         .into_iter()
@@ -369,12 +369,12 @@ impl Sift {
                 ComputeDevice::Gpu(gpu) => {
                     use cv_hal::tensor_ext::TensorToGpu;
                     let octave_img_gpu = octave_img.to_gpu_ctx(gpu).map_err(|e| {
-                        Error::FeatureError(format!("Failed to upload image to GPU: {}", e))
+                        Error::AlgorithmError(format!("Failed to upload image to GPU: {}", e))
                     })?;
                     let orientations = gpu
                         .compute_sift_orientations(&octave_img_gpu, &octave_kps)
                         .map_err(|e| {
-                            Error::FeatureError(format!(
+                            Error::AlgorithmError(format!(
                                 "SIFT orientation computation failed: {}",
                                 e
                             ))
@@ -398,7 +398,7 @@ impl Sift {
                             },
                         )
                         .map_err(|e| {
-                            Error::FeatureError(format!(
+                            Error::AlgorithmError(format!(
                                 "SIFT descriptor computation failed: {}",
                                 e
                             ))
@@ -417,7 +417,7 @@ impl Sift {
                     use cv_hal::tensor_ext::TensorToGpu;
                     let f32_cpu = &gaussian_pyramid[octave][0];
                     let octave_img_gpu = f32_cpu.to_gpu_ctx(gpu).map_err(|e| {
-                        Error::FeatureError(format!("Failed to upload image to GPU: {}", e))
+                        Error::AlgorithmError(format!("Failed to upload image to GPU: {}", e))
                     })?;
                     let descs = gpu
                         .compute_sift_descriptors(
@@ -427,7 +427,7 @@ impl Sift {
                             },
                         )
                         .map_err(|e| {
-                            Error::FeatureError(format!(
+                            Error::AlgorithmError(format!(
                                 "GPU SIFT descriptor computation failed: {}",
                                 e
                             ))
@@ -495,7 +495,10 @@ impl Sift {
                 let (kps, _) = self.detect_and_refine(&device, image)?;
                 Ok(kps)
             }
-            Err(e) => Err(Error::FeatureError(format!("Failed to get device: {}", e))),
+            Err(e) => Err(Error::AlgorithmError(format!(
+                "Failed to get device: {}",
+                e
+            ))),
         }
     }
 
@@ -538,7 +541,10 @@ impl Sift {
         };
         match runner.device() {
             Ok(device) => self.detect_and_compute(&device, image),
-            Err(e) => Err(Error::FeatureError(format!("Failed to get device: {}", e))),
+            Err(e) => Err(Error::AlgorithmError(format!(
+                "Failed to get device: {}",
+                e
+            ))),
         }
     }
 }
@@ -731,14 +737,14 @@ fn convert_to_f32_cpu<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
         let gpu_ctx = match ctx {
             ComputeDevice::Gpu(g) => g,
             _ => {
-                return Err(Error::FeatureError(
+                return Err(Error::AlgorithmError(
                     "GpuStorage requires GPU context".into(),
                 ))
             }
         };
         input_gpu
             .to_cpu_ctx(gpu_ctx)
-            .map_err(|e| Error::FeatureError(format!("GPU download failed: {}", e)))?
+            .map_err(|e| Error::AlgorithmError(format!("GPU download failed: {}", e)))?
     } else if let Some(cpu_storage) = input.storage.as_any().downcast_ref::<CpuStorage<u8>>() {
         let input_cpu = Tensor {
             storage: cpu_storage.clone(),
@@ -748,17 +754,17 @@ fn convert_to_f32_cpu<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
         };
         input_cpu.clone()
     } else {
-        return Err(Error::FeatureError("Unsupported storage type".into()));
+        return Err(Error::AlgorithmError("Unsupported storage type".into()));
     };
 
     let slice_u8 = cpu_u8
         .storage
         .as_slice()
-        .ok_or_else(|| Error::FeatureError("Failed to get u8 slice".into()))?;
+        .ok_or_else(|| Error::AlgorithmError("Failed to get u8 slice".into()))?;
     let data_f32: Vec<f32> = slice_u8.iter().map(|&v| v as f32 / 255.0).collect();
 
     Tensor::from_vec(data_f32, input.shape)
-        .map_err(|e| Error::FeatureError(format!("Failed to create f32 tensor: {}", e)))
+        .map_err(|e| Error::AlgorithmError(format!("Failed to create f32 tensor: {}", e)))
 }
 
 /// Detect SIFT keypoints using an optional GPU compute context.
@@ -790,7 +796,7 @@ mod tests {
             }
         }
         Tensor::from_vec(data, TensorShape::new(1, size, size))
-            .map_err(|e| Error::FeatureError(format!("Failed to create test image: {}", e)))
+            .map_err(|e| Error::AlgorithmError(format!("Failed to create test image: {}", e)))
     }
 
     #[test]

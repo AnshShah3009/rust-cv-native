@@ -57,12 +57,7 @@ fn test_odometry_point_to_plane_basic() {
     let mut depth = vec![0.0f32; width * height];
     let mut target_depth = vec![0.0f32; width * height];
 
-    let intrinsics = CameraIntrinsics {
-        fx: 32.0,
-        fy: 32.0,
-        cx: 16.0,
-        cy: 16.0,
-    };
+    let intrinsics = CameraIntrinsics::new(32.0, 32.0, 16.0, 16.0, width as u32, height as u32);
 
     for y in 0..height {
         for x in 0..width {

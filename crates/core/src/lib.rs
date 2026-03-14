@@ -10,7 +10,6 @@ pub mod float;
 pub mod frames;
 pub mod geometry;
 pub mod image;
-pub mod kalman;
 pub mod keypoint;
 pub mod nalgebra_adapters;
 pub mod nalgebra_wrapper;
@@ -18,7 +17,6 @@ pub mod point_cloud;
 pub mod robust;
 pub mod robust_loss;
 pub mod runtime;
-pub mod slam;
 pub mod storage;
 pub mod tensor;
 pub mod vector;
@@ -29,7 +27,6 @@ pub use float::*;
 pub use frames::*;
 pub use geometry::*;
 pub use image::*;
-pub use kalman::*;
 pub use keypoint::*;
 pub use nalgebra_adapters::*;
 pub use nalgebra_wrapper::*;
@@ -37,7 +34,6 @@ pub use point_cloud::*;
 pub use robust::*;
 pub use robust_loss::*;
 pub use runtime::*;
-pub use slam::*;
 pub use storage::*;
 pub use tensor::*;
 pub use vector::*;
@@ -68,10 +64,6 @@ pub enum Error {
     #[error("Runtime error: {0}")]
     RuntimeError(String),
 
-    /// Concurrency error with message
-    #[error("Concurrency error: {0}")]
-    ConcurrencyError(String),
-
     /// Invalid input with message
     #[error("Invalid input: {0}")]
     InvalidInput(String),
@@ -87,46 +79,6 @@ pub enum Error {
     /// I/O error from file operations
     #[error("I/O error: {0}")]
     IoError(String),
-
-    /// Feature detection/extraction error
-    #[error("Feature error: {0}")]
-    FeatureError(String),
-
-    /// Video processing error
-    #[error("Video error: {0}")]
-    VideoError(String),
-
-    /// Image processing error
-    #[error("Image processing error: {0}")]
-    ImgprocError(String),
-
-    /// 3D registration error
-    #[error("Registration error: {0}")]
-    RegistrationError(String),
-
-    /// Stereo vision error
-    #[error("Stereo error: {0}")]
-    StereoError(String),
-
-    /// Object detection error
-    #[error("Object detection error: {0}")]
-    ObjectDetectionError(String),
-
-    /// Deep neural network error
-    #[error("DNN error: {0}")]
-    DnnError(String),
-
-    /// Image processing/photography error
-    #[error("Photo error: {0}")]
-    PhotoError(String),
-
-    /// Camera calibration error
-    #[error("Calibration error: {0}")]
-    CalibrationError(String),
-
-    /// Structure from Motion error
-    #[error("SfM error: {0}")]
-    SfMError(String),
 
     /// Hardware/Device error
     #[error("Device error: {0}")]

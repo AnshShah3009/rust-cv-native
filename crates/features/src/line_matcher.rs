@@ -1,6 +1,6 @@
 //! Line Matching functionality
 
-use crate::hough::LineSegment;
+use cv_imgproc::hough::LineSegment;
 
 /// Binary descriptor for a detected line segment.
 #[derive(Debug, Clone)]

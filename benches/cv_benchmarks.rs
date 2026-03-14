@@ -47,7 +47,7 @@ fn benchmark_stereo_block_matching(c: &mut Criterion) {
             &(left.clone(), right.clone()),
             |b, (l, r)| {
                 b.iter(|| {
-                    use cv_stereo::BlockMatcher;
+                    use cv_calib3d::BlockMatcher;
                     let matcher = BlockMatcher::new()
                         .with_block_size(11)
                         .with_disparity_range(0, 32);
@@ -74,7 +74,7 @@ fn benchmark_stereo_sgm(c: &mut Criterion) {
             &(left.clone(), right.clone()),
             |b, (l, r)| {
                 b.iter(|| {
-                    use cv_stereo::SgmMatcher;
+                    use cv_calib3d::SgmMatcher;
                     let matcher = SgmMatcher::new().with_disparity_range(0, 16);
                     let _ = matcher.compute(black_box(l), black_box(r));
                 });
@@ -96,8 +96,8 @@ fn benchmark_stereo_gpu_block_matching(c: &mut Criterion) {
     {
         let rt = Runtime::new().expect("tokio runtime for GPU benchmark");
         let gpu_matcher = rt
-            .block_on(cv_stereo::GpuStereoMatcher::new(
-                cv_stereo::GpuStereoAlgorithm::BlockMatching { block_size: 11 },
+            .block_on(cv_calib3d::GpuStereoMatcher::new(
+                cv_calib3d::GpuStereoAlgorithm::BlockMatching { block_size: 11 },
             ))
             .ok();
 
@@ -113,7 +113,7 @@ fn benchmark_stereo_gpu_block_matching(c: &mut Criterion) {
                 &(left.clone(), right.clone()),
                 |b, (l, r)| {
                     b.iter(|| {
-                        let matcher = cv_stereo::BlockMatcher::new()
+                        let matcher = cv_calib3d::BlockMatcher::new()
                             .with_block_size(11)
                             .with_disparity_range(0, 32);
                         let _ = matcher.compute(black_box(l), black_box(r));

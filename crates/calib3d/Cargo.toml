@@ -14,6 +14,20 @@ image = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 rayon = { workspace = true }
+wide = { workspace = true }
+wgpu = { workspace = true, optional = true }
+bytemuck = { workspace = true, features = ["derive"], optional = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"], optional = true }
+
+[dev-dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "calibration_benchmark"
+harness = false
 
 [features]
 default = []
+gpu = ["wgpu", "bytemuck", "tokio"]

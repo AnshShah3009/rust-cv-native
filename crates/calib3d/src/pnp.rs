@@ -16,12 +16,12 @@ pub fn solve_pnp_dlt(
     intrinsics: &CameraIntrinsics,
 ) -> Result<Pose> {
     if object_points.len() != image_points.len() {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "object_points and image_points must have equal length".to_string(),
         ));
     }
     if object_points.len() < 6 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "solve_pnp_dlt needs at least 6 correspondences".to_string(),
         ));
     }
@@ -61,9 +61,9 @@ pub fn solve_pnp_dlt(
     }
 
     let svd = a.svd(true, true);
-    let vt = svd.v_t.ok_or_else(|| {
-        cv_core::Error::CalibrationError("SVD failed in solve_pnp_dlt".to_string())
-    })?;
+    let vt = svd
+        .v_t
+        .ok_or_else(|| cv_core::Error::AlgorithmError("SVD failed in solve_pnp_dlt".to_string()))?;
     let p = vt.row(vt.nrows() - 1);
 
     let mut pmat = Matrix3x4::<f64>::zeros();
@@ -88,17 +88,17 @@ pub fn solve_pnp_dlt(
 
     let svd_m = m.svd(true, true);
     let u = svd_m.u.ok_or_else(|| {
-        cv_core::Error::CalibrationError("SVD U missing in solve_pnp_dlt".to_string())
+        cv_core::Error::AlgorithmError("SVD U missing in solve_pnp_dlt".to_string())
     })?;
     let vt_m = svd_m.v_t.ok_or_else(|| {
-        cv_core::Error::CalibrationError("SVD V^T missing in solve_pnp_dlt".to_string())
+        cv_core::Error::AlgorithmError("SVD V^T missing in solve_pnp_dlt".to_string())
     })?;
 
     let mut r = u * vt_m;
     let scale =
         (svd_m.singular_values[0] + svd_m.singular_values[1] + svd_m.singular_values[2]) / 3.0;
     if scale.abs() < 1e-12 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "Degenerate solve_pnp_dlt scale".to_string(),
         ));
     }
@@ -122,7 +122,7 @@ pub fn solve_pnp_ransac(
     max_iters: usize,
 ) -> Result<(Pose, Vec<bool>)> {
     if object_points.len() != image_points.len() || object_points.len() < 6 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "solve_pnp_ransac needs >=6 paired points".to_string(),
         ));
     }
@@ -175,7 +175,7 @@ pub fn solve_pnp_ransac(
     }
 
     let best_pose = best_pose.ok_or_else(|| {
-        cv_core::Error::CalibrationError("RANSAC failed to estimate PnP pose".to_string())
+        cv_core::Error::AlgorithmError("RANSAC failed to estimate PnP pose".to_string())
     })?;
 
     let inlier_obj: Vec<Point3<f64>> = object_points
@@ -460,7 +460,7 @@ pub fn solve_pnp_refine_ctx(
     group: &RuntimeRunner,
 ) -> Result<Pose> {
     if object_points.len() != image_points.len() || object_points.len() < 6 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "solve_pnp_refine needs >=6 paired points".to_string(),
         ));
     }

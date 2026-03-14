@@ -25,6 +25,8 @@
 
 use image::GrayImage;
 
+/// Kalman filter implementations
+pub mod kalman;
 /// Mixture of Gaussians background subtraction
 pub mod mog2;
 /// Optical flow computation algorithms
@@ -33,15 +35,9 @@ pub mod optical_flow;
 pub mod tracking;
 
 pub use cv_core::{Error, Result};
+pub use kalman::{DynamicKalmanFilter, ExtendedKalmanFilter, KalmanFilter, KalmanFilterState};
 pub use optical_flow::*;
 pub use tracking::*;
-
-// Re-export from cv-core (Kalman is a general estimation primitive)
-/// Backwards-compatible alias
-pub use cv_core::kalman;
-pub use cv_core::kalman::{
-    DynamicKalmanFilter, ExtendedKalmanFilter, KalmanFilter, KalmanFilterState,
-};
 
 /// Single video frame with timing information
 ///

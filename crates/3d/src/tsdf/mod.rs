@@ -7,17 +7,12 @@ use nalgebra::{Matrix4, Point3, Vector3};
 use rayon::prelude::*;
 use std::collections::HashMap;
 
+use cv_core::CameraIntrinsicsF32;
 use cv_hal::compute::ComputeDevice;
 use cv_runtime::orchestrator::RuntimeRunner;
 
-/// Camera intrinsics
-#[derive(Debug, Clone, Copy)]
-pub struct CameraIntrinsics {
-    pub fx: f32,
-    pub fy: f32,
-    pub cx: f32,
-    pub cy: f32,
-}
+/// Re-export the canonical f32 camera intrinsics from cv-core.
+pub type CameraIntrinsics = CameraIntrinsicsF32;
 
 /// Voxel block for TSDF volume
 #[derive(Debug, Clone)]
@@ -886,19 +881,15 @@ mod tests {
         // Depth values already in meters (scale = 1.0)
         volume = volume.with_depth_scale(1.0);
 
-        // Camera intrinsics (simple pinhole)
-        let intrinsics = CameraIntrinsics {
-            fx: 500.0,
-            fy: 500.0,
-            cx: 32.0,
-            cy: 32.0,
-        };
-
         // Camera at origin looking down +Z
         let extrinsics = Matrix4::identity();
 
         let width: usize = 64;
         let height: usize = 64;
+
+        // Camera intrinsics (simple pinhole)
+        let intrinsics =
+            CameraIntrinsics::new(500.0, 500.0, 32.0, 32.0, width as u32, height as u32);
 
         // Synthetic depth image: flat plane at z = 1.0m
         let depth_image: Vec<f32> = vec![1.0; width * height];

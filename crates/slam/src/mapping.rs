@@ -1,4 +1,4 @@
-use cv_core::slam::{MapPoint, WorldMap};
+use crate::types::{MapPoint, WorldMap};
 use cv_core::KeyPoint;
 use cv_features::{Descriptor, Descriptors};
 use std::sync::{Arc, RwLock};

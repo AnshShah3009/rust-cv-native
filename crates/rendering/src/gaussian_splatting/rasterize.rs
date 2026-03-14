@@ -2,6 +2,19 @@ use nalgebra::{Matrix3, Matrix3x4, Point3, Vector3, Vector4};
 
 use super::types::{Gaussian, GaussianCloud, ProjectedGaussian, SphericalHarmonics};
 
+impl From<cv_core::CameraIntrinsicsF32> for Camera {
+    /// Convert from cv-core CameraIntrinsicsF32 to a rendering Camera at identity pose.
+    fn from(intrinsics: cv_core::CameraIntrinsicsF32) -> Self {
+        Camera::new(
+            Point3::origin(),
+            Vector4::new(0.0, 0.0, 0.0, 1.0), // identity quaternion
+            intrinsics.fx,
+            intrinsics.width,
+            intrinsics.height,
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Camera {
     pub view_matrix: Matrix3x4<f32>,

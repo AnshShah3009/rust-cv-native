@@ -1,7 +1,7 @@
 //! Visibility determination for 3D point clouds.
 //!
 //! Provides depth-buffer-based hidden point removal as an alternative to the
-//! convex-hull HPR method in `cv_point_cloud::hidden_point_removal`.
+//! convex-hull HPR method in [`crate::hidden_point_removal`].
 //!
 //! The depth-buffer approach rasterizes points into a z-buffer from a given
 //! camera viewpoint and marks occluded points.  It is faster than HPR for
