@@ -569,7 +569,7 @@ mod tests {
         dst[8] = (500.0, 500.0);
         dst[9] = (-200.0, -200.0);
 
-        let (h, mask) = find_homography_ransac(&src, &dst, 5.0, 2000).unwrap();
+        let (_h, mask) = find_homography_ransac(&src, &dst, 5.0, 2000).unwrap();
 
         // At least one outlier should be rejected.
         let outlier_rejected = !mask[8] || !mask[9];

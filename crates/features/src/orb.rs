@@ -860,7 +860,7 @@ fn convert_to_f32_cpu<S: Storage<u8> + cv_core::StorageFactory<u8> + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::descriptor::DescriptorExtractor;
+
     use image::{GrayImage, Luma};
 
     fn create_checkerboard(size: u32, square_size: u32) -> GrayImage {

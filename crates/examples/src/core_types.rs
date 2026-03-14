@@ -2,11 +2,8 @@
 //!
 //! Run with: cargo run --example core_types
 
-use cv_core::{
-    CameraConvention, CameraIntrinsics, FrameConvention, Handedness, KeyPoint, PointCloud,
-    RigOrientation, Tensor,
-};
-use nalgebra::{Matrix3, Matrix4, Point3, Vector3};
+use cv_core::{CameraConvention, CameraIntrinsics, FrameConvention, KeyPoint, PointCloud};
+use nalgebra::{Matrix3, Point3};
 
 fn main() {
     println!("=== cv-core Example ===\n");
@@ -48,7 +45,7 @@ fn frame_conventions() {
 
     // Convert pose between conventions
     let rotation = Matrix3::<f32>::identity();
-    let converted = opencv.convert_rotation(&colmap, &rotation);
+    let _converted = opencv.convert_rotation(&colmap, &rotation);
     println!("  Converted identity rotation");
 }
 

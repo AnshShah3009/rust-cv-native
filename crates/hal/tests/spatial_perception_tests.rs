@@ -1,9 +1,7 @@
-use cv_core::{DataType, Tensor, TensorShape};
+use cv_core::{Tensor, TensorShape};
 use cv_hal::context::ComputeContext;
 use cv_hal::gpu::GpuContext;
-use cv_hal::storage::GpuStorage;
 use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
-use std::sync::Arc;
 
 #[test]
 fn test_gpu_nms_pixel() {
