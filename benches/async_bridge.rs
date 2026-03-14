@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use cv_stereo::BlockMatcher;
+use cv_calib3d::BlockMatcher;
 use image::GrayImage;
 use tokio::runtime::Runtime;
 

@@ -169,15 +169,17 @@ impl DnnNet {
 
         let slice = input
             .as_slice()
-            .map_err(|e| Error::DnnError(e.to_string()))?;
+            .map_err(|e| Error::RuntimeError(e.to_string()))?;
         // Create tract tensor from slice
-        let tensor = tract_onnx::prelude::Tensor::from_shape(&input_shape_vec, slice)
-            .map_err(|e| Error::DnnError(format!("Failed to create tensor from shape: {}", e)))?;
+        let tensor =
+            tract_onnx::prelude::Tensor::from_shape(&input_shape_vec, slice).map_err(|e| {
+                Error::RuntimeError(format!("Failed to create tensor from shape: {}", e))
+            })?;
 
         let result = self
             .model
             .run(tvec!(tensor.into()))
-            .map_err(|e| Error::DnnError(format!("Model forward pass failed: {}", e)))?;
+            .map_err(|e| Error::RuntimeError(format!("Model forward pass failed: {}", e)))?;
 
         let mut outputs = Vec::new();
         for t in result {
@@ -185,7 +187,7 @@ impl DnnNet {
             let data = t
                 .as_slice::<f32>()
                 .map_err(|e| {
-                    Error::DnnError(format!("Failed to extract slice from tensor: {}", e))
+                    Error::RuntimeError(format!("Failed to extract slice from tensor: {}", e))
                 })?
                 .to_vec();
 
@@ -198,7 +200,8 @@ impl DnnNet {
             };
 
             outputs.push(
-                Tensor::from_vec(data, tensor_shape).map_err(|e| Error::DnnError(e.to_string()))?,
+                Tensor::from_vec(data, tensor_shape)
+                    .map_err(|e| Error::RuntimeError(e.to_string()))?,
             );
         }
 
@@ -255,6 +258,6 @@ impl DnnNet {
             data,
             cv_core::TensorShape::new(channels, target_h, target_w),
         )
-        .map_err(|e| Error::DnnError(e.to_string()))
+        .map_err(|e| Error::RuntimeError(e.to_string()))
     }
 }

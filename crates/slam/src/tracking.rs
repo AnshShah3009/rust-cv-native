@@ -1,6 +1,7 @@
 use crate::mapping::MapExt;
+use crate::types::WorldMap;
 use cv_calib3d::solve_pnp_ransac;
-use cv_core::{slam::WorldMap, storage::Storage, CameraIntrinsics, KeyPoints, Pose, Tensor};
+use cv_core::{storage::Storage, CameraIntrinsics, KeyPoints, Pose, Tensor};
 use cv_features::{detect_and_compute_ctx, Descriptors, Orb};
 use cv_hal::compute::ComputeDevice;
 use cv_runtime::orchestrator::ResourceGroup;
@@ -150,7 +151,7 @@ impl Tracker {
                 let pos = Point3::new(x as f32, y as f32, 1.0);
 
                 let desc_data = desc.data.clone();
-                let mp = cv_core::slam::MapPoint::new(i as u64, pos, desc_data);
+                let mp = crate::types::MapPoint::new(i as u64, pos, desc_data);
                 map.add_point(mp);
             }
 

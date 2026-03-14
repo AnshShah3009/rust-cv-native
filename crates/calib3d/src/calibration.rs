@@ -100,7 +100,7 @@ pub fn calibrate_camera_planar_with_options(
     options: CameraCalibrationOptions,
 ) -> Result<CameraCalibrationResult> {
     if object_points.len() != image_points.len() || object_points.len() < 3 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "calibrate_camera_planar needs >=3 views with matching point sets".to_string(),
         ));
     }
@@ -108,12 +108,12 @@ pub fn calibrate_camera_planar_with_options(
     let mut homographies = Vec::with_capacity(object_points.len());
     for (obj, img) in object_points.iter().zip(image_points.iter()) {
         if obj.len() != img.len() || obj.len() < 4 {
-            return Err(cv_core::Error::CalibrationError(
+            return Err(cv_core::Error::AlgorithmError(
                 "each calibration view needs >=4 correspondences".to_string(),
             ));
         }
         if obj.iter().any(|p| p.z.abs() > 1e-9) {
-            return Err(cv_core::Error::CalibrationError(
+            return Err(cv_core::Error::AlgorithmError(
                 "calibrate_camera_planar expects planar object points (z=0)".to_string(),
             ));
         }
@@ -128,7 +128,7 @@ pub fn calibrate_camera_planar_with_options(
     let mut cy = k[(1, 2)];
     if let Some(ratio) = options.fix_aspect_ratio {
         if !ratio.is_finite() || ratio <= 0.0 {
-            return Err(cv_core::Error::CalibrationError(
+            return Err(cv_core::Error::AlgorithmError(
                 "fix_aspect_ratio must be finite and > 0".to_string(),
             ));
         }
@@ -138,7 +138,7 @@ pub fn calibrate_camera_planar_with_options(
     }
     if let Some((fixed_cx, fixed_cy)) = options.fix_principal_point {
         if !fixed_cx.is_finite() || !fixed_cy.is_finite() {
-            return Err(cv_core::Error::CalibrationError(
+            return Err(cv_core::Error::AlgorithmError(
                 "fix_principal_point must be finite".to_string(),
             ));
         }
@@ -175,7 +175,7 @@ pub fn calibrate_camera_planar_with_options(
         rms_reprojection_error: rms,
     };
     if !is_valid_camera_calibration(&result) {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "calibrate_camera_planar produced non-finite or degenerate calibration".to_string(),
         ));
     }
@@ -204,13 +204,13 @@ pub fn calibrate_camera_from_chessboard_images_with_options(
     options: CameraCalibrationOptions,
 ) -> Result<CameraCalibrationResult> {
     if images.is_empty() {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "calibrate_camera_from_chessboard_images: images cannot be empty".to_string(),
         ));
     }
     let (w, h) = images[0].dimensions();
     if images.iter().any(|img| img.dimensions() != (w, h)) {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "all calibration images must have the same dimensions".to_string(),
         ));
     }
@@ -226,7 +226,7 @@ pub fn calibrate_camera_from_chessboard_images_with_options(
     }
 
     if object_points.len() < 3 {
-        return Err(cv_core::Error::CalibrationError(format!(
+        return Err(cv_core::Error::AlgorithmError(format!(
             "need at least 3 valid chessboard frames, found {}",
             object_points.len()
         )));
@@ -257,7 +257,7 @@ pub fn calibrate_camera_from_chessboard_files_with_options<P: AsRef<Path>>(
     options: CameraCalibrationOptions,
 ) -> Result<(CameraCalibrationResult, CalibrationFileReport)> {
     if image_paths.is_empty() {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "calibration file list cannot be empty".to_string(),
         ));
     }
@@ -296,18 +296,18 @@ pub fn calibrate_camera_from_chessboard_files_with_options<P: AsRef<Path>>(
     }
 
     if object_points.len() < 3 {
-        return Err(cv_core::Error::CalibrationError(format!(
+        return Err(cv_core::Error::AlgorithmError(format!(
             "need at least 3 valid chessboard images, found {}",
             object_points.len()
         )));
     }
     let dims = expected_dims.ok_or_else(|| {
-        cv_core::Error::CalibrationError("no readable images in provided file list".to_string())
+        cv_core::Error::AlgorithmError("no readable images in provided file list".to_string())
     })?;
 
     let calib = calibrate_camera_planar_with_options(&object_points, &image_points, dims, options)
         .map_err(|e| {
-            cv_core::Error::CalibrationError(format!(
+            cv_core::Error::AlgorithmError(format!(
                 "camera calibration failed for file subset (used {} / {} images): {}",
                 object_points.len(),
                 image_paths.len(),
@@ -333,7 +333,7 @@ pub fn refine_camera_calibration_iterative(
 ) -> Result<CameraCalibrationResult> {
     if object_points.len() != image_points.len() || object_points.len() != initial.extrinsics.len()
     {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "refine_camera_calibration_iterative: inconsistent input sizes".to_string(),
         ));
     }
@@ -400,7 +400,7 @@ pub fn refine_camera_calibration_iterative(
 /// Estimate homography using Direct Linear Transform (DLT)
 fn estimate_homography_dlt(src: &[Point2<f64>], dst: &[Point2<f64>]) -> Result<Matrix3<f64>> {
     if src.len() != dst.len() || src.len() < 4 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "estimate_homography_dlt needs >=4 paired points".to_string(),
         ));
     }
@@ -433,7 +433,7 @@ fn estimate_homography_dlt(src: &[Point2<f64>], dst: &[Point2<f64>]) -> Result<M
 
     let svd = a.svd(true, true);
     let vt = svd.v_t.ok_or_else(|| {
-        cv_core::Error::CalibrationError("SVD failed in estimate_homography_dlt".to_string())
+        cv_core::Error::AlgorithmError("SVD failed in estimate_homography_dlt".to_string())
     })?;
     let h = vt.row(vt.nrows() - 1);
     let hn = Matrix3::new(
@@ -457,7 +457,7 @@ fn estimate_homography_dlt(src: &[Point2<f64>], dst: &[Point2<f64>]) -> Result<M
 /// Compute intrinsic matrix from planar homographies
 fn intrinsics_from_planar_homographies(homographies: &[Matrix3<f64>]) -> Result<Matrix3<f64>> {
     if homographies.len() < 3 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "need at least 3 homographies for planar calibration".to_string(),
         ));
     }
@@ -475,7 +475,7 @@ fn intrinsics_from_planar_homographies(homographies: &[Matrix3<f64>]) -> Result<
 
     let svd = v.svd(true, true);
     let vt = svd.v_t.ok_or_else(|| {
-        cv_core::Error::CalibrationError(
+        cv_core::Error::AlgorithmError(
             "SVD failed in intrinsics_from_planar_homographies".to_string(),
         )
     })?;
@@ -489,7 +489,7 @@ fn intrinsics_from_planar_homographies(homographies: &[Matrix3<f64>]) -> Result<
 
     let mut denom = b11 * b22 - b12 * b12;
     if denom.abs() < 1e-18 || b11.abs() < 1e-18 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "degenerate calibration system".to_string(),
         ));
     }
@@ -507,7 +507,7 @@ fn intrinsics_from_planar_homographies(homographies: &[Matrix3<f64>]) -> Result<
         b33 = -b33;
         denom = b11 * b22 - b12 * b12;
         if denom.abs() < 1e-18 || b11.abs() < 1e-18 {
-            return Err(cv_core::Error::CalibrationError(
+            return Err(cv_core::Error::AlgorithmError(
                 "degenerate calibration system after sign flip".to_string(),
             ));
         }
@@ -515,7 +515,7 @@ fn intrinsics_from_planar_homographies(homographies: &[Matrix3<f64>]) -> Result<
         lambda = b33 - (b13 * b13 + v0 * (b12 * b13 - b11 * b23)) / b11;
     }
     if lambda <= 0.0 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "invalid lambda in planar calibration".to_string(),
         ));
     }
@@ -545,12 +545,10 @@ fn extrinsics_from_homography(k_inv: &Matrix3<f64>, h: &Matrix3<f64>) -> Result<
 
     let svd = r.svd(true, true);
     let u = svd.u.ok_or_else(|| {
-        cv_core::Error::CalibrationError("SVD U missing in extrinsics_from_homography".to_string())
+        cv_core::Error::AlgorithmError("SVD U missing in extrinsics_from_homography".to_string())
     })?;
     let vt = svd.v_t.ok_or_else(|| {
-        cv_core::Error::CalibrationError(
-            "SVD V^T missing in extrinsics_from_homography".to_string(),
-        )
+        cv_core::Error::AlgorithmError("SVD V^T missing in extrinsics_from_homography".to_string())
     })?;
     r = u * vt;
     if r.determinant() < 0.0 {
@@ -570,7 +568,7 @@ fn compute_rms_reprojection(
     image_points: &[Vec<Point2<f64>>],
 ) -> Result<f64> {
     if extrinsics.len() != object_points.len() || object_points.len() != image_points.len() {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "compute_rms_reprojection: mismatched batch sizes".to_string(),
         ));
     }
@@ -601,7 +599,7 @@ fn compute_rms_reprojection(
         .reduce(|| (0.0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
 
     if count == 0 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "compute_rms_reprojection: no valid points".to_string(),
         ));
     }
@@ -674,7 +672,7 @@ fn estimate_intrinsics_from_extrinsics(
     }
 
     if n_x < 2 || n_y < 2 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "estimate_intrinsics_from_extrinsics: insufficient valid points".to_string(),
         ));
     }
@@ -817,7 +815,7 @@ fn v_ij(h: &Matrix3<f64>, i: usize, j: usize) -> [f64; 6] {
 /// Normalize points using Hartley normalization
 fn normalize_points_hartley(points: &[Point2<f64>]) -> Result<(Vec<Point2<f64>>, Matrix3<f64>)> {
     if points.is_empty() {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "normalize_points_hartley: empty points array".to_string(),
         ));
     }

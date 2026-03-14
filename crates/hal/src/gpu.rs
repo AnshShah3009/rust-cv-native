@@ -2603,11 +2603,17 @@ impl GpuContext {
     }
 
     pub async fn from_adapter(adapter: wgpu::Adapter) -> crate::Result<Self> {
+        // Request TIMESTAMP_QUERY if the adapter supports it (for GPU profiling)
+        let mut features = wgpu::Features::empty();
+        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            features |= wgpu::Features::TIMESTAMP_QUERY;
+        }
+
         // Request device
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("CV-HAL Device"),
-                required_features: wgpu::Features::empty(),
+                required_features: features,
                 required_limits: wgpu::Limits::downlevel_defaults(),
                 memory_hints: wgpu::MemoryHints::default(),
                 experimental_features: wgpu::ExperimentalFeatures::default(),

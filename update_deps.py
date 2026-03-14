@@ -6,7 +6,7 @@ deps_to_workspace = {
     "core_affinity", "ndarray", "tokio", "ffmpeg-next", "rand", "serde", "serde_json", "pollster",
     "rstar", "itertools", "anyhow", "log", "tracing", "libc",
     "cv-core", "cv-hal", "cv-imgproc", "cv-features", "cv-stereo", "cv-video", "cv-3d", "cv-calib3d",
-    "cv-sfm", "cv-slam", "cv-runtime", "cv-optimize", "cv-scientific", "cv-point-cloud", "cv-videoio",
+    "cv-sfm", "cv-slam", "cv-runtime", "cv-optimize", "cv-scientific", "cv-videoio",
     "cv-photo", "cv-io", "cv-objdetect", "cv-dnn", "cv-rendering", "cv-registration", "cv-plot", "cv-viewer"
 }
 

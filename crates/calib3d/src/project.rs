@@ -61,7 +61,7 @@ pub fn project_points(
         .map(|p| {
             let pc = extrinsics.rotation * p.coords + extrinsics.translation;
             if !pc.iter().all(|v: &f64| v.is_finite()) || pc[2].abs() <= 1e-12 {
-                return Err(cv_core::Error::CalibrationError(
+                return Err(cv_core::Error::AlgorithmError(
                     "project_points encountered non-finite or near-zero depth point".to_string(),
                 ));
             }
@@ -100,7 +100,7 @@ pub fn project_points_with_distortion(
         .map(|p| {
             let pc = extrinsics.rotation * p.coords + extrinsics.translation;
             if !pc.iter().all(|v: &f64| v.is_finite()) || pc[2].abs() <= 1e-12 {
-                return Err(cv_core::Error::CalibrationError(
+                return Err(cv_core::Error::AlgorithmError(
                     "project_points_with_distortion encountered non-finite or near-zero depth point"
                         .to_string(),
                 ));
@@ -177,7 +177,7 @@ pub fn project_points_with_jacobian(
         let p_cam = extrinsics.rotation * p_obj.coords + extrinsics.translation;
 
         if !p_cam.iter().all(|v| v.is_finite()) || p_cam[2].abs() <= 1e-12 {
-            return Err(cv_core::Error::CalibrationError(
+            return Err(cv_core::Error::AlgorithmError(
                 "Projection encountered non-finite or near-zero depth point".to_string(),
             ));
         }

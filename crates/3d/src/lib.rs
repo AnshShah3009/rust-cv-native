@@ -75,8 +75,11 @@
 
 pub mod async_ops;
 pub mod batch;
+pub mod filters;
 pub mod gpu;
+pub mod hidden_point_removal;
 pub mod mesh;
+pub mod normals;
 pub mod odometry;
 pub mod raycasting;
 pub mod spatial;
@@ -107,6 +110,9 @@ pub use raycasting::{
 };
 pub use spatial::{KDTree, Octree, VoxelGrid};
 pub use tsdf::{CameraIntrinsics, TSDFVolume, Triangle, VoxelBlock};
+
+pub use filters::*;
+pub use normals::*;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

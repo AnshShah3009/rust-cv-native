@@ -10,7 +10,6 @@ cv-core = { workspace = true }
 cv-hal = { workspace = true }
 cv-imgproc = { workspace = true }
 cv-features = { workspace = true }
-cv-stereo = { workspace = true }
 cv-video = { workspace = true }
 cv-3d = { workspace = true }
 cv-calib3d = { workspace = true }
@@ -24,7 +23,6 @@ criterion = { workspace = true }
 image = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 cv-scientific = { workspace = true }
-cv-point-cloud = { workspace = true }
 nalgebra = { workspace = true }
 futures = { workspace = true }
 wgpu = { workspace = true }
@@ -33,7 +31,7 @@ bytemuck = { workspace = true }
 
 [features]
 default = ["full-precision"]
-gpu = ["cv-stereo/gpu", "cv-features/gpu"]
+gpu = ["cv-calib3d/gpu", "cv-features/gpu"]
 full-precision = ["cv-core/full-precision"]
 half-precision = ["cv-core/half-precision"]
 all-precision = ["cv-core/all-precision"]
@@ -65,7 +63,6 @@ members = [
     "crates/hal",
     "crates/imgproc",
     "crates/features",
-    "crates/stereo",
     "crates/video",
     "crates/videoio",
     "crates/calib3d",
@@ -75,11 +72,9 @@ members = [
     "crates/runtime",
     "crates/optimize",
     "crates/scientific",
-    "crates/point-cloud",
     "crates/python",
     "crates/viewer",
     "crates/io",
-    "crates/objdetect",
     "crates/dnn",
     "crates/3d",
     "crates/rendering",
@@ -141,7 +136,6 @@ cv-core = { path = "./crates/core" }
 cv-hal = { path = "./crates/hal" }
 cv-imgproc = { path = "./crates/imgproc" }
 cv-features = { path = "./crates/features" }
-cv-stereo = { path = "./crates/stereo" }
 cv-video = { path = "./crates/video" }
 cv-3d = { path = "./crates/3d" }
 cv-calib3d = { path = "./crates/calib3d" }
@@ -150,11 +144,9 @@ cv-slam = { path = "./crates/slam" }
 cv-runtime = { path = "./crates/runtime" }
 cv-optimize = { path = "./crates/optimize" }
 cv-scientific = { path = "./crates/scientific" }
-cv-point-cloud = { path = "./crates/point-cloud" }
 cv-videoio = { path = "./crates/videoio" }
 cv-photo = { path = "./crates/photo" }
 cv-io = { path = "./crates/io" }
-cv-objdetect = { path = "./crates/objdetect" }
 cv-dnn = { path = "./crates/dnn" }
 cv-rendering = { path = "./crates/rendering" }
 cv-registration = { path = "./crates/registration" }

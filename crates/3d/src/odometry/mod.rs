@@ -112,12 +112,14 @@ pub fn compute_rgbd_odometry_ctx(
         let scaled_height = (height as f32 * scale) as usize;
 
         // Create scaled intrinsics
-        let scaled_intrinsics = crate::tsdf::CameraIntrinsics {
-            fx: intrinsics.fx * scale,
-            fy: intrinsics.fy * scale,
-            cx: intrinsics.cx * scale,
-            cy: intrinsics.cy * scale,
-        };
+        let scaled_intrinsics = crate::tsdf::CameraIntrinsics::new(
+            intrinsics.fx * scale,
+            intrinsics.fy * scale,
+            intrinsics.cx * scale,
+            intrinsics.cy * scale,
+            scaled_width as u32,
+            scaled_height as u32,
+        );
 
         // Downsample depth images
         let source_scaled = downsample_depth(source_depth, width, height, scale);

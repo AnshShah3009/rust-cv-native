@@ -35,6 +35,8 @@
 pub mod akaze;
 /// ArUco marker detection, generation, and pose estimation (tensor-based API)
 pub mod aruco;
+/// Optimal assignment / bipartite matching (Hungarian algorithm)
+pub mod assignment;
 /// BRIEF (Binary Robust Independent Elementary Features) descriptor
 pub mod brief;
 /// Feature descriptor types and trait implementations
@@ -45,6 +47,8 @@ pub mod fast;
 pub mod flann;
 /// GFTT (Good Features to Track) corner detection
 pub mod gftt;
+/// Haar cascade classifier for object detection (Viola-Jones)
+pub mod haar_cascade;
 /// Harris corner detection algorithm
 pub mod harris;
 /// Histogram of Oriented Gradients (HOG) feature extraction
@@ -65,12 +69,13 @@ pub mod ransac;
 pub mod sift;
 
 pub use akaze::*;
+pub use assignment::*;
 pub use brief::*;
-pub use cv_imgproc::hough;
 pub use descriptor::*;
 pub use fast::*;
 pub use flann::*;
 pub use gftt::*;
+pub use haar_cascade::*;
 pub use harris::*;
 pub use hog::*;
 pub use lbd::*;

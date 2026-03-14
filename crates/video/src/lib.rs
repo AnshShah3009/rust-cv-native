@@ -25,6 +25,8 @@
 
 use image::GrayImage;
 
+/// Kalman filter implementations
+pub mod kalman;
 /// Mixture of Gaussians background subtraction
 pub mod mog2;
 /// Optical flow computation algorithms
@@ -33,29 +35,9 @@ pub mod optical_flow;
 pub mod tracking;
 
 pub use cv_core::{Error, Result};
+pub use kalman::{DynamicKalmanFilter, ExtendedKalmanFilter, KalmanFilter, KalmanFilterState};
 pub use optical_flow::*;
 pub use tracking::*;
-
-// Re-export from cv-core (Kalman is a general estimation primitive)
-/// Backwards-compatible alias
-pub use cv_core::kalman;
-pub use cv_core::kalman::{
-    DynamicKalmanFilter, ExtendedKalmanFilter, KalmanFilter, KalmanFilterState,
-};
-
-/// Backward compatibility alias for deprecated custom error type
-#[deprecated(
-    since = "0.1.0",
-    note = "Use cv_core::Error instead. This type exists only for backward compatibility."
-)]
-pub type VideoError = cv_core::Error;
-
-/// Deprecated Result type alias - use cv_core::Result instead
-#[deprecated(
-    since = "0.1.0",
-    note = "Use cv_core::Result instead. This type alias exists only for backward compatibility."
-)]
-pub type VideoResult<T> = cv_core::Result<T>;
 
 /// Single video frame with timing information
 ///

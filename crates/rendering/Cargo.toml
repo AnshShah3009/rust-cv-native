@@ -6,6 +6,7 @@ description = "3D Rendering algorithms including Gaussian Splatting"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+cv-core = { workspace = true }
 nalgebra = { workspace = true }
 rand = { workspace = true }
 

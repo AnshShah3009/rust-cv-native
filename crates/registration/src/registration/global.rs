@@ -150,7 +150,7 @@ pub fn compute_fpfh_features(cloud: &PointCloud, radius: f32) -> Result<Vec<FPFH
 /// Estimate normals via PCA over radius-based neighbours.
 ///
 /// This is a self-contained fallback so the registration crate does not
-/// depend on `cv-point-cloud` or `cv-3d`.
+/// depend on `cv-3d`.
 fn estimate_normals_pca(points: &[Point3<f32>], radius: f32) -> Vec<Vector3<f32>> {
     let n = points.len();
     let mut normals = vec![Vector3::z(); n];

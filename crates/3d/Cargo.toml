@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 nalgebra = { workspace = true }
 cv-core = { workspace = true }
+cv-scientific = { workspace = true }
 cv-runtime = { workspace = true }
 cv-hal = { workspace = true }
 image = { workspace = true }

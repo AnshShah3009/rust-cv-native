@@ -16,7 +16,7 @@ pub fn undistort_points(
     distortion: &Distortion,
 ) -> Result<Vec<nalgebra::Point2<f64>>> {
     if intrinsics.fx.abs() <= 1e-12 || intrinsics.fy.abs() <= 1e-12 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "undistort_points requires non-zero focal lengths".to_string(),
         ));
     }
@@ -62,7 +62,7 @@ pub fn init_undistort_rectify_map(
     new_intrinsics: &CameraIntrinsics,
 ) -> Result<(Vec<f32>, Vec<f32>)> {
     if image_size.0 == 0 || image_size.1 == 0 {
-        return Err(cv_core::Error::CalibrationError(
+        return Err(cv_core::Error::AlgorithmError(
             "init_undistort_rectify_map requires non-zero image size".to_string(),
         ));
     }
@@ -116,13 +116,13 @@ pub fn fisheye_init_undistort_rectify_map(
     let mut map_y = vec![0.0f32; (width * height) as usize];
 
     let k_new_inv = new_intrinsics.matrix().try_inverse().ok_or_else(|| {
-        cv_core::Error::CalibrationError(
+        cv_core::Error::AlgorithmError(
             "fisheye_init_undistort_rectify_map: new_intrinsics matrix is not invertible"
                 .to_string(),
         )
     })?;
     let r_inv = rectification.try_inverse().ok_or_else(|| {
-        cv_core::Error::CalibrationError(
+        cv_core::Error::AlgorithmError(
             "fisheye_init_undistort_rectify_map: rectification matrix is not invertible"
                 .to_string(),
         )

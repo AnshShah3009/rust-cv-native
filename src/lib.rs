@@ -8,7 +8,6 @@ pub use cv_optimize as optimize;
 pub use cv_runtime as runtime;
 pub use cv_sfm as sfm;
 pub use cv_slam as slam;
-pub use cv_stereo as stereo;
 pub use cv_video as video;
 
 /// Initialize the entire cv-native library.

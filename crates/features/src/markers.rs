@@ -95,7 +95,7 @@ pub fn create_charuco_board(
     dictionary: ArucoDictionary,
 ) -> Result<CharucoBoard> {
     if squares_x < 2 || squares_y < 2 {
-        return Err(Error::FeatureError(
+        return Err(Error::AlgorithmError(
             "charuco board must be at least 2x2 squares".to_string(),
         ));
     }
@@ -105,7 +105,7 @@ pub fn create_charuco_board(
         || marker_length <= 0.0
         || marker_length >= square_length
     {
-        return Err(Error::FeatureError(
+        return Err(Error::AlgorithmError(
             "invalid square/marker length for charuco board".to_string(),
         ));
     }
@@ -121,7 +121,7 @@ pub fn create_charuco_board(
     }
     let dict_size = aruco_dictionary_codes(dictionary).len();
     if marker_cells.len() > dict_size {
-        return Err(Error::FeatureError(format!(
+        return Err(Error::AlgorithmError(format!(
             "dictionary too small for board markers: need {}, have {}",
             marker_cells.len(),
             dict_size
@@ -146,7 +146,7 @@ pub fn create_charuco_board(
 /// Returns an error if `pixel_per_square` is 0.
 pub fn draw_charuco_board(board: &CharucoBoard, pixel_per_square: u32) -> Result<GrayImage> {
     if pixel_per_square == 0 {
-        return Err(Error::FeatureError(
+        return Err(Error::AlgorithmError(
             "pixel_per_square must be >= 1".to_string(),
         ));
     }
@@ -256,7 +256,7 @@ pub fn draw_aruco_marker(
     let code = aruco_dictionary_codes(dictionary)
         .get(id as usize)
         .copied()
-        .ok_or_else(|| Error::FeatureError(format!("invalid aruco id: {}", id)))?;
+        .ok_or_else(|| Error::AlgorithmError(format!("invalid aruco id: {}", id)))?;
     Ok(draw_marker_bits(code, payload_bits, border_bits, cell_size))
 }
 
@@ -348,7 +348,7 @@ fn run_marker_detection_gpu(
 
     // Create GPU context
     let gpu_context = MarkerGpuContext::new()
-        .ok_or_else(|| Error::FeatureError("GPU context initialization failed".to_string()))?;
+        .ok_or_else(|| Error::AlgorithmError("GPU context initialization failed".to_string()))?;
 
     // Convert CPU candidates to GPU candidates for batch processing
     let grid_size = (payload_bits + 2 * border_bits) as u32;
@@ -419,7 +419,7 @@ pub fn draw_apriltag(family: AprilTagFamily, id: u16, cell_size: u32) -> Result<
     let code = codes
         .get(id as usize)
         .copied()
-        .ok_or_else(|| Error::FeatureError(format!("invalid apriltag id: {}", id)))?;
+        .ok_or_else(|| Error::AlgorithmError(format!("invalid apriltag id: {}", id)))?;
     Ok(draw_marker_bits(code, payload_bits, border_bits, cell_size))
 }
 
@@ -577,7 +577,7 @@ fn find_marker_candidates(image: &GrayImage, min_grid: usize) -> Result<Vec<Cand
     let w = image.width() as usize;
     let h = image.height() as usize;
     if w == 0 || h == 0 {
-        return Err(Error::FeatureError("empty image".to_string()));
+        return Err(Error::AlgorithmError("empty image".to_string()));
     }
     let min_side = (min_grid as u32).max(6);
     let mut visited = vec![false; w * h];
@@ -848,7 +848,7 @@ fn marker_object_corners(board: &CharucoBoard, cell_x: u32, cell_y: u32) -> [Poi
 
 fn estimate_homography(src: &[Point2<f64>], dst: &[Point2<f64>]) -> Result<Matrix3<f64>> {
     if src.len() != dst.len() || src.len() < 4 {
-        return Err(Error::FeatureError(
+        return Err(Error::AlgorithmError(
             "estimate_homography needs >=4 correspondences".to_string(),
         ));
     }
@@ -877,7 +877,7 @@ fn estimate_homography(src: &[Point2<f64>], dst: &[Point2<f64>]) -> Result<Matri
     let svd = a.svd(true, true);
     let vt = svd
         .v_t
-        .ok_or_else(|| Error::FeatureError("homography SVD failed".to_string()))?;
+        .ok_or_else(|| Error::AlgorithmError("homography SVD failed".to_string()))?;
     let h = vt.row(vt.nrows() - 1);
     let mut m = Matrix3::<f64>::zeros();
     for r in 0..3 {

@@ -43,7 +43,7 @@ pub fn find_chessboard_corners_robust(
     _image: &GrayImage,
     _pattern_size: (usize, usize),
 ) -> Result<Vec<Point2<f64>>> {
-    Err(cv_core::Error::CalibrationError(
+    Err(cv_core::Error::AlgorithmError(
         "Robust chessboard detection not yet implemented. Grid assembly step requires \
          complex graph matching. Use find_chessboard_corners() instead, which is \
          more reliable in practice."

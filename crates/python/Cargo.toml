@@ -13,7 +13,6 @@ numpy = { workspace = true }
 cv-core = { workspace = true }
 cv-features = { workspace = true }
 cv-3d = { workspace = true }
-cv-point-cloud = { workspace = true }
 cv-scientific = { workspace = true }
 cv-runtime = { workspace = true }
 cv-slam = { workspace = true }

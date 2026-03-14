@@ -1,5 +1,6 @@
 pub mod factor_graph;
 pub mod factors;
+pub mod general;
 pub mod gpu_solver;
 pub mod isam2;
 pub mod pose_graph;

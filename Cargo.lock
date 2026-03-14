@@ -1197,6 +1197,7 @@ dependencies = [
  "cv-core",
  "cv-hal",
  "cv-runtime",
+ "cv-scientific",
  "futures",
  "hashbrown 0.16.1",
  "image",
@@ -1213,6 +1214,8 @@ dependencies = [
 name = "cv-calib3d"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "criterion",
  "cv-core",
  "cv-hal",
  "cv-imgproc",
@@ -1222,6 +1225,9 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "tokio",
+ "wgpu 28.0.0",
+ "wide",
 ]
 
 [[package]]
@@ -1332,16 +1338,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cv-objdetect"
-version = "0.1.0"
-dependencies = [
- "cv-core",
- "cv-imgproc",
- "image",
- "rayon",
-]
-
-[[package]]
 name = "cv-optimize"
 version = "0.1.0"
 dependencies = [
@@ -1369,17 +1365,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cv-point-cloud"
-version = "0.1.0"
-dependencies = [
- "cv-3d",
- "cv-scientific",
- "hashbrown 0.16.1",
- "nalgebra",
- "rayon",
-]
-
-[[package]]
 name = "cv-python"
 version = "0.1.0"
 dependencies = [
@@ -1390,7 +1375,6 @@ dependencies = [
  "cv-imgproc",
  "cv-optimize",
  "cv-photo",
- "cv-point-cloud",
  "cv-runtime",
  "cv-scientific",
  "cv-slam",
@@ -1417,6 +1401,7 @@ dependencies = [
 name = "cv-rendering"
 version = "0.1.0"
 dependencies = [
+ "cv-core",
  "nalgebra",
  "rand 0.9.2",
  "tempfile",
@@ -1483,29 +1468,9 @@ dependencies = [
  "cv-hal",
  "cv-optimize",
  "cv-runtime",
+ "cv-video",
  "image",
  "nalgebra",
-]
-
-[[package]]
-name = "cv-stereo"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "criterion",
- "cv-calib3d",
- "cv-core",
- "cv-hal",
- "cv-imgproc",
- "cv-runtime",
- "image",
- "nalgebra",
- "rayon",
- "serde",
- "serde_json",
- "tokio",
- "wgpu 28.0.0",
- "wide",
 ]
 
 [[package]]
@@ -4996,12 +4961,10 @@ dependencies = [
  "cv-hal",
  "cv-imgproc",
  "cv-optimize",
- "cv-point-cloud",
  "cv-runtime",
  "cv-scientific",
  "cv-sfm",
  "cv-slam",
- "cv-stereo",
  "cv-video",
  "futures",
  "image",

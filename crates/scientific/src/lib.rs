@@ -45,9 +45,6 @@ pub mod integrate;
 pub mod interpolate;
 pub mod jit;
 pub mod linalg;
-pub mod matching;
-pub mod multiview;
-pub mod optimize;
 pub mod point_cloud;
 pub mod signal;
 pub mod sparse;
@@ -61,8 +58,6 @@ pub type Result<T> = cv_core::Result<T>;
 pub use geometry::*;
 pub use integrate::*;
 pub use jit::*;
-pub use matching::*;
-pub use multiview::*;
 pub use point_cloud::*;
 pub use special::*;
 
