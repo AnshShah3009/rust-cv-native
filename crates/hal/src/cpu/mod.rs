@@ -145,7 +145,10 @@ fn map_border_coord<T: Float>(
     h: usize,
     mode: &BorderMode<T>,
 ) -> Option<(usize, usize)> {
-    match (map_border_coord_1d(x, w, mode), map_border_coord_1d(y, h, mode)) {
+    match (
+        map_border_coord_1d(x, w, mode),
+        map_border_coord_1d(y, h, mode),
+    ) {
         (Some(ix), Some(iy)) => Some((ix, iy)),
         _ => None,
     }
@@ -1387,11 +1390,7 @@ impl ComputeContext for CpuBackend {
                         }
                         let sy = y as isize + j;
                         let sx = x as isize + i;
-                        if sy >= 0
-                            && sy < h as isize
-                            && sx >= 0
-                            && sx < w as isize
-                        {
+                        if sy >= 0 && sy < h as isize && sx >= 0 && sx < w as isize {
                             let neighbor_idx = sy as usize * w + sx as usize;
                             let neighbor_val = src[neighbor_idx];
                             // Suppress if neighbor is strictly greater

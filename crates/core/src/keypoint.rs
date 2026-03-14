@@ -385,9 +385,7 @@ mod tests {
     #[test]
     fn matches_apply_ratio_test_zero_second_distance() {
         // If second_best.distance is 0.0, the pair should be rejected to avoid division issues
-        let nn_pairs = vec![
-            (FeatureMatch::new(0, 10, 0.0), FeatureMatch::new(0, 11, 0.0)),
-        ];
+        let nn_pairs = vec![(FeatureMatch::new(0, 10, 0.0), FeatureMatch::new(0, 11, 0.0))];
         let filtered = Matches::apply_ratio_test(&nn_pairs, 0.75);
         assert_eq!(filtered.len(), 0);
     }

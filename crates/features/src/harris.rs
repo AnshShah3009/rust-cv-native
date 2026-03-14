@@ -48,10 +48,7 @@ fn pixel_at(image: &GrayImage, x: i32, y: i32) -> f64 {
 /// Compute Sobel gradients Ix, Iy for every pixel using separable 1-D kernels.
 ///
 /// Returns two `Vec<f64>` of length width*height, stored in row-major order.
-fn compute_sobel_gradients(
-    image: &GrayImage,
-    ksize: i32,
-) -> (Vec<f64>, Vec<f64>) {
+fn compute_sobel_gradients(image: &GrayImage, ksize: i32) -> (Vec<f64>, Vec<f64>) {
     let w = image.width() as i32;
     let h = image.height() as i32;
     let n = (w * h) as usize;
@@ -116,12 +113,7 @@ fn compute_sobel_gradients(
 }
 
 /// Apply separable 1-D Gaussian blur to an f64 buffer (row-major, width x height).
-fn gaussian_blur_f64(
-    buf: &[f64],
-    width: usize,
-    height: usize,
-    kernel: &[f64],
-) -> Vec<f64> {
+fn gaussian_blur_f64(buf: &[f64], width: usize, height: usize, kernel: &[f64]) -> Vec<f64> {
     let half = (kernel.len() / 2) as isize;
     let n = width * height;
 

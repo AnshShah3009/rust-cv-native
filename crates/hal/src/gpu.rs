@@ -113,7 +113,9 @@ impl ComputeContext for GpuContext {
                     crate::context::BorderMode::Replicate => crate::context::BorderMode::Replicate,
                     crate::context::BorderMode::Reflect => crate::context::BorderMode::Reflect,
                     crate::context::BorderMode::Wrap => crate::context::BorderMode::Wrap,
-                    crate::context::BorderMode::Reflect101 => crate::context::BorderMode::Reflect101,
+                    crate::context::BorderMode::Reflect101 => {
+                        crate::context::BorderMode::Reflect101
+                    }
                 };
                 let result_gpu = crate::gpu_kernels::convolve::convolve_2d(
                     self,
@@ -2471,13 +2473,13 @@ impl GpuContext {
             num_kps as u32,
             0u32,
         ];
-        let params_buffer =
-            self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("SIFT Orientation Params"),
-                    contents: bytemuck::cast_slice(&params),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
+        let params_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("SIFT Orientation Params"),
+                contents: bytemuck::cast_slice(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
 
         let shader_source = include_str!("../shaders/sift_orientation.wgsl");
         let pipeline = self.create_compute_pipeline(shader_source, "main");

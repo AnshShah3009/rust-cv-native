@@ -622,29 +622,18 @@ fn refine_point(
         }
     }
 
-    let d_final_slice = match dog_layers[curr_s].storage.as_slice() {
-        Some(slice) => slice,
-        None => return None,
-    };
+    let d_final_slice = dog_layers[curr_s].storage.as_slice()?;
     let d_final = d_final_slice[curr_y * dog_layers[0].shape.width + curr_x];
 
     // Recompute gradient at the refined position for the contrast check
-    let d_prev_final = match dog_layers[curr_s - 1].storage.as_slice() {
-        Some(slice) => slice,
-        None => return None,
-    };
-    let d_next_final = match dog_layers[curr_s + 1].storage.as_slice() {
-        Some(slice) => slice,
-        None => return None,
-    };
+    let d_prev_final = dog_layers[curr_s - 1].storage.as_slice()?;
+    let d_next_final = dog_layers[curr_s + 1].storage.as_slice()?;
     let w = dog_layers[0].shape.width;
     let dx_final =
         (d_final_slice[curr_y * w + curr_x + 1] - d_final_slice[curr_y * w + curr_x - 1]) / 2.0;
     let dy_final =
-        (d_final_slice[(curr_y + 1) * w + curr_x] - d_final_slice[(curr_y - 1) * w + curr_x])
-            / 2.0;
-    let ds_final =
-        (d_next_final[curr_y * w + curr_x] - d_prev_final[curr_y * w + curr_x]) / 2.0;
+        (d_final_slice[(curr_y + 1) * w + curr_x] - d_final_slice[(curr_y - 1) * w + curr_x]) / 2.0;
+    let ds_final = (d_next_final[curr_y * w + curr_x] - d_prev_final[curr_y * w + curr_x]) / 2.0;
     let gradient = Vector3::new(dx_final, dy_final, ds_final);
 
     let contrast = d_final + 0.5 * gradient.dot(&offset);
@@ -665,12 +654,7 @@ fn refine_point(
 /// Compute dominant orientation for a single keypoint using a 36-bin histogram
 /// of gradient orientations weighted by gradient magnitude and Gaussian window.
 /// Returns the dominant orientation in degrees [0, 360).
-fn compute_orientation_cpu(
-    src: &[f32],
-    w: usize,
-    h: usize,
-    kp: &KeyPoint,
-) -> f64 {
+fn compute_orientation_cpu(src: &[f32], w: usize, h: usize, kp: &KeyPoint) -> f64 {
     let cx = kp.x as f32;
     let cy = kp.y as f32;
     let sigma = kp.size as f32 * 1.5;
@@ -702,9 +686,9 @@ fn compute_orientation_cpu(
     // Find peak bin
     let mut max_mag = 0.0f32;
     let mut best_bin = 0usize;
-    for i in 0..36 {
-        if hist[i] > max_mag {
-            max_mag = hist[i];
+    for (i, &val) in hist.iter().enumerate() {
+        if val > max_mag {
+            max_mag = val;
             best_bin = i;
         }
     }

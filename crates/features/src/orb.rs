@@ -186,10 +186,12 @@ impl Orb {
                         ScoreType::Harris => {
                             compute_harris_response(&scaled, kp.x as i32, kp.y as i32)
                         }
-                        ScoreType::Fast => {
-                            fast::corner_score(&scaled, kp.x as i32, kp.y as i32, self.fast_threshold)
-                                as f64
-                        }
+                        ScoreType::Fast => fast::corner_score(
+                            &scaled,
+                            kp.x as i32,
+                            kp.y as i32,
+                            self.fast_threshold,
+                        ) as f64,
                     };
 
                     KeyPoint::new(kp.x * scale as f64, kp.y * scale as f64)
@@ -542,7 +544,7 @@ pub fn detect_and_compute_ctx<S: Storage<u8> + cv_core::StorageFactory<u8> + 'st
         // Sort keypoints and descriptors together to keep them in sync
         let mut paired: Vec<(KeyPoint, Descriptor)> = all_keypoints
             .into_iter()
-            .zip(all_descriptors.into_iter())
+            .zip(all_descriptors)
             .collect();
 
         paired.sort_by(|(a, _), (b, _)| {

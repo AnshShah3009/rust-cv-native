@@ -1,7 +1,7 @@
 use crate::simd::convolve_row_1d;
-use cv_hal::context::BorderMode as HalBorderMode;
 use cv_core::{Tensor, TensorShape};
 use cv_hal::compute::ComputeDevice;
+use cv_hal::context::BorderMode as HalBorderMode;
 use cv_hal::gpu::GpuContext;
 use cv_hal::tensor_ext::{TensorToCpu, TensorToGpu};
 use cv_runtime::orchestrator::{scheduler, RuntimeRunner};

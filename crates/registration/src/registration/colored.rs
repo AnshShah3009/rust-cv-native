@@ -105,7 +105,9 @@ pub fn registration_colored_icp(
 
                 // Compute jacobian (simplified)
                 // Full implementation would compute SE(3) jacobian
-                let normal = target.normals.as_ref()
+                let normal = target
+                    .normals
+                    .as_ref()
                     .map(|n| n[target_idx])
                     .unwrap_or_else(|| {
                         let diff = transformed - target_point;

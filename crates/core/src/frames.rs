@@ -50,9 +50,9 @@ impl CameraConvention {
     /// Returns the camera's viewing direction (+Z axis in camera frame)
     pub fn camera_forward(&self) -> Vector3<f32> {
         match self {
-            CameraConvention::OpenCV
-            | CameraConvention::COLMAP
-            | CameraConvention::WebGPU => Vector3::new(0.0, 0.0, 1.0),
+            CameraConvention::OpenCV | CameraConvention::COLMAP | CameraConvention::WebGPU => {
+                Vector3::new(0.0, 0.0, 1.0)
+            }
             CameraConvention::OpenGL => Vector3::new(0.0, 0.0, -1.0),
         }
     }
@@ -173,11 +173,7 @@ impl FrameConvention {
     /// Convert a 4x4 transform from this convention to another
     pub fn convert_transform(&self, other: &Self, transform: &Matrix4<f32>) -> Matrix4<f32> {
         let rotation = transform.fixed_view::<3, 3>(0, 0).into_owned();
-        let translation = Vector3::new(
-            transform[(0, 3)],
-            transform[(1, 3)],
-            transform[(2, 3)],
-        );
+        let translation = Vector3::new(transform[(0, 3)], transform[(1, 3)], transform[(2, 3)]);
 
         let new_rotation = self.convert_rotation(other, &rotation);
 
@@ -191,15 +187,27 @@ impl FrameConvention {
         let other_right = other.camera_convention.camera_right();
 
         let self_to_world = Matrix3::new(
-            self_right.x, self_up.x, self_forward.x,
-            self_right.y, self_up.y, self_forward.y,
-            self_right.z, self_up.z, self_forward.z,
+            self_right.x,
+            self_up.x,
+            self_forward.x,
+            self_right.y,
+            self_up.y,
+            self_forward.y,
+            self_right.z,
+            self_up.z,
+            self_forward.z,
         );
 
         let world_to_other = Matrix3::new(
-            other_right.x, other_up.x, other_forward.x,
-            other_right.y, other_up.y, other_forward.y,
-            other_right.z, other_up.z, other_forward.z,
+            other_right.x,
+            other_up.x,
+            other_forward.x,
+            other_right.y,
+            other_up.y,
+            other_forward.y,
+            other_right.z,
+            other_up.z,
+            other_forward.z,
         );
 
         let basis_change = world_to_other.transpose() * self_to_world;

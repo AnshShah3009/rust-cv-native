@@ -321,8 +321,7 @@ pub fn orient_normals(pc: &mut PointCloud, k: usize) {
             let mut comp_queue = vec![i];
             while let Some(ci) = comp_queue.pop() {
                 let q = [pc.points[ci].x, pc.points[ci].y, pc.points[ci].z];
-                let neighbors: Vec<_> =
-                    tree.nearest_neighbor_iter(&q).skip(1).take(k).collect();
+                let neighbors: Vec<_> = tree.nearest_neighbor_iter(&q).skip(1).take(k).collect();
                 for nb in neighbors {
                     let j = nb.0;
                     if visited[j] {

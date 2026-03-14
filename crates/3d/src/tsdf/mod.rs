@@ -185,9 +185,7 @@ impl TSDFVolume {
 
         // CPU Fallback (Rayon)
         // Compute inverse extrinsics for projective distance
-        let extrinsics_inv = extrinsics
-            .try_inverse()
-            .unwrap_or_else(Matrix4::identity);
+        let extrinsics_inv = extrinsics.try_inverse().unwrap_or_else(Matrix4::identity);
         let camera_origin = extrinsics.transform_point(&Point3::origin());
 
         let updates: Vec<_> = group.run(|| {
