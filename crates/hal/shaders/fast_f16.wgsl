@@ -83,26 +83,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (((d_ext >> i) & 0x1FFu) == 0x1FFu) { is_corner = true; break; }
     }
 
-    // Bug 2 fix: compute min-diff score to match CPU
+    // Compute mean-diff score to match CPU: sum(abs(vi - p)) / 16
     var score = 0.0h;
     if (is_corner) {
-        var min_d = abs(v0 - p);
-        min_d = min(min_d, abs(v1 - p));
-        min_d = min(min_d, abs(v2 - p));
-        min_d = min(min_d, abs(v3 - p));
-        min_d = min(min_d, abs(v4 - p));
-        min_d = min(min_d, abs(v5 - p));
-        min_d = min(min_d, abs(v6 - p));
-        min_d = min(min_d, abs(v7 - p));
-        min_d = min(min_d, abs(v8 - p));
-        min_d = min(min_d, abs(v9 - p));
-        min_d = min(min_d, abs(v10 - p));
-        min_d = min(min_d, abs(v11 - p));
-        min_d = min(min_d, abs(v12 - p));
-        min_d = min(min_d, abs(v13 - p));
-        min_d = min(min_d, abs(v14 - p));
-        min_d = min(min_d, abs(v15 - p));
-        score = min_d;
+        score = abs(v0 - p) + abs(v1 - p) + abs(v2 - p) + abs(v3 - p)
+              + abs(v4 - p) + abs(v5 - p) + abs(v6 - p) + abs(v7 - p)
+              + abs(v8 - p) + abs(v9 - p) + abs(v10 - p) + abs(v11 - p)
+              + abs(v12 - p) + abs(v13 - p) + abs(v14 - p) + abs(v15 - p);
+        score = score / 16.0h;
     }
 
     output_data[u32(y) * params.width + u32(x)] = score;

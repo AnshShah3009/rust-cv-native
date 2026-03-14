@@ -80,7 +80,8 @@ pub use registration::{
 pub use cv_core::RobustLoss;
 pub use registration::colored::{registration_colored_icp, ColoredICPResult};
 pub use registration::global::{
-    registration_fgr_based_on_feature_matching, registration_ransac_based_on_feature_matching,
-    FPFHFeature, FastGlobalRegistrationOption, GlobalRegistrationResult,
+    compute_fpfh_features, registration_fgr_based_on_feature_matching,
+    registration_ransac_based_on_feature_matching, FPFHFeature, FastGlobalRegistrationOption,
+    GlobalRegistrationResult,
 };
 pub use registration::gnc::{registration_gnc, GNCOptimizer, GNCResult};

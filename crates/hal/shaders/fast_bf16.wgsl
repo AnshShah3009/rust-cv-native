@@ -90,20 +90,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (((d_ext >> i) & 0x1FFu) == 0x1FFu) { is_corner = true; break; }
     }
 
-    // Bug 2 fix: compute min-diff score to match CPU
+    // Compute mean-diff score to match CPU: sum(abs(vi - p)) / 16
     var score = 0.0;
     if (is_corner) {
-        let diffs = array<f32, 16>(
-            abs(v0 - p), abs(v1 - p), abs(v2 - p), abs(v3 - p),
-            abs(v4 - p), abs(v5 - p), abs(v6 - p), abs(v7 - p),
-            abs(v8 - p), abs(v9 - p), abs(v10 - p), abs(v11 - p),
-            abs(v12 - p), abs(v13 - p), abs(v14 - p), abs(v15 - p)
-        );
-        var min_d = diffs[0];
-        for (var i = 1u; i < 16u; i++) {
-            min_d = min(min_d, diffs[i]);
-        }
-        score = min_d;
+        score = abs(v0 - p) + abs(v1 - p) + abs(v2 - p) + abs(v3 - p)
+              + abs(v4 - p) + abs(v5 - p) + abs(v6 - p) + abs(v7 - p)
+              + abs(v8 - p) + abs(v9 - p) + abs(v10 - p) + abs(v11 - p)
+              + abs(v12 - p) + abs(v13 - p) + abs(v14 - p) + abs(v15 - p);
+        score = score / 16.0;
     }
 
     // Pack output as bf16 in u32 (two bf16 values per u32)
