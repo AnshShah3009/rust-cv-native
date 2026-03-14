@@ -744,6 +744,49 @@ mod tests {
     }
 
     #[test]
+    fn test_canny_finds_step_edge() {
+        // 64x64 image: left half = 0, right half = 255
+        let mut img = GrayImage::new(64, 64);
+        for y in 0..64 {
+            for x in 0..64 {
+                let val = if x < 32 { 0u8 } else { 255u8 };
+                img.put_pixel(x, y, Luma([val]));
+            }
+        }
+
+        let edges = canny(&img, 50, 150);
+
+        // Check that edges are detected near columns 31-32 (the boundary)
+        // Count edge pixels in columns 30-33 vs. the rest of the image
+        let mut edge_count_near_boundary = 0u32;
+        let mut edge_count_elsewhere = 0u32;
+        // Only check interior rows to avoid border effects from Gaussian blur
+        for y in 5..59 {
+            for x in 0..64 {
+                if edges.get_pixel(x, y)[0] > 0 {
+                    if (30..=33).contains(&x) {
+                        edge_count_near_boundary += 1;
+                    } else {
+                        edge_count_elsewhere += 1;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            edge_count_near_boundary > 0,
+            "Canny should detect edges near the step boundary (columns 31-32)"
+        );
+        // The vast majority of edge pixels should be at the boundary
+        assert!(
+            edge_count_near_boundary > edge_count_elsewhere,
+            "Most edges should be at the boundary: boundary={}, elsewhere={}",
+            edge_count_near_boundary,
+            edge_count_elsewhere
+        );
+    }
+
+    #[test]
     fn canny_various_sizes() {
         for size in &[16, 32, 48, 64] {
             let mut img = GrayImage::new(*size, *size);

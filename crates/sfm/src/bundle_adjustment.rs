@@ -818,6 +818,64 @@ mod tests {
     }
 
     #[test]
+    fn test_bundle_adjust_reduces_error() {
+        let intrinsics = create_test_intrinsics();
+        let mut state = SfMState::new(intrinsics);
+
+        // Camera 0: at origin, looking down +Z
+        let cam0 = create_test_pose(Vector3::new(0.0, 0.0, 0.0));
+        state.add_camera(cam0);
+
+        // Camera 1: translated 0.5 to the right
+        let cam1 = create_test_pose(Vector3::new(0.5, 0.0, 0.0));
+        state.add_camera(cam1);
+
+        // 4 3D points in front of both cameras (at z=5)
+        let points_3d = [
+            Point3::new(-0.5, -0.5, 5.0),
+            Point3::new(0.5, -0.5, 5.0),
+            Point3::new(-0.5, 0.5, 5.0),
+            Point3::new(0.5, 0.5, 5.0),
+        ];
+
+        // Compute ground-truth observations by projecting with the true poses
+        for &pt in &points_3d {
+            let mut observations = Vec::new();
+            for (cam_idx, cam) in state.cameras.iter().enumerate() {
+                let pt_cam = cam.rotation * pt + cam.translation;
+                let proj = intrinsics.project(&pt_cam);
+                observations.push((cam_idx, proj));
+            }
+            // Add landmarks with noisy positions (perturbed by 0.3 in each axis)
+            let noisy_pos = Point3::new(pt.x + 0.3, pt.y - 0.2, pt.z + 0.1);
+            state.add_landmark(noisy_pos, observations);
+        }
+
+        let initial_error = state.total_reprojection_error();
+        assert!(
+            initial_error > 0.0,
+            "Initial error should be non-zero due to noisy landmarks"
+        );
+
+        let config = BundleAdjustmentConfig {
+            max_iterations: 50,
+            convergence_threshold: 1e-8,
+            lambda: 0.001,
+            use_sparsity: false,
+            robust_kernel: false,
+        };
+        bundle_adjust(&mut state, &config);
+
+        let final_error = state.total_reprojection_error();
+        assert!(
+            final_error < initial_error,
+            "Bundle adjustment should reduce reprojection error: initial={}, final={}",
+            initial_error,
+            final_error
+        );
+    }
+
+    #[test]
     fn test_invalid_landmark_handling() {
         let intrinsics = create_test_intrinsics();
         let mut state = SfMState::new(intrinsics);
