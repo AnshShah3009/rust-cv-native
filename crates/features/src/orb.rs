@@ -542,10 +542,8 @@ pub fn detect_and_compute_ctx<S: Storage<u8> + cv_core::StorageFactory<u8> + 'st
         }
 
         // Sort keypoints and descriptors together to keep them in sync
-        let mut paired: Vec<(KeyPoint, Descriptor)> = all_keypoints
-            .into_iter()
-            .zip(all_descriptors)
-            .collect();
+        let mut paired: Vec<(KeyPoint, Descriptor)> =
+            all_keypoints.into_iter().zip(all_descriptors).collect();
 
         paired.sort_by(|(a, _), (b, _)| {
             b.response
