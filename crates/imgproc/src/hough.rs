@@ -269,10 +269,7 @@ pub fn hough_lines_ctx(
     });
 
     // Collect accumulator into a plain Vec for NMS
-    let acc: Vec<u32> = acc_atomic
-        .into_iter()
-        .map(|a| a.into_inner())
-        .collect();
+    let acc: Vec<u32> = acc_atomic.into_iter().map(|a| a.into_inner()).collect();
 
     // Local-maximum suppression: only keep cells that are strictly greater
     // than all 8 neighbors in a 3x3 window in (rho, theta) accumulator space.
@@ -291,11 +288,14 @@ pub fn hough_lines_ctx(
                     }
                     let nr = r_idx as i32 + dr;
                     let nt = t_idx as i32 + dt;
-                    if nr >= 0 && nr < num_rho as i32 && nt >= 0 && nt < num_theta as i32 {
-                        if acc[nr as usize * num_theta + nt as usize] >= score {
-                            is_max = false;
-                            break 'nms;
-                        }
+                    if nr >= 0
+                        && nr < num_rho as i32
+                        && nt >= 0
+                        && nt < num_theta as i32
+                        && acc[nr as usize * num_theta + nt as usize] >= score
+                    {
+                        is_max = false;
+                        break 'nms;
                     }
                 }
             }
@@ -348,6 +348,7 @@ fn hough_lines_gpu(
 
 /// Unvote a single pixel from the accumulator: for each theta bin, compute which
 /// rho bin it would have voted for and decrement.
+#[allow(clippy::too_many_arguments)]
 fn ppht_unvote(
     x: usize,
     y: usize,
@@ -466,11 +467,7 @@ pub fn hough_lines_p(
                     let cur_x = (x as f32 + dir * dist * line_dx).round() as i32;
                     let cur_y = (y as f32 + dir * dist * line_dy).round() as i32;
 
-                    if cur_x >= 0
-                        && cur_x < width as i32
-                        && cur_y >= 0
-                        && cur_y < height as i32
-                    {
+                    if cur_x >= 0 && cur_x < width as i32 && cur_y >= 0 && cur_y < height as i32 {
                         let pix_idx = cur_y as usize * width + cur_x as usize;
                         if active[pix_idx] {
                             last_valid = (cur_x as f32, cur_y as f32);
@@ -518,8 +515,14 @@ pub fn hough_lines_p(
                         active[pi] = false;
                         // Unvote this pixel's contributions from the accumulator
                         ppht_unvote(
-                            px as usize, py as usize, &mut acc, num_rho, num_theta,
-                            rho_res, theta_res, max_rho,
+                            px as usize,
+                            py as usize,
+                            &mut acc,
+                            num_rho,
+                            num_theta,
+                            rho_res,
+                            theta_res,
+                            max_rho,
                         );
                     }
                 }
@@ -528,7 +531,9 @@ pub fn hough_lines_p(
             // No line found: unvote this seed point's contributions to keep
             // the accumulator reflecting only unprocessed edge points.
             active[y * width + x] = false;
-            ppht_unvote(x, y, &mut acc, num_rho, num_theta, rho_res, theta_res, max_rho);
+            ppht_unvote(
+                x, y, &mut acc, num_rho, num_theta, rho_res, theta_res, max_rho,
+            );
         }
     }
 

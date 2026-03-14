@@ -129,8 +129,7 @@ impl<D, M: RobustModel<D>> Ransac<D, M> {
                     let w = best_num_inliers as f64 / n as f64;
                     let w_k = w.powi(k as i32);
                     if w_k > 0.0 && w_k < 1.0 {
-                        let new_k = (1.0 - self.config.confidence).ln()
-                            / (1.0 - w_k).ln();
+                        let new_k = (1.0 - self.config.confidence).ln() / (1.0 - w_k).ln();
                         adaptive_k = new_k.min(self.config.max_iterations as f64);
                     }
                 }
@@ -362,8 +361,7 @@ impl<D, M: RobustModel<D>> Prosac<D, M> {
                     let w = best_num_inliers as f64 / n as f64;
                     let w_m = w.powi(m as i32);
                     if w_m > 0.0 && w_m < 1.0 {
-                        let new_k = (1.0 - self.config.confidence).ln()
-                            / (1.0 - w_m).ln();
+                        let new_k = (1.0 - self.config.confidence).ln() / (1.0 - w_m).ln();
                         adaptive_k = new_k.min(t_max as f64);
                     }
                 }
