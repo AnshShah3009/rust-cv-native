@@ -184,7 +184,10 @@ impl TSDFVolume {
         }
 
         // CPU Fallback (Rayon)
-        // Transform camera origin to world space
+        // Compute inverse extrinsics for projective distance
+        let extrinsics_inv = extrinsics
+            .try_inverse()
+            .unwrap_or_else(Matrix4::identity);
         let camera_origin = extrinsics.transform_point(&Point3::origin());
 
         let updates: Vec<_> = group.run(|| {
@@ -195,7 +198,7 @@ impl TSDFVolume {
 
                     for u in 0..width {
                         let idx = v * width + u;
-                        let depth = depth_image[idx];
+                        let depth = depth_image[idx] / self.depth_scale;
 
                         if depth <= 0.0 || depth > 10.0 {
                             continue;
@@ -227,21 +230,12 @@ impl TSDFVolume {
                             let t = i as f32 / steps.max(1) as f32;
                             let voxel_pos = start + (end - start) * t;
 
-                            // Calculate TSDF value: signed distance along the ray.
-                            // Positive = voxel is behind the surface (farther from camera),
-                            // negative = voxel is in front of the surface (closer to camera).
-                            let dist = (voxel_pos - point_world).norm();
-                            let sdf = if (voxel_pos - camera_origin).dot(&ray_dir)
-                                > (point_world - camera_origin).dot(&ray_dir)
-                            {
-                                dist // Behind surface
-                            } else {
-                                -dist // In front of surface
-                            };
+                            // Calculate TSDF value using projective distance:
+                            // Transform voxel back to camera frame and compare depths
+                            let voxel_camera = extrinsics_inv.transform_point(&voxel_pos);
+                            let sdf = voxel_camera.z - depth;
 
-                            let tsdf = sdf
-                                .clamp(-self.truncation_distance, self.truncation_distance)
-                                / self.truncation_distance;
+                            let tsdf = (sdf / self.truncation_distance).clamp(-1.0, 1.0);
 
                             local_updates.push((voxel_pos, tsdf, color));
                         }
@@ -289,12 +283,20 @@ impl TSDFVolume {
         let old_tsdf = block.tsdf[idx];
         let old_weight = block.weights[idx];
 
+        let new_tsdf = (old_tsdf * old_weight + tsdf) / (old_weight + 1.0);
         let new_weight = (old_weight + 1.0).min(self.max_weight);
-        let new_tsdf = (old_tsdf * old_weight + tsdf) / new_weight;
+
+        // Weighted average for colors instead of overwriting
+        let old_color = block.colors[idx];
+        let new_color = Vector3::new(
+            ((old_color.x as f32 * old_weight + color.x as f32) / (old_weight + 1.0)) as u8,
+            ((old_color.y as f32 * old_weight + color.y as f32) / (old_weight + 1.0)) as u8,
+            ((old_color.z as f32 * old_weight + color.z as f32) / (old_weight + 1.0)) as u8,
+        );
 
         block.tsdf[idx] = new_tsdf;
         block.weights[idx] = new_weight;
-        block.colors[idx] = color;
+        block.colors[idx] = new_color;
     }
 
     /// Extract surface mesh using Marching Cubes
@@ -413,6 +415,32 @@ pub struct Triangle {
     pub normals: [Vector3<f32>; 3],
     pub colors: [Vector3<u8>; 3],
 }
+
+/// Marching Cubes lookup table (simplified - full table has 256 entries)
+/// See: http://paulbourke.net/geometry/polygonise/
+#[allow(dead_code)]
+const MC_EDGE_TABLE: [i32; 256] = [
+    0x0, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c, 0x80c, 0x905, 0xa0f, 0xb06, 0xc0a, 0xd03,
+    0xe09, 0xf00, 0x190, 0x99, 0x393, 0x29a, 0x596, 0x49f, 0x795, 0x69c, 0x99c, 0x895, 0xb9f,
+    0xa96, 0xd9a, 0xc93, 0xf99, 0xe90, 0x230, 0x139, 0x33, 0x13a, 0x636, 0x73f, 0x435, 0x53c,
+    0xa3c, 0xb35, 0x83f, 0x936, 0xe3a, 0xf33, 0xc39, 0xd30, 0x3a0, 0x2a9, 0x1a3, 0xaa, 0x7a6,
+    0x6af, 0x5a5, 0x4ac, 0xbac, 0xaa5, 0x9af, 0x8a6, 0xfaa, 0xea3, 0xda9, 0xca0, 0x460, 0x569,
+    0x663, 0x76a, 0x66, 0x16f, 0x265, 0x36c, 0xc6c, 0xd65, 0xe6f, 0xf66, 0x86a, 0x963, 0xa69,
+    0xb60, 0x5f0, 0x4f9, 0x7f3, 0x6fa, 0x1f6, 0xff, 0x3f5, 0x2fc, 0xdfc, 0xcf5, 0xfff, 0xef6,
+    0x9fa, 0x8f3, 0xbf9, 0xaf0, 0x650, 0x759, 0x453, 0x55a, 0x256, 0x35f, 0x55, 0x15c, 0xe5c,
+    0xf55, 0xc5f, 0xd56, 0xa5a, 0xb53, 0x859, 0x950, 0x7c0, 0x6c9, 0x5c3, 0x4ca, 0x3c6, 0x2cf,
+    0x1c5, 0xcc, 0xfcc, 0xec5, 0xdcf, 0xcc6, 0xbca, 0xac3, 0x9c9, 0x8c0, 0x8c0, 0x9c9, 0xac3,
+    0xbca, 0xcc6, 0xdcf, 0xec5, 0xfcc, 0xcc, 0x1c5, 0x2cf, 0x3c6, 0x4ca, 0x5c3, 0x6c9, 0x7c0,
+    0x950, 0x859, 0xb53, 0xa5a, 0xd56, 0xc5f, 0xf55, 0xe5c, 0x15c, 0x55, 0x35f, 0x256, 0x55a,
+    0x453, 0x759, 0x650, 0xaf0, 0xbf9, 0x8f3, 0x9fa, 0xef6, 0xfff, 0xcf5, 0xdfc, 0x2fc, 0x3f5,
+    0xff, 0x1f6, 0x6fa, 0x7f3, 0x4f9, 0x5f0, 0xb60, 0xa69, 0x963, 0x86a, 0xf66, 0xe6f, 0xd65,
+    0xc6c, 0x36c, 0x265, 0x16f, 0x66, 0x76a, 0x663, 0x569, 0x460, 0xca0, 0xda9, 0xea3, 0xfaa,
+    0x8a6, 0x9af, 0xaa5, 0xbac, 0x4ac, 0x5a5, 0x6af, 0x7a6, 0xaa, 0x1a3, 0x2a9, 0x3a0, 0xd30,
+    0xc39, 0xf33, 0xe3a, 0x936, 0x83f, 0xb35, 0xa3c, 0x53c, 0x435, 0x73f, 0x636, 0x13a, 0x33,
+    0x139, 0x230, 0xe90, 0xf99, 0xc93, 0xd9a, 0xa96, 0xb9f, 0x895, 0x99c, 0x69c, 0x795, 0x49f,
+    0x596, 0x29a, 0x393, 0x99, 0x190, 0xf00, 0xe09, 0xd03, 0xc0a, 0xb06, 0xa0f, 0x905, 0x80c,
+    0x70c, 0x605, 0x50f, 0x406, 0x30a, 0x203, 0x109, 0x0,
+];
 
 /// Marching cubes on a single cell
 #[allow(clippy::needless_range_loop)]
