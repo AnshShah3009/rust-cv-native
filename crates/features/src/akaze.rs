@@ -347,9 +347,11 @@ impl Akaze {
                 }
             }
             ComputeDevice::Mlx(_) => {
-                return Err(Error::AlgorithmError(
-                    "AKAZE evolution not implemented for MLX backend".into(),
-                ));
+                // MLX backend not supported for AKAZE; fall back to CPU implementation.
+                let cpu_backend = cv_hal::cpu::CpuBackend::new().ok_or_else(|| {
+                    Error::AlgorithmError("CPU fallback failed: could not create CpuBackend".into())
+                })?;
+                return self.create_scale_space(&ComputeDevice::Cpu(&cpu_backend), image);
             }
         }
 

@@ -86,9 +86,17 @@ impl GpuStorageMarker for GpuStorage {
     type Element = f32;
 
     fn to_cpu(&self) -> std::result::Result<Vec<Self::Element>, String> {
-        // In a real implementation, this would transfer data from GPU to CPU.
-        // For now, return an error as we don't have GPU device access.
-        Err("GPU to CPU transfer not implemented in this build".to_string())
+        // GpuStorage is a lightweight handle; it does not hold a reference to the
+        // wgpu Device/Queue needed for a read-back.  To transfer data from GPU to
+        // CPU, use GpuContext::download_buffer (which owns the device) or the
+        // runtime orchestrator's transfer API instead of calling this method
+        // directly on the storage handle.
+        Err(format!(
+            "GPU to CPU transfer cannot be performed through GpuStorage alone \
+             (handle={:?}, device={}). Use GpuContext::download_buffer or the \
+             runtime orchestrator to read GPU data back to the host.",
+            self.handle, self.device_id,
+        ))
     }
 }
 

@@ -520,7 +520,9 @@ impl ComputeContext for GpuContext {
         _threshold: T,
     ) -> crate::Result<Vec<cv_core::Detection>> {
         Err(crate::Error::NotSupported(
-            "GPU detect_objects not yet implemented".into(),
+            "Not implemented for GPU, use CPU backend. \
+             Object detection requires custom neural network shaders not yet available on GPU."
+                .into(),
         ))
     }
 
@@ -593,7 +595,9 @@ impl ComputeContext for GpuContext {
         _points_right: &Tensor<T, S>,
     ) -> crate::Result<Tensor<T, OS>> {
         Err(crate::Error::NotSupported(
-            "GPU triangulate_points not yet implemented".into(),
+            "Not implemented for GPU, use CPU backend. \
+             Point triangulation is a sequential algorithm better suited for CPU execution."
+                .into(),
         ))
     }
 
@@ -606,7 +610,9 @@ impl ComputeContext for GpuContext {
         _pattern_size: (usize, usize),
     ) -> crate::Result<Vec<cv_core::KeyPoint>> {
         Err(crate::Error::NotSupported(
-            "GPU find_chessboard_corners not yet implemented".into(),
+            "Not implemented for GPU, use CPU backend. \
+             Chessboard pattern detection requires sequential grid analysis better suited for CPU."
+                .into(),
         ))
     }
 

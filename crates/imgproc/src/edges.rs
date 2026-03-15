@@ -85,8 +85,12 @@ pub fn sobel_ex_ctx(
     group: &RuntimeRunner,
 ) -> GrayImage {
     if let Ok(ComputeDevice::Gpu(gpu)) = group.device() {
-        // TODO: GPU Sobel shader (sobel.wgsl) expects packed u8-in-u32 but Rust sends f32 tensors.
-        // The GPU path is broken until a proper rewrite aligns the data formats.
+        // NOTE: GPU Sobel shader (sobel.wgsl) expects packed u8-in-u32 input but the Rust
+        // host side uploads f32 tensors. The GPU path only works for ksize==3 single-axis
+        // Sobel because `sobel_gpu()` converts to f32 before dispatch and converts back
+        // after readback.  A full fix requires either (a) rewriting the WGSL shader to
+        // accept f32 storage buffers, or (b) packing u8 pixels into u32 on the host before
+        // upload.  Until then, all other cases fall through to the CPU separable path.
         if ksize == 3 && ((dx == 1 && dy == 0) || (dx == 0 && dy == 1)) {
             if let Ok(result) = sobel_gpu(gpu, src, ksize) {
                 let (gx, gy) = result;
@@ -543,8 +547,12 @@ pub fn canny_ctx(
     })
 }
 
-// TODO: GPU Canny shader (canny.wgsl) expects packed u8-in-u32 but Rust sends f32 tensors.
-// The GPU path is broken until a proper rewrite aligns the data formats.
+// NOTE: GPU Canny shader (canny.wgsl) expects packed u8-in-u32 input but the Rust host
+// side uploads f32 tensors.  The `canny_gpu()` helper works around this by converting
+// to f32 before dispatch and converting back after readback.  A proper fix requires
+// either (a) rewriting the WGSL shader to accept f32 storage buffers, or (b) packing
+// u8 pixels into u32 on the host before upload.  If the GPU path fails for any reason,
+// `canny_ctx` silently falls back to the CPU implementation above.
 fn canny_gpu(
     gpu: &cv_hal::gpu::GpuContext,
     src: &GrayImage,

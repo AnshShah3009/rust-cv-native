@@ -385,7 +385,21 @@ impl Sift {
                         .map(|(kp, angle)| kp.with_angle(angle as f64))
                         .collect::<Vec<_>>()
                 }
-                ComputeDevice::Mlx(_) => octave_kps,
+                ComputeDevice::Mlx(_) => {
+                    // MLX backend not supported for orientations; fall back to CPU.
+                    let src = octave_img
+                        .storage
+                        .as_slice()
+                        .ok_or_else(|| Error::AlgorithmError("Image not on CPU".into()))?;
+                    let (h, w) = octave_img.shape.hw();
+                    octave_kps
+                        .into_iter()
+                        .map(|kp| {
+                            let angle = compute_orientation_cpu(src, w, h, &kp);
+                            kp.with_angle(angle)
+                        })
+                        .collect::<Vec<_>>()
+                }
             };
 
             match ctx {
@@ -443,8 +457,34 @@ impl Sift {
                     }
                 }
                 ComputeDevice::Mlx(_) => {
-                    eprintln!("Warning: MLX backend not supported for SIFT descriptors, skipping descriptor computation");
-                    break;
+                    // MLX backend not supported for SIFT descriptors; fall back to CPU.
+                    let cpu_backend = cv_hal::cpu::CpuBackend::new().ok_or_else(|| {
+                        Error::AlgorithmError(
+                            "CPU fallback failed: could not create CpuBackend".into(),
+                        )
+                    })?;
+                    let descs = cpu_backend
+                        .compute_sift_descriptors(
+                            octave_img,
+                            &KeyPoints {
+                                keypoints: octave_kps,
+                            },
+                        )
+                        .map_err(|e| {
+                            Error::AlgorithmError(format!(
+                                "SIFT descriptor computation failed: {}",
+                                e
+                            ))
+                        })?;
+                    for d in descs.descriptors {
+                        let mut restored_kp = d.keypoint;
+                        let scale = 2.0f64.powi(octave as i32);
+                        restored_kp.x *= scale;
+                        restored_kp.y *= scale;
+                        restored_kp.size *= scale;
+                        all_descriptors.push(cv_core::Descriptor::new(d.data, restored_kp));
+                        valid_keypoints.push(restored_kp);
+                    }
                 }
             }
         }

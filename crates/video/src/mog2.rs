@@ -418,13 +418,14 @@ impl Mog2 {
                 })
             }
             ComputeDevice::Mlx(_) => {
-                eprintln!("Warning: MOG2 not implemented for MLX backend, returning empty mask");
-                CpuTensor::from_vec(vec![0u8; width * height], frame.shape).map_err(|e| {
-                    Error::RuntimeError(format!(
-                        "Invalid parameters: Failed to create empty result tensor: {:?}",
-                        e
-                    ))
-                })
+                // MLX backend not supported for MOG2; fall back to CPU implementation.
+                let cpu_backend = cv_hal::cpu::CpuBackend::new().ok_or_else(|| {
+                    Error::RuntimeError(
+                        "Invalid parameters: CPU fallback failed: could not create CpuBackend"
+                            .to_string(),
+                    )
+                })?;
+                self.apply_ctx(frame, learning_rate, &ComputeDevice::Cpu(&cpu_backend))
             }
         }
     }

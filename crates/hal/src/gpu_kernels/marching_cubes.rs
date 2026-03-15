@@ -27,6 +27,23 @@ pub struct Vertex {
     norm: [f32; 4],
 }
 
+impl Vertex {
+    /// Create a new vertex with position and normal.
+    pub fn new(pos: [f32; 4], norm: [f32; 4]) -> Self {
+        Self { pos, norm }
+    }
+
+    /// Get the position.
+    pub fn pos(&self) -> &[f32; 4] {
+        &self.pos
+    }
+
+    /// Get the normal.
+    pub fn norm(&self) -> &[f32; 4] {
+        &self.norm
+    }
+}
+
 pub fn extract_mesh(
     ctx: &GpuContext,
     voxel_volume: &Tensor<f32, GpuStorage<f32>>,
