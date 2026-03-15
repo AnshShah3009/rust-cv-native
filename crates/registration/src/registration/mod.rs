@@ -29,6 +29,7 @@ pub use gnc::{registration_gnc, GNCOptimizer, GNCResult};
 
 use cv_core::point_cloud::PointCloud;
 use nalgebra::{Matrix4, Point3};
+use rayon::prelude::*;
 
 /// Nearest-neighbor search structure for point cloud registration.
 /// Uses a balanced KDTree for O(log N) queries.
@@ -140,20 +141,35 @@ pub fn registration_icp_point_to_plane(
     let mut final_iterations = 0;
 
     for iter in 0..max_iterations {
-        let mut correspondences: Vec<(usize, usize, f32)> = Vec::new();
-
-        // Find correspondences
-        for (src_idx, src_point) in source.points.iter().enumerate() {
+        // Find correspondences (parallel for large clouds, serial for small)
+        let find_corr = |src_idx: usize, src_point: &Point3<f32>| -> Option<(usize, usize, f32)> {
             let transformed = transformation.transform_point(src_point);
-
-            if let Some((_target_point, target_idx, dist_sq)) = target_nn.nearest(&transformed) {
-                let dist = dist_sq.sqrt();
-
-                if dist <= max_correspondence_distance {
-                    correspondences.push((src_idx, target_idx, dist));
-                }
-            }
-        }
+            target_nn
+                .nearest(&transformed)
+                .and_then(|(_, target_idx, dist_sq)| {
+                    let dist = dist_sq.sqrt();
+                    if dist <= max_correspondence_distance {
+                        Some((src_idx, target_idx, dist))
+                    } else {
+                        None
+                    }
+                })
+        };
+        let correspondences: Vec<(usize, usize, f32)> = if source.points.len() > 5000 {
+            source
+                .points
+                .par_iter()
+                .enumerate()
+                .filter_map(|(i, p)| find_corr(i, p))
+                .collect()
+        } else {
+            source
+                .points
+                .iter()
+                .enumerate()
+                .filter_map(|(i, p)| find_corr(i, p))
+                .collect()
+        };
 
         if correspondences.len() < 3 {
             break;
