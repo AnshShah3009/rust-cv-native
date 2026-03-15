@@ -10,6 +10,7 @@
 use super::TriangleMesh;
 use cv_core::point_cloud::PointCloud;
 use nalgebra::{Point3, Vector3};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Compute normals for point cloud using PCA (simplified)
@@ -130,39 +131,46 @@ pub fn poisson_reconstruction(
         );
     }
 
-    // Normalize by weights
-    for i in 0..vx.len() {
-        if weight_x[i] > 0.0 {
-            vx[i] /= weight_x[i];
-        }
-    }
-    for i in 0..vy.len() {
-        if weight_y[i] > 0.0 {
-            vy[i] /= weight_y[i];
-        }
-    }
-    for i in 0..vz.len() {
-        if weight_z[i] > 0.0 {
-            vz[i] /= weight_z[i];
-        }
-    }
+    // Normalize by weights (parallel)
+    vx.par_iter_mut()
+        .zip(weight_x.par_iter())
+        .for_each(|(v, &w)| {
+            if w > 0.0 {
+                *v /= w;
+            }
+        });
+    vy.par_iter_mut()
+        .zip(weight_y.par_iter())
+        .for_each(|(v, &w)| {
+            if w > 0.0 {
+                *v /= w;
+            }
+        });
+    vz.par_iter_mut()
+        .zip(weight_z.par_iter())
+        .for_each(|(v, &w)| {
+            if w > 0.0 {
+                *v /= w;
+            }
+        });
 
-    // Step 4: Compute divergence of the vector field on the primal grid
-    // div(V)[i][j][k] = (vx[i+1,j,k] - vx[i,j,k] + vy[i,j+1,k] - vy[i,j,k]
-    //                     + vz[i,j,k+1] - vz[i,j,k]) / voxel_size
+    // Step 4: Compute divergence of the vector field on the primal grid (parallel)
     let n = grid_size;
     let mut divergence = vec![0.0f32; n * n * n];
 
-    for iz in 0..n {
-        for iy in 0..n {
+    divergence
+        .par_chunks_mut(n)
+        .enumerate()
+        .for_each(|(row_idx, row)| {
+            let iz = row_idx / n;
+            let iy = row_idx % n;
             for ix in 0..n {
                 let dvx = vx[idx3(ix + 1, iy, iz, gs, n)] - vx[idx3(ix, iy, iz, gs, n)];
                 let dvy = vy[idx3(ix, iy + 1, iz, n, gs)] - vy[idx3(ix, iy, iz, n, gs)];
                 let dvz = vz[idx3(ix, iy, iz + 1, n, n)] - vz[idx3(ix, iy, iz, n, n)];
-                divergence[idx3(ix, iy, iz, n, n)] = (dvx + dvy + dvz) * inv_voxel;
+                row[ix] = (dvx + dvy + dvz) * inv_voxel;
             }
-        }
-    }
+        });
 
     // Step 5: Solve Poisson equation: Laplacian(chi) = divergence
     // Using SOR (Successive Over-Relaxation) with red-black ordering

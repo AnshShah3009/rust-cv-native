@@ -1024,13 +1024,57 @@ pub mod tsdf {
 
 pub mod raycasting {
     use super::*;
+    use crate::spatial::bvh::Bvh;
 
-    /// Ray-mesh intersection using Möller-Trumbore algorithm.
+    /// BVH-accelerated ray-mesh intersection — O(rays * log(triangles)).
     ///
-    /// For each ray returns the closest hit: `(t, intersection_point, surface_normal)`.
-    /// Uses brute-force O(rays * triangles); suitable for small meshes.
+    /// Builds a BVH on first call. For repeated queries against the same mesh,
+    /// use [`cast_rays_with_bvh`] to reuse the BVH.
     #[allow(clippy::type_complexity)]
     pub fn cast_rays(
+        ro: &[Point3<f32>],
+        rd: &[Vector3<f32>],
+        v: &[Point3<f32>],
+        f: &[[usize; 3]],
+    ) -> Result<Vec<Option<(f32, Point3<f32>, Vector3<f32>)>>, String> {
+        let bvh = Bvh::build(v, f);
+        cast_rays_with_bvh(ro, rd, v, f, &bvh)
+    }
+
+    /// Ray-mesh intersection using a pre-built BVH.
+    #[allow(clippy::type_complexity)]
+    pub fn cast_rays_with_bvh(
+        ro: &[Point3<f32>],
+        rd: &[Vector3<f32>],
+        v: &[Point3<f32>],
+        f: &[[usize; 3]],
+        bvh: &Bvh,
+    ) -> Result<Vec<Option<(f32, Point3<f32>, Vector3<f32>)>>, String> {
+        let results: Vec<_> = ro
+            .par_iter()
+            .zip(rd.par_iter())
+            .map(|(origin, dir)| {
+                bvh.intersect_ray(origin, dir, v, f).map(|(t, fi, _u, _v)| {
+                    let hit = Point3::from(origin.coords + dir * t);
+                    let face = &f[fi];
+                    let e1 = v[face[1]] - v[face[0]];
+                    let e2 = v[face[2]] - v[face[0]];
+                    let mut n = e1.cross(&e2);
+                    let len = n.norm();
+                    if len > 1e-9 {
+                        n /= len;
+                    }
+                    (t, hit, n)
+                })
+            })
+            .collect();
+        Ok(results)
+    }
+
+    /// Brute-force ray-mesh intersection — O(rays * triangles).
+    /// Kept for correctness comparison and small meshes.
+    #[allow(clippy::type_complexity)]
+    pub fn cast_rays_brute(
         ro: &[Point3<f32>],
         rd: &[Vector3<f32>],
         v: &[Point3<f32>],
