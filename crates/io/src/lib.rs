@@ -12,9 +12,13 @@ pub mod pcd;
 pub mod ply;
 pub mod stl;
 
+#[cfg(feature = "gltf")]
+pub mod gltf_io;
 #[cfg(feature = "las")]
 pub mod las_io;
 
+#[cfg(feature = "gltf")]
+pub use gltf_io::{gltf_to_triangle_mesh, read_gltf, write_glb, GltfMesh};
 #[cfg(feature = "las")]
 pub use las_io::{
     filter_by_classification, filter_by_mask, las_to_point_cloud, point_cloud_to_las, read_las,

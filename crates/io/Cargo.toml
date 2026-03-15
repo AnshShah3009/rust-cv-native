@@ -10,7 +10,9 @@ cv-core = { workspace = true }
 cv-3d = { workspace = true }
 nalgebra = { workspace = true }
 las = { version = "0.9", optional = true, features = ["laz"] }
+gltf = { version = "1.4", optional = true }
 
 [features]
 default = []
 las = ["dep:las"]
+gltf = ["dep:gltf"]
