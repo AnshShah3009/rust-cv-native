@@ -8,7 +8,6 @@ description = "Video input/output and camera capture for Rust Computer Vision"
 cv-core = { workspace = true }
 image = { workspace = true }
 thiserror = { workspace = true }
-log = { workspace = true }
 ffmpeg-next = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

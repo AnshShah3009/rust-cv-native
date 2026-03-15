@@ -8,7 +8,6 @@ cv-core = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true }
 bytemuck = { workspace = true }
-glam = { workspace = true }
 
 [features]
 default = []
