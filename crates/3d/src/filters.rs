@@ -100,7 +100,7 @@ pub fn statistical_outlier_removal(
 /// Radius outlier removal (Open3D equivalent).
 ///
 /// Removes points that have fewer than `min_neighbors` neighbours within the
-/// given `radius`.
+/// given `radius`. Uses HashGrid for O(n) amortized instead of O(n²) brute force.
 ///
 /// # Returns
 /// `(inlier_points, inlier_indices)`.
@@ -109,17 +109,23 @@ pub fn radius_outlier_removal(
     radius: f64,
     min_neighbors: usize,
 ) -> (Vec<Point3<f64>>, Vec<usize>) {
-    let r2 = radius * radius;
+    use crate::spatial::hash_grid::HashGrid;
 
-    let counts: Vec<usize> = points
+    // Build HashGrid in f32 (sufficient precision for spatial hashing)
+    let pts_f32: Vec<nalgebra::Point3<f32>> = points
+        .iter()
+        .map(|p| nalgebra::Point3::new(p.x as f32, p.y as f32, p.z as f32))
+        .collect();
+    let grid = HashGrid::build(&pts_f32, radius as f32);
+
+    let counts: Vec<usize> = pts_f32
         .par_iter()
         .enumerate()
         .map(|(i, p)| {
-            points
-                .iter()
-                .enumerate()
-                .filter(|&(j, q)| j != i && dist_sq(p, q) <= r2)
-                .count()
+            // radius_search returns all within radius including self
+            let neighbors = grid.radius_search(p, radius as f32);
+            // Subtract 1 for self (self is always found)
+            neighbors.len().saturating_sub(1)
         })
         .collect();
 
