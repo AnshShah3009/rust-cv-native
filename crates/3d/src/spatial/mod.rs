@@ -5,13 +5,16 @@
 //! - Octree for spatial partitioning
 //! - VoxelGrid for voxelization
 //! - BVH for accelerated ray-triangle intersection
+//! - HashGrid for O(1) neighbor queries on uniform distributions
 
 pub mod bvh;
+pub mod hash_grid;
 
 use nalgebra::Point3;
 use std::collections::{BinaryHeap, HashMap};
 
 pub use bvh::Bvh;
+pub use hash_grid::HashGrid;
 
 /// KDTree for nearest neighbor queries.
 ///

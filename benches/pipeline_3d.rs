@@ -8,6 +8,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use cv_3d::mesh::reconstruction::poisson_reconstruction;
 use cv_3d::spatial::bvh::Bvh;
+use cv_3d::spatial::hash_grid::HashGrid;
 use cv_3d::spatial::KDTree;
 use cv_3d::tsdf::CameraIntrinsics;
 use cv_3d::TSDFVolume;
@@ -161,6 +162,19 @@ fn bench_kdtree(c: &mut Criterion) {
         });
         group.bench_with_input(BenchmarkId::new("radius_0.1", &label), &(), |b, _| {
             b.iter(|| black_box(tree.search_radius(black_box(&q), 0.1)));
+        });
+
+        // HashGrid comparison
+        let hg = HashGrid::build(&cloud.points, 0.1);
+        group.bench_with_input(
+            BenchmarkId::new("hashgrid_radius_0.1", &label),
+            &(),
+            |b, _| {
+                b.iter(|| black_box(hg.radius_search(black_box(&q), 0.1)));
+            },
+        );
+        group.bench_with_input(BenchmarkId::new("hashgrid_nearest", &label), &(), |b, _| {
+            b.iter(|| black_box(hg.nearest(black_box(&q), 0.5)));
         });
     }
     group.finish();
