@@ -179,7 +179,7 @@ pub fn poisson_reconstruction(
             for iz in 0..n {
                 for iy in 0..n {
                     // Start ix at the correct parity for this color
-                    let start = ((iz + iy + color as usize) % 2) as usize;
+                    let start = (iz + iy + color as usize) % 2;
                     let mut ix = start;
                     while ix < n {
                         let center_idx = iz * n * n + iy * n + ix;

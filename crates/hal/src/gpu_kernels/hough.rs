@@ -22,7 +22,12 @@ pub fn hough_lines<T: Float + bytemuck::Pod + bytemuck::Zeroable + 'static>(
     theta_res: T,
     threshold: u32,
 ) -> Result<Vec<HoughLine>> {
-    let _precision = crate::gpu_kernels::shader_template::precision_for_type::<T>()?;
+    // Only f32 WGSL shader available
+    if cv_core::DataType::from_type::<T>().ok() != Some(cv_core::DataType::F32) {
+        return Err(crate::Error::NotSupported(
+            "Hough Lines GPU kernel only supports f32".into(),
+        ));
+    }
 
     let (h, w) = input.shape.hw();
     let rho_res_f32 = rho_res.to_f32();

@@ -19,9 +19,7 @@ impl SimpleNN {
     }
 
     fn nearest(&self, query: &Point3<f32>) -> Option<(Point3<f32>, usize, f32)> {
-        self.tree
-            .nearest_neighbor(query)
-            .map(|(pt, idx, dist_sq)| (pt, idx, dist_sq))
+        self.tree.nearest_neighbor(query)
     }
 }
 
