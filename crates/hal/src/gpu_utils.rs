@@ -106,6 +106,41 @@ pub fn fits_in_budget(required_bytes: usize, budget: Option<usize>) -> bool {
     }
 }
 
+/// Check if a GPU buffer allocation is safe given device limits and optional budget.
+///
+/// Returns `Ok(())` if allocation is allowed, `Err` with a descriptive message if not.
+/// Checks against:
+/// 1. `wgpu::Limits::max_buffer_size` from the device
+/// 2. `RUSTCV_GPU_MAX_BYTES` environment variable (if set)
+///
+/// # Example
+/// ```ignore
+/// check_gpu_alloc(&ctx, required_bytes)?;
+/// let buffer = device.create_buffer(...);
+/// ```
+pub fn check_gpu_alloc(ctx: &crate::gpu::GpuContext, required_bytes: usize) -> crate::Result<()> {
+    let device_max = ctx.device().limits().max_buffer_size as usize;
+    if required_bytes > device_max {
+        return Err(Error::MemoryError(format!(
+            "GPU allocation of {} bytes exceeds device max_buffer_size ({} bytes). \
+             Reduce input size or use CPU fallback.",
+            required_bytes, device_max
+        )));
+    }
+
+    if let Ok(Some(budget)) = read_gpu_max_bytes_from_env() {
+        if required_bytes > budget {
+            return Err(Error::MemoryError(format!(
+                "GPU allocation of {} bytes exceeds RUSTCV_GPU_MAX_BYTES budget ({} bytes). \
+                 Increase budget or use CPU fallback.",
+                required_bytes, budget
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -51,7 +51,9 @@ pub mod inpaint;
 pub mod stitcher;
 
 pub use bilateral::*;
-pub use denoise::{denoise_gaussian, fast_nl_means_denoising, fast_nl_means_denoising_colored};
+pub use denoise::{
+    bm3d, denoise_gaussian, fast_nl_means_denoising, fast_nl_means_denoising_colored,
+};
 pub use hdr::{merge_debevec, merge_mertens, tonemap_drago, tonemap_mantiuk, tonemap_reinhard};
 pub use inpaint::{inpaint_ns, inpaint_telea};
 pub use stitcher::*;

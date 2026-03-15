@@ -27,7 +27,7 @@ pub use backend::{
 pub use cpu::*;
 pub use device::*;
 pub use gpu_utils::{
-    estimate_image_buffer_size, fits_in_budget, parse_bytes_with_suffix,
+    check_gpu_alloc, estimate_image_buffer_size, fits_in_budget, parse_bytes_with_suffix,
     read_gpu_max_bytes_from_env,
 };
 

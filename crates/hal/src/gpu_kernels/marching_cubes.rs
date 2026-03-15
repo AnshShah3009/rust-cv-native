@@ -91,6 +91,7 @@ pub fn extract_mesh(
         });
 
     let output_size = (max_triangles as u64) * 3 * 32;
+    crate::gpu_utils::check_gpu_alloc(ctx, output_size as usize)?;
     let vertices_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("MC Vertices"),
         size: output_size,
