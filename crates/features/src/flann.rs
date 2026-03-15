@@ -193,12 +193,33 @@ impl KdTree {
         node: &KdTreeNode,
         query: &[u8],
         k: usize,
-        _max_checks: usize, // TODO: implement backtrack budget to limit checks
+        max_checks: usize,
         results: &mut BinaryHeap<SearchResult>,
     ) {
+        self.search_knn_limited(node, query, k, max_checks, results, &mut 0);
+    }
+
+    fn search_knn_limited(
+        &self,
+        node: &KdTreeNode,
+        query: &[u8],
+        k: usize,
+        max_checks: usize,
+        results: &mut BinaryHeap<SearchResult>,
+        checks: &mut usize,
+    ) {
+        // Enforce backtrack budget: stop searching once we have visited max_checks nodes.
+        if *checks >= max_checks {
+            return;
+        }
+
         match node {
             KdTreeNode::Leaf(indices) => {
                 for &idx in indices {
+                    if *checks >= max_checks {
+                        return;
+                    }
+                    *checks += 1;
                     let dist = hamming_distance(query, &self.points[idx]);
                     results.push(SearchResult {
                         index: idx,
@@ -212,6 +233,8 @@ impl KdTree {
                 left,
                 right,
             } => {
+                *checks += 1;
+
                 // Choose which side to search first
                 let query_val = query[*dimension];
                 let (first, second) = if query_val < *threshold {
@@ -221,15 +244,18 @@ impl KdTree {
                 };
 
                 // Search the closer side first
-                self.search_knn(first, query, k, _max_checks, results);
+                self.search_knn_limited(first, query, k, max_checks, results, checks);
 
-                // Check if we need to search the other side
-                if results.len() < k || results.peek().map(|r| r.distance).unwrap_or(u32::MAX) > 0 {
+                // Check if we need to search the other side (within budget)
+                if *checks < max_checks
+                    && (results.len() < k
+                        || results.peek().map(|r| r.distance).unwrap_or(u32::MAX) > 0)
+                {
                     let diff = query_val.abs_diff(*threshold);
 
                     // Simple heuristic: if dimension difference is small, check other side
                     if diff < 128 {
-                        self.search_knn(second, query, k, _max_checks, results);
+                        self.search_knn_limited(second, query, k, max_checks, results, checks);
                     }
                 }
             }
