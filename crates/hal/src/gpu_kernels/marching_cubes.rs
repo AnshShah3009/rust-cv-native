@@ -4,10 +4,7 @@ use crate::Result;
 use cv_core::Tensor;
 use wgpu::util::DeviceExt;
 
-mod tables {
-    pub const EDGE_TABLE: [u32; 256] = [0; 256];
-    pub const TRI_TABLE: [i32; 4096] = [-1; 4096];
-}
+use super::marching_cubes_tables as tables;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

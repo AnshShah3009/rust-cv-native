@@ -63,6 +63,7 @@ pub mod hough;
 pub mod hough_circles;
 pub mod icp;
 pub mod marching_cubes;
+pub mod marching_cubes_tables;
 pub mod matching;
 pub mod morphology;
 pub mod nms;
