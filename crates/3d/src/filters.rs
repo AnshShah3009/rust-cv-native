@@ -120,8 +120,7 @@ pub fn radius_outlier_removal(
 
     let counts: Vec<usize> = pts_f32
         .par_iter()
-        .enumerate()
-        .map(|(i, p)| {
+        .map(|p| {
             // radius_search returns all within radius including self
             let neighbors = grid.radius_search(p, radius as f32);
             // Subtract 1 for self (self is always found)

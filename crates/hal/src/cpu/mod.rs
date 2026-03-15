@@ -4443,7 +4443,10 @@ impl ComputeContext for CpuBackend {
         input: &Tensor<T, S>,
         k: T,
         tau: T,
+        diffusivity: crate::context::DiffusivityType,
     ) -> crate::Result<Tensor<T, S>> {
+        use crate::context::DiffusivityType;
+
         let src = input
             .storage
             .as_slice()
@@ -4456,6 +4459,23 @@ impl ComputeContext for CpuBackend {
             .ok_or_else(|| crate::Error::MemoryError("Output not on CPU".into()))?;
 
         let k2 = k * k;
+
+        // Conductance function based on diffusivity type
+        let conductance = |grad_sq: T| -> T {
+            match diffusivity {
+                DiffusivityType::PeronaMalik1 => (-grad_sq / k2).exp(),
+                DiffusivityType::PeronaMalik2 => T::ONE / (T::ONE + grad_sq / k2),
+                DiffusivityType::Weickert => {
+                    if grad_sq > T::ZERO {
+                        let ratio = grad_sq / k2;
+                        T::ONE - (-T::from_f64(3.315) / (ratio * ratio)).exp()
+                    } else {
+                        T::ONE
+                    }
+                }
+                DiffusivityType::Charbonnier => T::ONE / (T::ONE + grad_sq / k2).sqrt(),
+            }
+        };
 
         dst.par_chunks_mut(w).enumerate().for_each(|(y, row_out)| {
             for x in 0..w {
@@ -4479,10 +4499,10 @@ impl ComputeContext for CpuBackend {
                 let grad_w = west - center;
                 let grad_e = east - center;
 
-                let g_n = T::ONE / (T::ONE + grad_n * grad_n / k2);
-                let g_s = T::ONE / (T::ONE + grad_s * grad_s / k2);
-                let g_w = T::ONE / (T::ONE + grad_w * grad_w / k2);
-                let g_e = T::ONE / (T::ONE + grad_e * grad_e / k2);
+                let g_n = conductance(grad_n * grad_n);
+                let g_s = conductance(grad_s * grad_s);
+                let g_w = conductance(grad_w * grad_w);
+                let g_e = conductance(grad_e * grad_e);
 
                 row_out[x] =
                     center + tau * (g_n * grad_n + g_s * grad_s + g_w * grad_w + g_e * grad_e);
@@ -4694,21 +4714,41 @@ impl ComputeContext for CpuBackend {
         let var_init = params.var_init;
         let var_min = params.var_min;
         let var_max = params.var_max;
+        let adaptive = params.adaptive_k != 0;
+        let max_k = params.max_components as usize;
+
+        // Per-pixel stride in the model buffer:
+        // Fixed mode: n_mixtures * 3
+        // Adaptive mode: max_components * 3 + 1 (extra slot for K counter)
+        let pix_stride = if adaptive {
+            max_k * 3 + 1
+        } else {
+            n_mixtures * 3
+        };
 
         mask_data
             .par_chunks_mut(width)
-            .zip(model_data.par_chunks_mut(width * n_mixtures * 3))
+            .zip(model_data.par_chunks_mut(width * pix_stride))
             .enumerate()
             .for_each(|(y, (mask_row, model_row))| {
                 for x in 0..width {
                     let pixel = frame_data[y * width + x];
-                    let pix_model = &mut model_row[x * n_mixtures * 3..(x + 1) * n_mixtures * 3];
+                    let pix_model = &mut model_row[x * pix_stride..(x + 1) * pix_stride];
+
+                    // Determine effective K for this pixel
+                    let effective_k = if adaptive {
+                        // K is stored at the last slot of the pixel block
+                        let k_raw = pix_model[max_k * 3].to_f32() as usize;
+                        k_raw.max(1).min(max_k)
+                    } else {
+                        n_mixtures
+                    };
 
                     let mut fit_idx = None;
                     let mut foreground = true;
                     let mut total_weight = T::ZERO;
 
-                    for m in 0..n_mixtures {
+                    for m in 0..effective_k {
                         let m_base = m * 3;
                         let weight = pix_model[m_base];
                         let mean = pix_model[m_base + 1];
@@ -4731,8 +4771,10 @@ impl ComputeContext for CpuBackend {
 
                     mask_row[x] = if foreground { 255u32 } else { 0u32 };
 
+                    let mut current_k = effective_k;
+
                     if let Some(idx) = fit_idx {
-                        for m in 0..n_mixtures {
+                        for m in 0..current_k {
                             let m_base = m * 3;
                             if m == idx {
                                 let w_val = pix_model[m_base];
@@ -4747,7 +4789,68 @@ impl ComputeContext for CpuBackend {
                                 pix_model[m_base] *= T::ONE - alpha;
                             }
                         }
+
+                        // Adaptive: prune components with weight below threshold
+                        if adaptive {
+                            let weight_threshold = T::from_f32(0.01);
+                            let mut write = 0;
+                            for read in 0..current_k {
+                                let rb = read * 3;
+                                if pix_model[rb] >= weight_threshold || read == idx {
+                                    if write != read {
+                                        let wb = write * 3;
+                                        pix_model[wb] = pix_model[rb];
+                                        pix_model[wb + 1] = pix_model[rb + 1];
+                                        pix_model[wb + 2] = pix_model[rb + 2];
+                                    }
+                                    write += 1;
+                                }
+                            }
+                            // Zero out removed slots
+                            for m in write..current_k {
+                                let mb = m * 3;
+                                pix_model[mb] = T::ZERO;
+                                pix_model[mb + 1] = T::ZERO;
+                                pix_model[mb + 2] = T::ZERO;
+                            }
+                            current_k = write.max(1);
+                        }
+                    } else if adaptive {
+                        // No match in adaptive mode: grow K if possible, else replace weakest
+                        if current_k < max_k {
+                            // Add new component at position current_k
+                            let m_base = current_k * 3;
+                            pix_model[m_base] = alpha;
+                            pix_model[m_base + 1] = pixel;
+                            pix_model[m_base + 2] = var_init;
+                            current_k += 1;
+                            // Decay existing weights
+                            for m in 0..current_k - 1 {
+                                pix_model[m * 3] *= T::ONE - alpha;
+                            }
+                        } else {
+                            // Replace weakest component
+                            let mut min_w_idx = 0;
+                            let mut min_w = T::from_f32(2.0);
+                            for m in 0..current_k {
+                                if pix_model[m * 3] < min_w {
+                                    min_w = pix_model[m * 3];
+                                    min_w_idx = m;
+                                }
+                            }
+                            let m_base = min_w_idx * 3;
+                            pix_model[m_base] = alpha;
+                            pix_model[m_base + 1] = pixel;
+                            pix_model[m_base + 2] = var_init;
+                            // Decay existing weights
+                            for m in 0..current_k {
+                                if m != min_w_idx {
+                                    pix_model[m * 3] *= T::ONE - alpha;
+                                }
+                            }
+                        }
                     } else {
+                        // Fixed mode: replace weakest component
                         let mut min_w_idx = 0;
                         let mut min_w = T::from_f32(2.0);
                         for m in 0..n_mixtures {
@@ -4762,20 +4865,26 @@ impl ComputeContext for CpuBackend {
                         pix_model[m_base + 2] = var_init;
                     }
 
-                    // Bug 6 fix: Renormalize weights so they sum to 1.0
+                    // Write back K for adaptive mode
+                    if adaptive {
+                        pix_model[max_k * 3] = T::from_f32(current_k as f32);
+                    }
+
+                    // Renormalize weights so they sum to 1.0
+                    let active_k = if adaptive { current_k } else { n_mixtures };
                     let mut total_w = T::ZERO;
-                    for m in 0..n_mixtures {
+                    for m in 0..active_k {
                         total_w += pix_model[m * 3];
                     }
                     if total_w > T::from_f32(1e-5) {
-                        for m in 0..n_mixtures {
+                        for m in 0..active_k {
                             pix_model[m * 3] /= total_w;
                         }
                     }
 
-                    // Bug 5 fix: Sort components by weight/variance ratio (descending)
-                    // Use simple insertion sort since n_mixtures is small (5)
-                    for i in 1..n_mixtures {
+                    // Sort components by weight/variance ratio (descending)
+                    // Use simple insertion sort since K is small
+                    for i in 1..active_k {
                         let i_base = i * 3;
                         let i_w = pix_model[i_base];
                         let i_mean = pix_model[i_base + 1];

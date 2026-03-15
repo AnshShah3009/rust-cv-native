@@ -1,20 +1,49 @@
 // AKAZE Non-linear Diffusion Kernel
-// Implements FED (Fast Explicit Diffusion) step
+// Implements FED (Fast Explicit Diffusion) step with configurable diffusivity
 
 struct Params {
     width: u32,
     height: u32,
     k: f32,      // Contrast factor
     tau: f32,    // Time step
+    diffusivity_type: u32, // 0=PM1, 1=PM2, 2=Weickert, 3=Charbonnier
+    _padding0: u32,
+    _padding1: u32,
+    _padding2: u32,
 }
 
 @group(0) @binding(0) var<storage, read> input_data: array<f32>;
 @group(0) @binding(1) var<storage, read_write> output_data: array<f32>;
 @group(0) @binding(2) var<uniform> params: Params;
 
-// Perona-Malik 2 diffusivity: g(x) = 1 / (1 + x^2/k^2)
 fn diffusivity(grad_sq: f32) -> f32 {
-    return 1.0 / (1.0 + grad_sq / (params.k * params.k));
+    let k2 = params.k * params.k;
+    switch params.diffusivity_type {
+        // Perona-Malik 1: g(x) = exp(-x/k^2)
+        case 0u: {
+            return exp(-grad_sq / k2);
+        }
+        // Perona-Malik 2: g(x) = 1 / (1 + x/k^2)
+        case 1u: {
+            return 1.0 / (1.0 + grad_sq / k2);
+        }
+        // Weickert: g(x) = 1 - exp(-3.315 / (x/k^2)^2) for x > 0
+        case 2u: {
+            if (grad_sq > 0.0) {
+                let ratio = grad_sq / k2;
+                return 1.0 - exp(-3.315 / (ratio * ratio));
+            } else {
+                return 1.0;
+            }
+        }
+        // Charbonnier: g(x) = 1 / sqrt(1 + x/k^2)
+        case 3u: {
+            return 1.0 / sqrt(1.0 + grad_sq / k2);
+        }
+        default: {
+            return 1.0 / (1.0 + grad_sq / k2);
+        }
+    }
 }
 
 @compute @workgroup_size(16, 16)

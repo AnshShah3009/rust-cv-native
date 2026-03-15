@@ -13,6 +13,8 @@ struct DiffusionParams {
     height: u32,
     k: f32,
     tau: f32,
+    diffusivity_type: u32,
+    _padding: [u32; 3],
 }
 
 pub fn akaze_diffusion(
@@ -20,7 +22,10 @@ pub fn akaze_diffusion(
     input: &Tensor<f32, GpuStorage<f32>>,
     k: f32,
     tau: f32,
+    diffusivity: crate::context::DiffusivityType,
 ) -> Result<Tensor<f32, GpuStorage<f32>>> {
+    use crate::context::DiffusivityType;
+
     let (h, w) = input.shape.hw();
     let size = input.shape.len();
     let byte_size = (size * 4) as u64;
@@ -32,11 +37,20 @@ pub fn akaze_diffusion(
         mapped_at_creation: false,
     });
 
+    let diff_type: u32 = match diffusivity {
+        DiffusivityType::PeronaMalik1 => 0,
+        DiffusivityType::PeronaMalik2 => 1,
+        DiffusivityType::Weickert => 2,
+        DiffusivityType::Charbonnier => 3,
+    };
+
     let params = DiffusionParams {
         width: w as u32,
         height: h as u32,
         k,
         tau,
+        diffusivity_type: diff_type,
+        _padding: [0; 3],
     };
 
     let params_buffer = ctx

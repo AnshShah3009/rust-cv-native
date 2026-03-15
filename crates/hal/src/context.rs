@@ -398,6 +398,7 @@ pub trait ComputeContext: Send + Sync {
         input: &Tensor<T, S>,
         k: T,
         tau: T,
+        diffusivity: DiffusivityType,
     ) -> Result<Tensor<T, S>>;
 
     /// AKAZE Derivatives and Hessian Determinant
@@ -505,7 +506,9 @@ pub struct Mog2Params<T: Float> {
     pub var_init: T,
     pub var_min: T,
     pub var_max: T,
-    pub _padding: [u32; 3], // Align to 16 bytes for WGSL
+    pub adaptive_k: u32,     // 0 = disabled (fixed K), 1 = enabled
+    pub max_components: u32, // max K per pixel (default 5, cap at 7)
+    pub _padding: [u32; 1],  // Align to 16 bytes for WGSL
 }
 
 // Safety: All fields are Pod when T: Pod. Repr(C) guarantees no padding surprises.
@@ -551,6 +554,19 @@ pub enum BorderMode<T: Float> {
     /// This is the default border mode in OpenCV (`BORDER_REFLECT_101`).
     Reflect101,
     Wrap,
+}
+
+/// Non-linear diffusion types for AKAZE scale-space construction
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffusivityType {
+    /// Perona-Malik type 1: g(x) = exp(-x²/k²)
+    PeronaMalik1,
+    /// Perona-Malik type 2: g(x) = 1 / (1 + x²/k²)
+    PeronaMalik2,
+    /// Weickert diffusion: g(x) = 1 - exp(-3.315 / (x²/k²)²) for x > 0
+    Weickert,
+    /// Charbonnier diffusion: g(x) = 1 / sqrt(1 + x²/k²)
+    Charbonnier,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

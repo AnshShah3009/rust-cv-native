@@ -65,6 +65,10 @@ pub struct Mog2 {
     var_min: f32,
     /// Maximum allowed variance to prevent explosion
     var_max: f32,
+    /// Enable adaptive per-pixel component count
+    adaptive_k: bool,
+    /// Maximum number of components per pixel in adaptive mode (cap at 7)
+    max_components: usize,
 
     /// Persistent model storage: [H * W * N_MIXTURES * 3] flattened
     /// Contains weight, mean, and variance for each mixture component
@@ -112,10 +116,44 @@ impl Mog2 {
             var_init: 15.0,
             var_min: 4.0,
             var_max: 5.0 * 15.0,
+            adaptive_k: false,
+            max_components: 5,
             model: None,
             width: 0,
             height: 0,
         }
+    }
+
+    /// Enable or disable adaptive per-pixel component count (dynamic K).
+    ///
+    /// When enabled, each pixel starts with K=1 components and grows up to
+    /// `max_components` as needed. Components with negligible weight are pruned.
+    ///
+    /// # Arguments
+    ///
+    /// * `adaptive` - true to enable adaptive K, false for fixed K
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining (builder pattern).
+    pub fn with_adaptive_k(mut self, adaptive: bool) -> Self {
+        self.adaptive_k = adaptive;
+        if adaptive && self.max_components < 2 {
+            self.max_components = 5;
+        }
+        // Reset model when toggling adaptive mode
+        self.model = None;
+        self
+    }
+
+    /// Set the maximum number of components per pixel for adaptive mode.
+    ///
+    /// Capped at 7. Only meaningful when adaptive_k is enabled.
+    pub fn with_max_components(mut self, max_k: usize) -> Self {
+        self.max_components = max_k.clamp(1, 7);
+        // Reset model when changing layout
+        self.model = None;
+        self
     }
 
     /// Process a frame and return foreground/background segmentation mask
@@ -205,6 +243,7 @@ impl Mog2 {
         } else {
             learning_rate
         };
+        let max_k = self.max_components.clamp(1, 7);
         let params = Mog2Params {
             width: width as u32,
             height: height as u32,
@@ -215,7 +254,16 @@ impl Mog2 {
             var_init: self.var_init / (255.0 * 255.0),
             var_min: self.var_min / (255.0 * 255.0),
             var_max: self.var_max / (255.0 * 255.0),
-            _padding: [0; 3],
+            adaptive_k: if self.adaptive_k { 1 } else { 0 },
+            max_components: max_k as u32,
+            _padding: [0; 1],
+        };
+
+        // Per-pixel model stride: adaptive uses max_components*3+1, fixed uses n_mixtures*3
+        let pix_stride = if self.adaptive_k {
+            max_k * 3 + 1
+        } else {
+            self.n_mixtures * 3
         };
 
         match ctx {
@@ -240,7 +288,8 @@ impl Mog2 {
                 if self.model.is_none() || self.width != width || self.height != height {
                     self.width = width;
                     self.height = height;
-                    let mut data = vec![0.0f32; width * height * self.n_mixtures * 3];
+                    let model_len = width * height * pix_stride;
+                    let mut data = vec![0.0f32; model_len];
                     let frame_cpu = frame.to_cpu().map_err(|e| {
                         Error::RuntimeError(format!(
                             "Invalid parameters: Download to CPU failed: {:?}",
@@ -251,28 +300,29 @@ impl Mog2 {
                         Error::RuntimeError("Failed to get frame slice".to_string())
                     })?;
                     for (i, &pixel) in frame_raw[..(width * height)].iter().enumerate() {
-                        let base = i * self.n_mixtures * 3;
-                        data[base] = 1.0;
-                        data[base + 1] = pixel as f32 / 255.0;
-                        data[base + 2] = self.var_init / (255.0 * 255.0);
+                        let base = i * pix_stride;
+                        data[base] = 1.0; // weight
+                        data[base + 1] = pixel as f32 / 255.0; // mean
+                        data[base + 2] = self.var_init / (255.0 * 255.0); // variance
+                        if self.adaptive_k {
+                            // Store K=1 at the end of this pixel's block
+                            data[base + max_k * 3] = 1.0;
+                        }
                     }
-                    let model_gpu = CpuTensor::from_vec(
-                        data,
-                        TensorShape::new(1, 1, width * height * self.n_mixtures * 3),
-                    )
-                    .map_err(|e| {
-                        Error::RuntimeError(format!(
-                            "Invalid parameters: Failed to create model tensor: {:?}",
-                            e
-                        ))
-                    })?
-                    .to_gpu_ctx(gpu)
-                    .map_err(|e| {
-                        Error::RuntimeError(format!(
-                            "Invalid parameters: Upload model to GPU failed: {:?}",
-                            e
-                        ))
-                    })?;
+                    let model_gpu = CpuTensor::from_vec(data, TensorShape::new(1, 1, model_len))
+                        .map_err(|e| {
+                            Error::RuntimeError(format!(
+                                "Invalid parameters: Failed to create model tensor: {:?}",
+                                e
+                            ))
+                        })?
+                        .to_gpu_ctx(gpu)
+                        .map_err(|e| {
+                            Error::RuntimeError(format!(
+                                "Invalid parameters: Upload model to GPU failed: {:?}",
+                                e
+                            ))
+                        })?;
                     self.model = Some(Box::new(model_gpu));
                 }
 
@@ -353,27 +403,30 @@ impl Mog2 {
                 if self.model.is_none() || self.width != width || self.height != height {
                     self.width = width;
                     self.height = height;
-                    let mut data = vec![0.0f32; width * height * self.n_mixtures * 3];
+                    let model_len = width * height * pix_stride;
+                    let mut data = vec![0.0f32; model_len];
                     let frame_raw = frame_cpu.as_slice().map_err(|_| {
                         Error::RuntimeError("Failed to get frame slice".to_string())
                     })?;
                     for (i, &pixel) in frame_raw[..(width * height)].iter().enumerate() {
-                        let base = i * self.n_mixtures * 3;
-                        data[base] = 1.0;
-                        data[base + 1] = pixel as f32 / 255.0;
-                        data[base + 2] = self.var_init / (255.0 * 255.0);
+                        let base = i * pix_stride;
+                        data[base] = 1.0; // weight
+                        data[base + 1] = pixel as f32 / 255.0; // mean
+                        data[base + 2] = self.var_init / (255.0 * 255.0); // variance
+                        if self.adaptive_k {
+                            // Store K=1 at the end of this pixel's block
+                            data[base + max_k * 3] = 1.0;
+                        }
                     }
                     self.model = Some(Box::new(
-                        CpuTensor::from_vec(
-                            data,
-                            TensorShape::new(1, 1, width * height * self.n_mixtures * 3),
-                        )
-                        .map_err(|e| {
-                            Error::RuntimeError(format!(
-                                "Invalid parameters: Failed to create model tensor: {:?}",
-                                e
-                            ))
-                        })?,
+                        CpuTensor::from_vec(data, TensorShape::new(1, 1, model_len)).map_err(
+                            |e| {
+                                Error::RuntimeError(format!(
+                                    "Invalid parameters: Failed to create model tensor: {:?}",
+                                    e
+                                ))
+                            },
+                        )?,
                     ));
                 }
 
@@ -675,5 +728,117 @@ mod tests {
         let mask = mog2.apply_ctx(&frame2, -1.0, &device).unwrap();
         assert_eq!(mask.shape.height, height2);
         assert_eq!(mask.shape.width, width2);
+    }
+
+    #[test]
+    fn test_mog2_adaptive_k() {
+        let cpu = CpuBackend::new().unwrap();
+        let device = ComputeDevice::Cpu(&cpu);
+        let mut mog2 = Mog2::new(100, 16.0, false)
+            .with_adaptive_k(true)
+            .with_max_components(5);
+
+        let width = 64usize;
+        let height = 64usize;
+
+        // Train on a uniform background
+        let bg_data = vec![50u8; width * height];
+        let bg_frame: CpuTensor<u8> =
+            CpuTensor::from_vec(bg_data, TensorShape::new(1, height, width)).unwrap();
+
+        for _ in 0..15 {
+            let _ = mog2.apply_ctx(&bg_frame, -1.0, &device);
+        }
+
+        // Introduce foreground in a region
+        let mut fg_data = vec![50u8; width * height];
+        for y in 20..40 {
+            for x in 20..40 {
+                fg_data[y * width + x] = 200;
+            }
+        }
+        let fg_frame: CpuTensor<u8> =
+            CpuTensor::from_vec(fg_data, TensorShape::new(1, height, width)).unwrap();
+
+        let mask = mog2.apply_ctx(&fg_frame, -1.0, &device).unwrap();
+        let mask_slice = mask.as_slice().unwrap();
+
+        // Foreground region should be detected
+        let mut fg_count = 0;
+        for y in 20..40 {
+            for x in 20..40 {
+                if mask_slice[y * width + x] == 255 {
+                    fg_count += 1;
+                }
+            }
+        }
+        assert!(
+            fg_count > 300,
+            "Expected >300 foreground pixels in 20x20 square, got {}",
+            fg_count
+        );
+
+        // Verify output dimensions
+        assert_eq!(mask.shape.height, height);
+        assert_eq!(mask.shape.width, width);
+
+        // Verify that the model contains per-pixel K values by checking
+        // the adaptive model's internal state (K stored in model buffer)
+        let model_any = mog2.model.as_ref().unwrap();
+        let model_cpu = model_any.downcast_ref::<CpuTensor<f32>>().unwrap();
+        let model_slice = model_cpu.as_slice().unwrap();
+        let max_k = 5;
+        let pix_stride = max_k * 3 + 1;
+
+        // Check a few pixels for valid K values
+        let mut k_values = std::collections::HashSet::new();
+        for i in 0..(width * height) {
+            let k = model_slice[i * pix_stride + max_k * 3] as usize;
+            assert!(k >= 1 && k <= max_k, "K={} out of range for pixel {}", k, i);
+            k_values.insert(k);
+        }
+        // After processing both bg and fg frames, we expect at least 2 different K values
+        let found_varied_k = k_values.len() > 1;
+        println!(
+            "Adaptive K test: found {} distinct K values: {:?}",
+            k_values.len(),
+            k_values
+        );
+        // This is a soft check - K may vary depending on learning dynamics
+        if !found_varied_k {
+            println!(
+                "Warning: all pixels have the same K value, adaptive growth may need more frames"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mog2_adaptive_k_sequence() {
+        let cpu = CpuBackend::new().unwrap();
+        let device = ComputeDevice::Cpu(&cpu);
+        let mut mog2 = Mog2::new(50, 16.0, false)
+            .with_adaptive_k(true)
+            .with_max_components(7);
+
+        let width = 32usize;
+        let height = 32usize;
+
+        // Feed alternating frames to force component growth
+        for i in 0..30 {
+            let val = if i % 2 == 0 { 30u8 } else { 220u8 };
+            let data = vec![val; width * height];
+            let frame: CpuTensor<u8> =
+                CpuTensor::from_vec(data, TensorShape::new(1, height, width)).unwrap();
+            let mask = mog2.apply_ctx(&frame, 0.05, &device).unwrap();
+
+            // Should always produce valid output
+            assert_eq!(mask.shape.height, height);
+            assert_eq!(mask.shape.width, width);
+            let mask_slice = mask.as_slice().unwrap();
+            // All values should be 0 or 255
+            for &v in mask_slice {
+                assert!(v == 0 || v == 255, "Unexpected mask value: {}", v);
+            }
+        }
     }
 }

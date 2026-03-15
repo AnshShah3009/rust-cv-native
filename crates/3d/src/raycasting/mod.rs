@@ -177,6 +177,7 @@ fn ray_triangle_intersection(
     }
 }
 
+#[allow(dead_code)]
 struct RayHitInfo {
     distance: f32,
     point: Point3<f32>,
@@ -334,7 +335,7 @@ pub fn point_inside_mesh(query: &Point3<f32>, mesh: &TriangleMesh) -> bool {
 }
 
 /// Check if point is inside mesh using a pre-built BVH.
-pub fn point_inside_mesh_bvh(query: &Point3<f32>, mesh: &TriangleMesh, bvh: &Bvh) -> bool {
+pub fn point_inside_mesh_bvh(query: &Point3<f32>, mesh: &TriangleMesh, _bvh: &Bvh) -> bool {
     // Cast ray in +X direction and count intersections via BVH
     let ray = Ray::new(*query, Vector3::x());
     // BVH gives us only the closest hit. To count all intersections,

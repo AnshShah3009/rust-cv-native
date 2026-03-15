@@ -586,8 +586,10 @@ impl ComputeContext for MlxContext {
         input: &Tensor<T, S>,
         k: T,
         tau: T,
+        diffusivity: crate::context::DiffusivityType,
     ) -> Result<Tensor<T, S>> {
-        self.cpu_fallback.akaze_diffusion(input, k, tau)
+        self.cpu_fallback
+            .akaze_diffusion(input, k, tau, diffusivity)
     }
 
     fn akaze_derivatives<

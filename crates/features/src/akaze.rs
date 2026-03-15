@@ -42,24 +42,8 @@ pub struct AkazeParams {
     pub diffusivity: DiffusivityType,
 }
 
-/// Non-linear diffusion types for AKAZE scale-space construction
-///
-/// Different diffusivity functions model how edge-aware blurring proceeds:
-/// - **Perona-Malik 1**: Edge-preserving diffusion with sharp edge detection
-/// - **Perona-Malik 2**: Improved version with better contrast preservation
-/// - **Weickert**: Uses flow-based diffusion with improved edge preservation
-/// - **Charbonnier**: Smooth penalty function for more stable evolution
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiffusivityType {
-    /// Perona-Malik type 1 diffusion
-    PeronaMalik1,
-    /// Perona-Malik type 2 diffusion (improved)
-    PeronaMalik2,
-    /// Weickert edge-aware diffusion
-    Weickert,
-    /// Charbonnier smooth diffusion
-    Charbonnier,
-}
+// Re-export DiffusivityType from cv_hal so downstream consumers can use cv_features::DiffusivityType
+pub use cv_hal::context::DiffusivityType;
 
 impl Default for AkazeParams {
     fn default() -> Self {
@@ -237,7 +221,12 @@ impl Akaze {
                             let step_tau = dt / (n_steps as f32);
                             for _ in 0..n_steps {
                                 current_gpu_f32 = gpu
-                                    .akaze_diffusion(&current_gpu_f32, k, step_tau)
+                                    .akaze_diffusion(
+                                        &current_gpu_f32,
+                                        k,
+                                        step_tau,
+                                        self.params.diffusivity,
+                                    )
                                     .map_err(|e| {
                                         Error::AlgorithmError(format!(
                                             "Diffusion failed on GPU: {}",
@@ -323,7 +312,12 @@ impl Akaze {
                             let step_tau = dt / (n_steps as f32);
                             for _ in 0..n_steps {
                                 current_f32 = cpu
-                                    .akaze_diffusion(&current_f32, k, step_tau)
+                                    .akaze_diffusion(
+                                        &current_f32,
+                                        k,
+                                        step_tau,
+                                        self.params.diffusivity,
+                                    )
                                     .map_err(|e| {
                                         Error::AlgorithmError(format!("Diffusion failed: {}", e))
                                     })?;

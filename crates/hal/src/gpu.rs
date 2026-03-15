@@ -2099,6 +2099,7 @@ impl ComputeContext for GpuContext {
         input: &Tensor<T, S>,
         k: T,
         tau: T,
+        diffusivity: crate::context::DiffusivityType,
     ) -> crate::Result<Tensor<T, S>> {
         use crate::storage::GpuStorage;
         use std::any::TypeId;
@@ -2118,6 +2119,7 @@ impl ComputeContext for GpuContext {
                     &input_gpu,
                     k.to_f32(),
                     tau.to_f32(),
+                    diffusivity,
                 )?;
 
                 let storage_any = result_gpu.storage.as_any();
@@ -2356,6 +2358,8 @@ impl ComputeContext for GpuContext {
                     var_init: params.var_init.to_f32(),
                     var_min: params.var_min.to_f32(),
                     var_max: params.var_max.to_f32(),
+                    adaptive_k: params.adaptive_k,
+                    max_components: params.max_components,
                     _padding: params._padding,
                 };
 

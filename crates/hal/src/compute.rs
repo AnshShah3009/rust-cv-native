@@ -576,12 +576,9 @@ impl<'a> ComputeDevice<'a> {
         input: &Tensor<T, S>,
         k: T,
         tau: T,
+        diffusivity: crate::context::DiffusivityType,
     ) -> Result<Tensor<T, S>> {
-        match self {
-            ComputeDevice::Cpu(cpu) => cpu.akaze_diffusion(input, k, tau),
-            ComputeDevice::Gpu(gpu) => gpu.akaze_diffusion(input, k, tau),
-            ComputeDevice::Mlx(mlx) => mlx.akaze_diffusion(input, k, tau),
-        }
+        dispatch!(self, akaze_diffusion, input, k, tau, diffusivity)
     }
 
     #[allow(clippy::type_complexity)]
