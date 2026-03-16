@@ -1126,7 +1126,7 @@ mod tests {
 
         // Set it up as if a dead process owned it
         slot.state.store(SLOT_ACTIVE, Ordering::Release);
-        slot.pid.store(99999, Ordering::Release); // unlikely to be alive
+        slot.pid.store(u32::MAX - 1, Ordering::Release); // above any OS PID limit
         slot.heartbeat_ns.store(1, Ordering::Release); // very old heartbeat
         slot.memory_budget_mb[0].store(512, Ordering::Release);
         slot.device_mask.store(1, Ordering::Release);
