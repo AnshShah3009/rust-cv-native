@@ -74,7 +74,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let voxel_indices = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Voxel Indices"),
         size: (num_points * 4) as u64,
-        usage: wgpu::BufferUsages::STORAGE,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
 
@@ -88,7 +88,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let count_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Voxel Count"),
         size: 4,
-        usage: wgpu::BufferUsages::STORAGE,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
 
