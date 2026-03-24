@@ -527,8 +527,13 @@ pub mod pointcloud_gpu {
         }
 
         // CPU implementation - transform each point
-        let result: Vec<Vector3<f32>> = points.iter()
-            .map(|p| transform.transform_point(&Point3::new(p.x, p.y, p.z)).coords)
+        let result: Vec<Vector3<f32>> = points
+            .iter()
+            .map(|p| {
+                transform
+                    .transform_point(&Point3::new(p.x, p.y, p.z))
+                    .coords
+            })
             .collect();
 
         Ok(result)
@@ -708,8 +713,8 @@ pub mod pointcloud_gpu {
 
 /// GPU-accelerated TSDF operations
 pub mod tsdf_gpu {
-    use nalgebra::Vector3;
     use crate::gpu_kernels::buffer_utils::{create_buffer, create_buffer_uninit, read_buffer};
+    use nalgebra::Vector3;
     use wgpu::BufferUsages;
 
     #[allow(clippy::type_complexity)]
@@ -730,7 +735,7 @@ pub mod tsdf_gpu {
 
         let device = gpu.device.clone();
         let queue = &gpu.queue;
-        
+
         let (vol_x, vol_y, vol_z) = vol_dims;
 
         // Pack TSDF and weights into voxel struct array
@@ -743,7 +748,7 @@ pub mod tsdf_gpu {
         }
 
         let voxels_buf = create_buffer(&device, &voxel_data, BufferUsages::STORAGE);
-        
+
         // Output: depth and normal for each pixel
         let num_pixels = (width * height) as usize;
         let output_buf = create_buffer_uninit(
@@ -754,18 +759,26 @@ pub mod tsdf_gpu {
 
         // Params: width, height, voxel_size, truncation, step_factor, min_depth, max_depth, vol_x, vol_y, vol_z
         let params: [f32; 10] = [
-            width as f32, height as f32, voxel_size, voxel_size * 2.0, 0.5, 
-            0.1, 10.0, vol_x as f32, vol_y as f32, vol_z as f32
+            width as f32,
+            height as f32,
+            voxel_size,
+            voxel_size * 2.0,
+            0.5,
+            0.1,
+            10.0,
+            vol_x as f32,
+            vol_y as f32,
+            vol_z as f32,
         ];
         let params_buf = create_buffer(&device, &params, BufferUsages::UNIFORM);
         let camera_buf = create_buffer(&device, camera_pose, BufferUsages::UNIFORM);
-        
+
         // Inverse intrinsics: 1/fx, 1/fy, cx, cy
         let inv_intrinsics: [f32; 4] = [
-            1.0 / intrinsics[0], 
-            1.0 / intrinsics[1], 
-            intrinsics[2], 
-            intrinsics[3]
+            1.0 / intrinsics[0],
+            1.0 / intrinsics[1],
+            intrinsics[2],
+            intrinsics[3],
         ];
         let intrinsics_buf = create_buffer(&device, &inv_intrinsics, BufferUsages::UNIFORM);
 
@@ -803,10 +816,11 @@ pub mod tsdf_gpu {
 
         // Dispatch compute shader
         let (workgroup_x, workgroup_y) = (width.div_ceil(16), height.div_ceil(16));
-        
+
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            let mut compute_pass =
+                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
             compute_pass.set_pipeline(&pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(workgroup_x, workgroup_y, 1);
@@ -814,16 +828,20 @@ pub mod tsdf_gpu {
 
         // Read back results
         let output_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(
-            device.clone(), queue, &output_buf, 0, num_pixels * 16
+            device.clone(),
+            queue,
+            &output_buf,
+            0,
+            num_pixels * 16,
         ))?;
-        
+
         let mut depths = Vec::with_capacity(num_pixels);
         let mut normals = Vec::with_capacity(num_pixels);
-        
+
         for chunk in &output_data {
-            depths.push(chunk[0]);  // depth
+            depths.push(chunk[0]); // depth
             normals.push(chunk[1]); // normal x
-            normals.push(chunk[2]); // normal y  
+            normals.push(chunk[2]); // normal y
             normals.push(chunk[3]); // normal z
         }
 
@@ -843,16 +861,16 @@ pub mod tsdf_gpu {
 
         let device = gpu.device.clone();
         let queue = &gpu.queue;
-        
+
         let (vol_x, vol_y, vol_z) = vol_dims;
         let voxel_size = 0.01; // Default, would need to be passed in
 
         // Count voxels above threshold first (would need two-pass for efficiency)
         // For now, process all and filter
         let voxel_count = (vol_x * vol_y * vol_z) as usize;
-        
+
         let tsdf_buf = create_buffer(&device, tsdf_volume, BufferUsages::STORAGE);
-        
+
         // Output: max vertices = all voxels (simplified)
         let output_buf = create_buffer_uninit(
             &device,
@@ -860,9 +878,7 @@ pub mod tsdf_gpu {
             BufferUsages::STORAGE | BufferUsages::COPY_SRC,
         );
 
-        let params: [f32; 4] = [
-            vol_x as f32, vol_y as f32, vol_z as f32, threshold
-        ];
+        let params: [f32; 4] = [vol_x as f32, vol_y as f32, vol_z as f32, threshold];
         let params_buf = create_buffer(&device, &params, BufferUsages::UNIFORM);
         let voxel_size_buf = create_buffer(&device, &[voxel_size], BufferUsages::UNIFORM);
 
@@ -909,24 +925,37 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 }
 "#;
-        
+
         let pipeline = gpu.create_compute_pipeline(shader_source, "main");
-        
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("TSDF Surface Bind Group"),
             layout: &pipeline.get_bind_group_layout(0),
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: tsdf_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: output_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: params_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: voxel_size_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: tsdf_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: output_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: voxel_size_buf.as_entire_binding(),
+                },
             ],
         });
 
         let workgroups = (vol_x * vol_y * vol_z).div_ceil(64);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            let mut compute_pass =
+                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
             compute_pass.set_pipeline(&pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(workgroups, 1, 1);
@@ -934,13 +963,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Read back
         let output_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(
-            device.clone(), queue, &output_buf, 0, voxel_count * 16
+            device.clone(),
+            queue,
+            &output_buf,
+            0,
+            voxel_count * 16,
         ))?;
-        
+
         // Filter valid vertices
         let mut vertices = Vec::new();
         for chunk in output_data.iter() {
-            if chunk[3] > 0.5 { // valid flag
+            if chunk[3] > 0.5 {
+                // valid flag
                 vertices.push(Vector3::new(chunk[0], chunk[1], chunk[2]));
             }
         }
@@ -954,10 +988,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 /// GPU-accelerated spatial queries
 pub mod spatial_gpu {
-    use nalgebra::Vector3;
     use crate::gpu_kernels::buffer_utils::{create_buffer, read_buffer};
-    use wgpu::BufferUsages;
+    use nalgebra::Vector3;
     use std::sync::Arc;
+    use wgpu::BufferUsages;
 
     /// Build KDTree on GPU (parallel construction) - simplified version
     /// Returns sorted Morton codes as a basic spatial index
@@ -970,7 +1004,7 @@ pub mod spatial_gpu {
         }
 
         let device = gpu.device.clone();
-        
+
         // Compute bounding box
         let mut min_bound = Vector3::new(f32::MAX, f32::MAX, f32::MAX);
         let mut max_bound = Vector3::new(f32::MIN, f32::MIN, f32::MIN);
@@ -986,20 +1020,25 @@ pub mod spatial_gpu {
         // Compute scale for morton encoding
         let range = max_bound - min_bound;
         let max_range = range.x.max(range.y).max(range.z);
-        let scale = if max_range > 1e-8 { 1023.0 / max_range } else { 1.0 };
+        let scale = if max_range > 1e-8 {
+            1023.0 / max_range
+        } else {
+            1.0
+        };
 
         // Compute Morton codes
-        let morton_codes: Vec<u32> = points.iter().map(|p| {
-            let px = ((p.x - min_bound.x) * scale) as u32;
-            let py = ((p.y - min_bound.y) * scale) as u32;
-            let pz = ((p.z - min_bound.z) * scale) as u32;
-            crate::gpu_kernels::morton_encode(px, py, pz)
-        }).collect();
+        let morton_codes: Vec<u32> = points
+            .iter()
+            .map(|p| {
+                let px = ((p.x - min_bound.x) * scale) as u32;
+                let py = ((p.y - min_bound.y) * scale) as u32;
+                let pz = ((p.z - min_bound.z) * scale) as u32;
+                crate::gpu_kernels::morton_encode(px, py, pz)
+            })
+            .collect();
 
         // Store points and morton codes
-        let points_data: Vec<[f32; 4]> = points.iter()
-            .map(|p| [p.x, p.y, p.z, 0.0])
-            .collect();
+        let points_data: Vec<[f32; 4]> = points.iter().map(|p| [p.x, p.y, p.z, 0.0]).collect();
         let points_buf = create_buffer(&device, &points_data, BufferUsages::STORAGE);
         let morton_buf = create_buffer(&device, &morton_codes, BufferUsages::STORAGE);
 
@@ -1021,15 +1060,15 @@ pub mod spatial_gpu {
         // Simplified: just return k nearest using brute force on CPU
         // A proper GPU implementation would use the Morton codes
         let points_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(
-            kdtree.device.clone(), 
-            &gpu.queue, 
-            &kdtree.nodes_buffer, 
-            0, 
-            kdtree.num_points as usize * 16
+            kdtree.device.clone(),
+            &gpu.queue,
+            &kdtree.nodes_buffer,
+            0,
+            kdtree.num_points as usize * 16,
         ))?;
 
         let mut results = Vec::with_capacity(queries.len());
-        
+
         for query in queries {
             let q = Vector3::new(query.x, query.y, query.z);
             let mut distances: Vec<(u32, f32)> = (0..kdtree.num_points as usize)
@@ -1040,12 +1079,12 @@ pub mod spatial_gpu {
                     (idx, dist)
                 })
                 .collect();
-            
+
             distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
             distances.truncate(k as usize);
             results.push(distances);
         }
-        
+
         Ok(results)
     }
 
@@ -1057,20 +1096,22 @@ pub mod spatial_gpu {
         radius: f32,
     ) -> crate::Result<Vec<Vec<(u32, f32)>>> {
         let radius_sq = radius * radius;
-        
+
         // Use batch_nearest_neighbors and filter
         let k = kdtree.num_points.min(1024); // Limit search
         let all_neighbors = batch_nearest_neighbors(gpu, kdtree, queries, k)?;
-        
-        let results: Vec<Vec<(u32, f32)>> = all_neighbors.into_iter()
+
+        let results: Vec<Vec<(u32, f32)>> = all_neighbors
+            .into_iter()
             .map(|neighbors| {
-                neighbors.into_iter()
+                neighbors
+                    .into_iter()
                     .filter(|(_, dist)| *dist <= radius_sq)
                     .map(|(idx, dist)| (idx, dist.sqrt()))
                     .collect()
             })
             .collect();
-        
+
         Ok(results)
     }
 
@@ -1085,7 +1126,7 @@ pub mod spatial_gpu {
         }
 
         let device = gpu.device.clone();
-        
+
         // Compute bounding box
         let mut min_bound = Vector3::new(f32::MAX, f32::MAX, f32::MAX);
         let mut max_bound = Vector3::new(f32::MIN, f32::MIN, f32::MIN);
@@ -1107,12 +1148,12 @@ pub mod spatial_gpu {
 
         // Hash points to voxels and accumulate
         let mut voxel_accum: Vec<[f32; 4]> = vec![[0.0, 0.0, 0.0, 0.0]; voxel_count]; // xyz, count
-        
+
         for p in points {
             let vx = ((p.x - min_bound.x) * inv_voxel) as u32;
             let vy = ((p.y - min_bound.y) * inv_voxel) as u32;
             let vz = ((p.z - min_bound.z) * inv_voxel) as u32;
-            
+
             if vx < vol_x && vy < vol_y && vz < vol_z {
                 let idx = ((vz * vol_y + vy) * vol_x + vx) as usize;
                 voxel_accum[idx][0] += p.x;
@@ -1133,7 +1174,8 @@ pub mod spatial_gpu {
 
         // Create buffers
         let voxel_buf = create_buffer(&device, &voxel_accum, BufferUsages::STORAGE);
-        let occupied: Vec<u32> = voxel_accum.iter()
+        let occupied: Vec<u32> = voxel_accum
+            .iter()
             .map(|v| if v[3] > 0.5 { 1u32 } else { 0u32 })
             .collect();
         let occupied_buf = create_buffer(&device, &occupied, BufferUsages::STORAGE);
@@ -1154,17 +1196,18 @@ pub mod spatial_gpu {
         voxel_size: f32,
     ) -> crate::Result<Vec<Vector3<f32>>> {
         let grid = build_voxel_grid(gpu, points, voxel_size)?;
-        
+
         // Read back the voxel centroids
         let voxel_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(
             grid.device.clone(),
             &gpu.queue,
             &grid.voxel_buffer,
             0,
-            grid.num_voxels as usize * 16
+            grid.num_voxels as usize * 16,
         ))?;
 
-        let result: Vec<Vector3<f32>> = voxel_data.iter()
+        let result: Vec<Vector3<f32>> = voxel_data
+            .iter()
             .filter(|v| v[3] > 0.5) // occupied
             .map(|v| Vector3::new(v[0], v[1], v[2]))
             .collect();
@@ -1192,8 +1235,8 @@ pub mod spatial_gpu {
 
 /// GPU-accelerated mesh operations
 pub mod mesh_gpu {
-    use nalgebra::{Point3, Vector3};
     use crate::gpu_kernels::buffer_utils::{create_buffer, create_buffer_uninit, read_buffer};
+    use nalgebra::{Point3, Vector3};
     use wgpu::BufferUsages;
 
     /// Compute vertex normals on GPU
@@ -1212,16 +1255,12 @@ pub mod mesh_gpu {
         let num_faces = faces.len() as u32;
 
         // Create buffers
-        let vertices_data: Vec<[f32; 4]> = vertices.iter()
-            .map(|p| [p.x, p.y, p.z, 0.0])
-            .collect();
-        let faces_data: Vec<[u32; 3]> = faces.iter()
-            .map(|f| [f[0], f[1], f[2]])
-            .collect();
+        let vertices_data: Vec<[f32; 4]> = vertices.iter().map(|p| [p.x, p.y, p.z, 0.0]).collect();
+        let faces_data: Vec<[u32; 3]> = faces.iter().map(|f| [f[0], f[1], f[2]]).collect();
 
         let vertices_buf = create_buffer(&device, &vertices_data, BufferUsages::STORAGE);
         let faces_buf = create_buffer(&device, &faces_data, BufferUsages::STORAGE);
-        
+
         let normals_buf = create_buffer_uninit(
             &device,
             vertices.len() * 16,
@@ -1262,15 +1301,22 @@ pub mod mesh_gpu {
         let workgroup_count = num_vertices.div_ceil(256);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            let mut compute_pass =
+                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
             compute_pass.set_pipeline(&pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
         // Read back results
-        let normals: Vec<[f32; 4]> = pollster::block_on(read_buffer(device.clone(), queue, &normals_buf, 0, vertices.len() * 16))?;
-        
+        let normals: Vec<[f32; 4]> = pollster::block_on(read_buffer(
+            device.clone(),
+            queue,
+            &normals_buf,
+            0,
+            vertices.len() * 16,
+        ))?;
+
         let result: Vec<Vector3<f32>> = normals
             .iter()
             .map(|chunk| Vector3::new(chunk[0], chunk[1], chunk[2]))
@@ -1294,15 +1340,21 @@ pub mod mesh_gpu {
         // Build adjacency list
         let n = vertices.len();
         let mut adjacency: Vec<Vec<usize>> = vec![vec![]; n];
-        
+
         for face in faces {
             for i in 0..3 {
                 let a = face[i] as usize;
                 let b = face[(i + 1) % 3] as usize;
                 let c = face[(i + 2) % 3] as usize;
-                if a < n && b < n { adjacency[a].push(b); }
-                if b < n && c < n { adjacency[b].push(c); }
-                if c < n && a < n { adjacency[c].push(a); }
+                if a < n && b < n {
+                    adjacency[a].push(b);
+                }
+                if b < n && c < n {
+                    adjacency[b].push(c);
+                }
+                if c < n && a < n {
+                    adjacency[c].push(a);
+                }
             }
         }
 
@@ -1314,13 +1366,13 @@ pub mod mesh_gpu {
 
         // Iterative smoothing
         let mut new_vertices = vertices.to_vec();
-        
+
         for _ in 0..iterations {
             for i in 0..n {
                 if adjacency[i].is_empty() {
                     continue;
                 }
-                
+
                 // Compute centroid of neighbors
                 let mut centroid_x = 0.0f32;
                 let mut centroid_y = 0.0f32;
@@ -1333,13 +1385,13 @@ pub mod mesh_gpu {
                 centroid_x /= adjacency[i].len() as f32;
                 centroid_y /= adjacency[i].len() as f32;
                 centroid_z /= adjacency[i].len() as f32;
-                
+
                 // Move vertex toward centroid
                 new_vertices[i].x = vertices[i].x + (centroid_x - vertices[i].x) * lambda;
                 new_vertices[i].y = vertices[i].y + (centroid_y - vertices[i].y) * lambda;
                 new_vertices[i].z = vertices[i].z + (centroid_z - vertices[i].z) * lambda;
             }
-            
+
             vertices.copy_from_slice(&new_vertices);
         }
 
@@ -1375,12 +1427,14 @@ pub mod mesh_gpu {
         let range_y = max_bound.y - min_bound.y;
         let range_z = max_bound.z - min_bound.z;
         let max_range = range_x.max(range_y).max(range_z);
-        
+
         // Number of voxels per side = cube root of (1/target_ratio)
         let target_face_count = (faces.len() as f32 * target_ratio) as usize;
-        let voxels_per_side = ((vertices.len() / target_face_count.max(1)) as f32).cbrt().ceil() as u32;
+        let voxels_per_side = ((vertices.len() / target_face_count.max(1)) as f32)
+            .cbrt()
+            .ceil() as u32;
         let voxel_size = max_range / voxels_per_side as f32;
-        
+
         if voxel_size <= 0.0 || max_range <= 0.0 {
             return Ok((vertices.to_vec(), faces.to_vec()));
         }
@@ -1390,14 +1444,14 @@ pub mod mesh_gpu {
         let vol_x = ((max_bound.x - min_bound.x) * inv_voxel).ceil() as usize + 1;
         let vol_y = ((max_bound.y - min_bound.y) * inv_voxel).ceil() as usize + 1;
         let vol_z = ((max_bound.z - min_bound.z) * inv_voxel).ceil() as usize + 1;
-        
+
         let mut voxel_accum: Vec<[f64; 4]> = vec![[0.0, 0.0, 0.0, 0.0]; vol_x * vol_y * vol_z];
-        
+
         for p in vertices {
             let vx = ((p.x - min_bound.x) * inv_voxel) as usize;
             let vy = ((p.y - min_bound.y) * inv_voxel) as usize;
             let vz = ((p.z - min_bound.z) * inv_voxel) as usize;
-            
+
             if vx < vol_x && vy < vol_y && vz < vol_z {
                 let idx = (vz * vol_y + vy) * vol_x + vx;
                 voxel_accum[idx][0] += p.x as f64;
@@ -1406,7 +1460,7 @@ pub mod mesh_gpu {
                 voxel_accum[idx][3] += 1.0;
             }
         }
-        
+
         // Average
         let mut new_vertices: Vec<Point3<f32>> = Vec::new();
         for v in &voxel_accum {
@@ -1418,7 +1472,7 @@ pub mod mesh_gpu {
                 ));
             }
         }
-        
+
         // Create a simple face list (every 3 points form a triangle)
         let mut new_faces: Vec<[u32; 3]> = Vec::new();
         for i in (0..new_vertices.len()).step_by(3) {
@@ -1444,18 +1498,13 @@ pub mod mesh_gpu {
         let num_vertices = vertices.len() as u32;
 
         // Create buffers
-        let vertices_data: Vec<[f32; 4]> = vertices.iter()
-            .map(|p| [p.x, p.y, p.z, 0.0])
-            .collect();
+        let vertices_data: Vec<[f32; 4]> = vertices.iter().map(|p| [p.x, p.y, p.z, 0.0]).collect();
 
         let vertices_buf = create_buffer(&device, &vertices_data, BufferUsages::STORAGE);
-        
+
         // Output: min and max (2 vec4)
-        let bounds_buf = create_buffer_uninit(
-            &device,
-            32,
-            BufferUsages::STORAGE | BufferUsages::COPY_SRC,
-        );
+        let bounds_buf =
+            create_buffer_uninit(&device, 32, BufferUsages::STORAGE | BufferUsages::COPY_SRC);
 
         let num_buf = create_buffer(&device, &[num_vertices], BufferUsages::UNIFORM);
 
@@ -1487,15 +1536,17 @@ pub mod mesh_gpu {
         let workgroup_count = num_vertices.div_ceil(256);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            let mut compute_pass =
+                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
             compute_pass.set_pipeline(&pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
         // Read back results
-        let bounds_data: Vec<f32> = pollster::block_on(read_buffer(device.clone(), queue, &bounds_buf, 0, 32))?;
-        
+        let bounds_data: Vec<f32> =
+            pollster::block_on(read_buffer(device.clone(), queue, &bounds_buf, 0, 32))?;
+
         let min_point = Point3::new(bounds_data[0], bounds_data[1], bounds_data[2]);
         let max_point = Point3::new(bounds_data[4], bounds_data[5], bounds_data[6]);
 
@@ -1538,17 +1589,18 @@ pub mod raycasting_gpu {
         // For each grid point, find distance to nearest mesh face
         // This is a simplified brute-force implementation
         // A proper implementation would use spatial acceleration structures
-        
+
         let inv_voxel = 1.0 / voxel_size;
-        
+
         // Build a simple spatial index using voxel hashing
-        let mut voxel_map: std::collections::HashMap<(u32, u32, u32), Vec<usize>> = std::collections::HashMap::new();
-        
+        let mut voxel_map: std::collections::HashMap<(u32, u32, u32), Vec<usize>> =
+            std::collections::HashMap::new();
+
         for (face_idx, face) in mesh_faces.iter().enumerate() {
             let v0 = mesh_vertices[face[0] as usize];
             let v1 = mesh_vertices[face[1] as usize];
             let v2 = mesh_vertices[face[2] as usize];
-            
+
             // Find voxel bounds for this face
             let min_x = ((v0.x.min(v1.x).min(v2.x) - grid_origin.x) * inv_voxel).floor() as i32;
             let max_x = ((v0.x.max(v1.x).max(v2.x) - grid_origin.x) * inv_voxel).ceil() as i32;
@@ -1556,7 +1608,7 @@ pub mod raycasting_gpu {
             let max_y = ((v0.y.max(v1.y).max(v2.y) - grid_origin.y) * inv_voxel).ceil() as i32;
             let min_z = ((v0.z.min(v1.z).min(v2.z) - grid_origin.z) * inv_voxel).floor() as i32;
             let max_z = ((v0.z.max(v1.z).max(v2.z) - grid_origin.z) * inv_voxel).ceil() as i32;
-            
+
             for z in min_z..=max_z {
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
@@ -1569,36 +1621,49 @@ pub mod raycasting_gpu {
 
         // For each voxel, compute distance to nearest face in its neighborhood
         let search_radius = 2i32; // voxels
-        
+
         for z in 0..gz {
             for y in 0..gy {
                 for x in 0..gx {
                     let idx = ((z * gy + y) * gx + x) as usize;
-                    
+
                     // Check nearby voxels for faces
                     let mut min_dist = f32::MAX;
-                    
+
                     for dz in -search_radius..=search_radius {
                         for dy in -search_radius..=search_radius {
                             for dx in -search_radius..=search_radius {
-                                let key = ((x as i32 + dx) as u32, (y as i32 + dy) as u32, (z as i32 + dz) as u32);
-                                
+                                let key = (
+                                    (x as i32 + dx) as u32,
+                                    (y as i32 + dy) as u32,
+                                    (z as i32 + dz) as u32,
+                                );
+
                                 if let Some(faces_in_voxel) = voxel_map.get(&key) {
                                     for &face_idx in faces_in_voxel {
                                         let face = mesh_faces[face_idx];
                                         let v0 = mesh_vertices[face[0] as usize];
                                         let v1 = mesh_vertices[face[1] as usize];
                                         let v2 = mesh_vertices[face[2] as usize];
-                                        
+
                                         // Compute distance to triangle (simplified: distance to closest vertex)
                                         let px = grid_origin.x + x as f32 * voxel_size;
                                         let py = grid_origin.y + y as f32 * voxel_size;
                                         let pz = grid_origin.z + z as f32 * voxel_size;
-                                        
-                                        let d0 = ((v0.x - px).powi(2) + (v0.y - py).powi(2) + (v0.z - pz).powi(2)).sqrt();
-                                        let d1 = ((v1.x - px).powi(2) + (v1.y - py).powi(2) + (v1.z - pz).powi(2)).sqrt();
-                                        let d2 = ((v2.x - px).powi(2) + (v2.y - py).powi(2) + (v2.z - pz).powi(2)).sqrt();
-                                        
+
+                                        let d0 = ((v0.x - px).powi(2)
+                                            + (v0.y - py).powi(2)
+                                            + (v0.z - pz).powi(2))
+                                        .sqrt();
+                                        let d1 = ((v1.x - px).powi(2)
+                                            + (v1.y - py).powi(2)
+                                            + (v1.z - pz).powi(2))
+                                        .sqrt();
+                                        let d2 = ((v2.x - px).powi(2)
+                                            + (v2.y - py).powi(2)
+                                            + (v2.z - pz).powi(2))
+                                        .sqrt();
+
                                         let d = d0.min(d1).min(d2);
                                         min_dist = min_dist.min(d);
                                     }
@@ -1606,7 +1671,7 @@ pub mod raycasting_gpu {
                             }
                         }
                     }
-                    
+
                     distance_field[idx] = min_dist;
                 }
             }
@@ -1618,8 +1683,8 @@ pub mod raycasting_gpu {
 
 /// GPU-accelerated RGBD odometry
 pub mod odometry_gpu {
-    use nalgebra::{Matrix4, Vector3};
     use crate::gpu_kernels::buffer_utils::{create_buffer, create_buffer_uninit, read_buffer};
+    use nalgebra::{Matrix4, Vector3};
     use wgpu::BufferUsages;
 
     /// Compute RGBD odometry on GPU
@@ -1660,10 +1725,10 @@ pub mod odometry_gpu {
 
         let device = gpu.device.clone();
         let queue = &gpu.queue;
-        
+
         // Create buffers
         let depth_buf = create_buffer(&device, depth, BufferUsages::STORAGE);
-        
+
         // Output: vertex map (width * height * 4 floats)
         let num_pixels = (width * height) as usize;
         let vertex_map_buf = create_buffer_uninit(
@@ -1673,8 +1738,12 @@ pub mod odometry_gpu {
         );
 
         let intrinsics_f32: [f32; 6] = [
-            width as f32, height as f32, 
-            intrinsics[0], intrinsics[1], intrinsics[2], intrinsics[3]
+            width as f32,
+            height as f32,
+            intrinsics[0],
+            intrinsics[1],
+            intrinsics[2],
+            intrinsics[3],
         ];
         let params_buf = create_buffer(&device, &intrinsics_f32, BufferUsages::UNIFORM);
 
@@ -1703,22 +1772,26 @@ pub mod odometry_gpu {
         });
 
         // Dispatch compute shader
-        let (workgroup_x, workgroup_y) = (
-            width.div_ceil(16),
-            height.div_ceil(16),
-        );
-        
+        let (workgroup_x, workgroup_y) = (width.div_ceil(16), height.div_ceil(16));
+
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            let mut compute_pass =
+                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
             compute_pass.set_pipeline(&pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(workgroup_x, workgroup_y, 1);
         }
 
         // Read back results
-        let vertex_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(device.clone(), queue, &vertex_map_buf, 0, num_pixels * 16))?;
-        
+        let vertex_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(
+            device.clone(),
+            queue,
+            &vertex_map_buf,
+            0,
+            num_pixels * 16,
+        ))?;
+
         let result: Vec<Vector3<f32>> = vertex_data
             .iter()
             .map(|chunk| Vector3::new(chunk[0], chunk[1], chunk[2]))
@@ -1740,13 +1813,12 @@ pub mod odometry_gpu {
 
         let device = gpu.device.clone();
         let queue = &gpu.queue;
-        
+
         // Create buffers
-        let vertices_data: Vec<[f32; 4]> = vertex_map.iter()
-            .map(|v| [v.x, v.y, v.z, 0.0])
-            .collect();
+        let vertices_data: Vec<[f32; 4]> =
+            vertex_map.iter().map(|v| [v.x, v.y, v.z, 0.0]).collect();
         let vertex_map_buf = create_buffer(&device, &vertices_data, BufferUsages::STORAGE);
-        
+
         // Output: normal map
         let num_pixels = (width * height) as usize;
         let normal_map_buf = create_buffer_uninit(
@@ -1782,22 +1854,26 @@ pub mod odometry_gpu {
         });
 
         // Dispatch compute shader
-        let (workgroup_x, workgroup_y) = (
-            width.div_ceil(16),
-            height.div_ceil(16),
-        );
-        
+        let (workgroup_x, workgroup_y) = (width.div_ceil(16), height.div_ceil(16));
+
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            let mut compute_pass =
+                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
             compute_pass.set_pipeline(&pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(workgroup_x, workgroup_y, 1);
         }
 
         // Read back results
-        let normal_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(device.clone(), queue, &normal_map_buf, 0, num_pixels * 16))?;
-        
+        let normal_data: Vec<[f32; 4]> = pollster::block_on(read_buffer(
+            device.clone(),
+            queue,
+            &normal_map_buf,
+            0,
+            num_pixels * 16,
+        ))?;
+
         let result: Vec<Vector3<f32>> = normal_data
             .iter()
             .map(|chunk| Vector3::new(chunk[0], chunk[1], chunk[2]))

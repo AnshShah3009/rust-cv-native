@@ -254,13 +254,14 @@ impl ComputeContext for GpuContext {
 
         let bind_group = {
             let uniform_buf = if !uniforms.is_empty() {
-                Some(self.device.create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("Dispatch Uniforms"),
-                        contents: uniforms,
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    },
-                ))
+                Some(
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Dispatch Uniforms"),
+                            contents: uniforms,
+                            usage: wgpu::BufferUsages::UNIFORM,
+                        }),
+                )
             } else {
                 None
             };

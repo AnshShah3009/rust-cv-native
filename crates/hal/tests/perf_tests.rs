@@ -23,7 +23,12 @@ fn create_test_tensor(data: &[f32], w: usize, h: usize, c: usize) -> Tensor<f32,
     Tensor::from_vec(data.to_vec(), TensorShape::new(c, h, w)).unwrap()
 }
 
-fn create_random_f32_tensor(w: usize, h: usize, c: usize, seed: u64) -> Tensor<f32, CpuStorage<f32>> {
+fn create_random_f32_tensor(
+    w: usize,
+    h: usize,
+    c: usize,
+    seed: u64,
+) -> Tensor<f32, CpuStorage<f32>> {
     let size = w * h * c;
     let mut rng = helpers::SimpleRng::new(seed);
     let data: Vec<f32> = (0..size).map(|_| rng.next_f32() * 255.0).collect();
@@ -47,7 +52,8 @@ fn copy_to_gpu(ctx: &GpuContext, tensor: &Tensor<f32, CpuStorage<f32>>) -> GpuTe
         mapped_at_creation: false,
     });
 
-    ctx.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(data));
+    ctx.queue
+        .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
 
     GpuTensor {
         storage: WgpuGpuStorage::from_buffer(Arc::new(buffer), data.len()),
@@ -244,9 +250,7 @@ mod pyramid_perf {
         let input = create_random_f32_tensor(512, 512, 3, 42);
 
         println!("\n=== CPU Pyramid Down 512x512 (single level) ===");
-        time_fn("cpu_pyramid_512x512", || {
-            cpu.pyramid_down(&input).unwrap()
-        });
+        time_fn("cpu_pyramid_512x512", || cpu.pyramid_down(&input).unwrap());
     }
 
     #[test]
@@ -344,10 +348,10 @@ mod icp_perf {
             mapped_at_creation: false,
         });
 
-        ctx.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(data));
+        ctx.queue
+            .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
 
-        let storage =
-            WgpuGpuStorage::from_buffer(Arc::new(buffer), data.len());
+        let storage = WgpuGpuStorage::from_buffer(Arc::new(buffer), data.len());
 
         Tensor {
             storage,
@@ -431,7 +435,8 @@ mod spatial_icp_perf {
             mapped_at_creation: false,
         });
 
-        ctx.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(data));
+        ctx.queue
+            .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
 
         let storage = WgpuGpuStorage::from_buffer(Arc::new(buffer), data.len());
 
@@ -517,7 +522,8 @@ mod tvl1_perf {
             mapped_at_creation: false,
         });
 
-        ctx.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(data));
+        ctx.queue
+            .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
 
         crate::GpuTensor {
             storage: WgpuGpuStorage::from_buffer(Arc::new(buffer), data.len()),
@@ -615,9 +621,7 @@ mod convolution_perf {
         let input = create_random_f32_tensor(512, 512, 1, 42);
 
         println!("\n=== CPU Sobel 512x512 ===");
-        time_fn("cpu_sobel_512x512", || {
-            cpu.sobel(&input, 1, 1, 3).unwrap()
-        });
+        time_fn("cpu_sobel_512x512", || cpu.sobel(&input, 1, 1, 3).unwrap());
     }
 
     #[test]
@@ -650,12 +654,8 @@ mod colored_icp_perf {
 
     fn create_pointcloud_with_colors(n: usize, seed: u64) -> (Vec<f32>, Vec<f32>) {
         let mut rng = helpers::SimpleRng::new(seed);
-        let points: Vec<f32> = (0..n * 3)
-            .map(|_| rng.next_f32() * 10.0)
-            .collect();
-        let colors: Vec<f32> = (0..n * 3)
-            .map(|_| rng.next_f32())
-            .collect();
+        let points: Vec<f32> = (0..n * 3).map(|_| rng.next_f32() * 10.0).collect();
+        let colors: Vec<f32> = (0..n * 3).map(|_| rng.next_f32()).collect();
         (points, colors)
     }
 
@@ -665,14 +665,15 @@ mod colored_icp_perf {
         colors: &[f32],
     ) -> (Tensor<f32, GpuStorage<f32>>, Tensor<f32, GpuStorage<f32>>) {
         let n = points.len() / 3;
-        
+
         let points_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("ColoredICP Points"),
             size: (points.len() * std::mem::size_of::<f32>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        ctx.queue.write_buffer(&points_buffer, 0, bytemuck::cast_slice(points));
+        ctx.queue
+            .write_buffer(&points_buffer, 0, bytemuck::cast_slice(points));
 
         let colors_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("ColoredICP Colors"),
@@ -680,7 +681,8 @@ mod colored_icp_perf {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        ctx.queue.write_buffer(&colors_buffer, 0, bytemuck::cast_slice(colors));
+        ctx.queue
+            .write_buffer(&colors_buffer, 0, bytemuck::cast_slice(colors));
 
         let points_tensor = Tensor {
             storage: WgpuGpuStorage::from_buffer(Arc::new(points_buffer), n),
@@ -705,8 +707,10 @@ mod colored_icp_perf {
         let (src_points, src_colors) = create_pointcloud_with_colors(1000, 42);
         let (tgt_points, tgt_colors) = create_pointcloud_with_colors(1000, 43);
 
-        let (src_pts_gpu, src_clr_gpu) = copy_pointcloud_with_colors_to_gpu(&ctx, &src_points, &src_colors);
-        let (tgt_pts_gpu, tgt_clr_gpu) = copy_pointcloud_with_colors_to_gpu(&ctx, &tgt_points, &tgt_colors);
+        let (src_pts_gpu, src_clr_gpu) =
+            copy_pointcloud_with_colors_to_gpu(&ctx, &src_points, &src_colors);
+        let (tgt_pts_gpu, tgt_clr_gpu) =
+            copy_pointcloud_with_colors_to_gpu(&ctx, &tgt_points, &tgt_colors);
 
         println!("\n=== GPU Colored-ICP Kernel 1K points ===");
         time_fn("gpu_colored_icp_1k", || {
@@ -721,8 +725,10 @@ mod colored_icp_perf {
         let (src_points, src_colors) = create_pointcloud_with_colors(10000, 42);
         let (tgt_points, tgt_colors) = create_pointcloud_with_colors(10000, 43);
 
-        let (src_pts_gpu, src_clr_gpu) = copy_pointcloud_with_colors_to_gpu(&ctx, &src_points, &src_colors);
-        let (tgt_pts_gpu, tgt_clr_gpu) = copy_pointcloud_with_colors_to_gpu(&ctx, &tgt_points, &tgt_colors);
+        let (src_pts_gpu, src_clr_gpu) =
+            copy_pointcloud_with_colors_to_gpu(&ctx, &src_points, &src_colors);
+        let (tgt_pts_gpu, tgt_clr_gpu) =
+            copy_pointcloud_with_colors_to_gpu(&ctx, &tgt_points, &tgt_colors);
 
         println!("\n=== GPU Colored-ICP Kernel 10K points ===");
         time_fn("gpu_colored_icp_10k", || {
@@ -750,7 +756,8 @@ mod generalized_icp_perf {
             mapped_at_creation: false,
         });
 
-        ctx.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(data));
+        ctx.queue
+            .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
 
         Tensor {
             storage: WgpuGpuStorage::<f32>::from_buffer(Arc::new(buffer), n),
